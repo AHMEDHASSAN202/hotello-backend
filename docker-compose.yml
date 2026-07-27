@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: hotello-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-hotello}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-hotello}
+      POSTGRES_DB: ${DB_NAME:-hotello}
+    ports:
+      - "${DB_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-hotello} -d ${DB_NAME:-hotello}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
