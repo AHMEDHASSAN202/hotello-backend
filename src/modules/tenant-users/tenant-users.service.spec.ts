@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
@@ -12,6 +13,7 @@ import { Admin } from '../admins/admin.entity';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
 import { Role } from '../roles/role.entity';
+import { TenantTokenService } from '../tenant-auth/tenant-token.service';
 import { TenantUser } from './tenant-user.entity';
 import { TenantUsersService } from './tenant-users.service';
 
@@ -26,6 +28,7 @@ describe('TenantUsersService', () => {
   let tenantUsersRepo: { findOne: jest.Mock; save: jest.Mock };
   let hotelsRepo: { findOne: jest.Mock };
   let auditLogs: { log: jest.Mock };
+  let events: { emitAsync: jest.Mock };
 
   const actor = {
     id: 'admin-1',
@@ -38,8 +41,14 @@ describe('TenantUsersService', () => {
       hotelId: 'hotel-1',
       name: 'Owner One',
       email: 'owner@nilegrand.example',
-      role: 'owner',
-      permissions: ['*'],
+      roleId: 'role-owner',
+      role: {
+        id: 'role-owner',
+        nameEn: 'Owner',
+        nameAr: 'المالك',
+        isSystem: true,
+        permissions: ['*'],
+      },
       status: 'pending',
       passwordHash: null,
       setupTokenHash: null,
@@ -59,6 +68,7 @@ describe('TenantUsersService', () => {
         .mockResolvedValue({ id: 'hotel-1', slug: 'nile-grand' } as Hotel),
     };
     auditLogs = { log: jest.fn() };
+    events = { emitAsync: jest.fn().mockResolvedValue([]) };
     (mockedBcrypt.hash as jest.Mock).mockResolvedValue('hashed-password');
 
     const moduleRef = await Test.createTestingModule({
@@ -73,6 +83,16 @@ describe('TenantUsersService', () => {
           },
         },
         { provide: AuditLogsService, useValue: auditLogs },
+        { provide: EventEmitter2, useValue: events },
+        {
+          provide: TenantTokenService,
+          useValue: {
+            issueTokens: jest
+              .fn()
+              .mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' }),
+            publicUser: jest.fn((u) => ({ id: u.id, email: u.email })),
+          },
+        },
       ],
     }).compile();
 
@@ -178,6 +198,59 @@ describe('TenantUsersService', () => {
     });
   });
 
+  describe('setupPreview (8.2 AC1)', () => {
+    it('returns owner + hotel names for a valid token', async () => {
+      tenantUsersRepo.findOne.mockResolvedValue(
+        makeOwner({
+          setupTokenHash: sha256('valid-token'),
+          setupTokenExpiresAt: new Date(Date.now() + HOUR_MS),
+          hotel: { status: 'active', nameEn: 'Nile Grand', nameAr: 'نايل جراند' } as Hotel,
+        }),
+      );
+
+      await expect(service.setupPreview('valid-token')).resolves.toMatchObject({
+        name: 'Owner One',
+        hotelNameEn: 'Nile Grand',
+      });
+    });
+
+    it('rejects an unknown/expired token with the same generic 400', async () => {
+      tenantUsersRepo.findOne.mockResolvedValue(null);
+      await expect(service.setupPreview('nope')).rejects.toThrow(
+        'Invalid or expired setup link',
+      );
+    });
+
+    it('leaks nothing for a suspended hotel (8.1 AC4)', async () => {
+      tenantUsersRepo.findOne.mockResolvedValue(
+        makeOwner({
+          setupTokenHash: sha256('valid-token'),
+          setupTokenExpiresAt: new Date(Date.now() + HOUR_MS),
+          hotel: { status: 'suspended' } as Hotel,
+        }),
+      );
+      await expect(service.setupPreview('valid-token')).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+    });
+  });
+
+  describe('setup for a disabled account (8.3 AC2)', () => {
+    it('rejects with the generic 400 instead of re-activating', async () => {
+      tenantUsersRepo.findOne.mockResolvedValue(
+        makeOwner({
+          status: 'disabled',
+          setupTokenHash: sha256('valid-token'),
+          setupTokenExpiresAt: new Date(Date.now() + HOUR_MS),
+          hotel: { status: 'active' } as Hotel,
+        }),
+      );
+      await expect(
+        service.setup({ token: 'valid-token', password: 'Secret123' }),
+      ).rejects.toThrow('Invalid or expired setup link');
+    });
+  });
+
   describe('regenerateSetupLink (SA-HTL-6 AC4)', () => {
     it('overwrites the stored hash (invalidating the old link) and audits', async () => {
       const owner = makeOwner({
@@ -200,6 +273,28 @@ describe('TenantUsersService', () => {
           actorId: 'admin-1',
         }),
       );
+    });
+
+    it('emits the setup-link event with the new raw token and resendOfId passthrough (6.4 AC1, 6.7 AC4)', async () => {
+      const owner = makeOwner();
+      tenantUsersRepo.findOne.mockResolvedValue(owner);
+
+      await service.regenerateSetupLink('hotel-1', actor, {
+        resendOfId: 'notif-1',
+      });
+
+      expect(events.emitAsync).toHaveBeenCalledWith(
+        'hotel.owner_setup_link_requested',
+        expect.objectContaining({
+          hotelId: 'hotel-1',
+          ownerId: 'owner-1',
+          rawToken: expect.any(String),
+          resendOfId: 'notif-1',
+        }),
+      );
+      // The emitted raw token matches the newly stored hash.
+      const emitted = events.emitAsync.mock.calls[0][1] as { rawToken: string };
+      expect(owner.setupTokenHash).toBe(sha256(emitted.rawToken));
     });
 
     it('returns 404 when the hotel has no owner account', async () => {

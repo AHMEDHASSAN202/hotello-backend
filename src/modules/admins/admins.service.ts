@@ -46,7 +46,11 @@ export class AdminsService {
 
   async findOne(id: string): Promise<Admin> {
     const admin = await this.adminsRepo.findOne({ where: { id } });
-    if (!admin) throw new NotFoundException('Admin not found');
+    if (!admin)
+      throw new NotFoundException({
+        code: 'ADMIN_NOT_FOUND',
+        message: 'Admin not found',
+      });
     return admin;
   }
 
@@ -54,7 +58,11 @@ export class AdminsService {
     const email = dto.email.toLowerCase();
     await this.assertEmailAvailable(email);
     const role = await this.rolesRepo.findOne({ where: { id: dto.roleId } });
-    if (!role) throw new NotFoundException('Role not found');
+    if (!role)
+      throw new NotFoundException({
+        code: 'ROLE_NOT_FOUND',
+        message: 'Role not found',
+      });
 
     const admin = this.adminsRepo.create({
       name: dto.name,
@@ -77,7 +85,11 @@ export class AdminsService {
     }
     if (dto.roleId && dto.roleId !== admin.roleId) {
       const role = await this.rolesRepo.findOne({ where: { id: dto.roleId } });
-      if (!role) throw new NotFoundException('Role not found');
+      if (!role)
+      throw new NotFoundException({
+        code: 'ROLE_NOT_FOUND',
+        message: 'Role not found',
+      });
       admin.roleId = dto.roleId;
       admin.role = role;
     }
@@ -96,7 +108,10 @@ export class AdminsService {
     currentAdminId: string,
   ): Promise<Admin> {
     if (id === currentAdminId && !isActive) {
-      throw new BadRequestException('You cannot deactivate your own account');
+      throw new BadRequestException({
+        code: 'CANNOT_DEACTIVATE_SELF',
+        message: 'You cannot deactivate your own account',
+      });
     }
     const admin = await this.findOne(id);
     admin.isActive = isActive;
@@ -106,7 +121,10 @@ export class AdminsService {
 
   async remove(id: string, currentAdminId: string): Promise<void> {
     if (id === currentAdminId) {
-      throw new BadRequestException('You cannot delete your own account');
+      throw new BadRequestException({
+        code: 'CANNOT_DELETE_SELF',
+        message: 'You cannot delete your own account',
+      });
     }
     const admin = await this.findOne(id);
     await this.adminsRepo.remove(admin);
@@ -114,6 +132,10 @@ export class AdminsService {
 
   private async assertEmailAvailable(email: string) {
     const existing = await this.adminsRepo.findOne({ where: { email } });
-    if (existing) throw new ConflictException('Email already in use');
+    if (existing)
+      throw new ConflictException({
+        code: 'EMAIL_TAKEN',
+        message: 'Email already in use',
+      });
   }
 }

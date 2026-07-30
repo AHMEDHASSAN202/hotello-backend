@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Admin } from '../admins/admin.entity';
@@ -29,6 +30,7 @@ describe('HotelsService', () => {
   let tenantUsersRepo: { findOne: jest.Mock };
   let storage: { put: jest.Mock; get: jest.Mock; delete: jest.Mock };
   let auditLogs: { log: jest.Mock };
+  let events: { emitAsync: jest.Mock };
   let qb: Record<string, jest.Mock>;
 
   const superAdmin = {
@@ -99,6 +101,7 @@ describe('HotelsService', () => {
       delete: jest.fn().mockResolvedValue(undefined),
     };
     auditLogs = { log: jest.fn() };
+    events = { emitAsync: jest.fn().mockResolvedValue([]) };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -117,6 +120,7 @@ describe('HotelsService', () => {
           },
         },
         { provide: AuditLogsService, useValue: auditLogs },
+        { provide: EventEmitter2, useValue: events },
       ],
     }).compile();
 
@@ -391,6 +395,26 @@ describe('HotelsService', () => {
       );
     });
 
+    it('emits hotel.suspended with the reason category only — never the note (6.6 AC1)', async () => {
+      await service.suspend(
+        'hotel-1',
+        { reason: 'non_payment', note: 'Invoice 90 days overdue' },
+        superAdmin,
+      );
+
+      expect(events.emitAsync).toHaveBeenCalledWith(
+        'hotel.suspended',
+        expect.objectContaining({
+          hotelId: 'hotel-1',
+          reason: 'non_payment',
+          suspendedAt: expect.any(Date),
+        }),
+      );
+      const payload = events.emitAsync.mock.calls[0][1] as Record<string, unknown>;
+      expect(payload).not.toHaveProperty('note');
+      expect(JSON.stringify(payload)).not.toContain('Invoice 90 days overdue');
+    });
+
     it('rejects suspending an already-suspended hotel', async () => {
       hotelsRepo.findOne.mockResolvedValue(makeHotel({ status: 'suspended' }));
       await expect(
@@ -424,6 +448,14 @@ describe('HotelsService', () => {
       expect(saved.suspendedById).toBeNull();
       expect(auditLogs.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'hotel.reactivated' }),
+      );
+      // 6.6 AC2 — reactivation notice event with its occurrence timestamp.
+      expect(events.emitAsync).toHaveBeenCalledWith(
+        'hotel.reactivated',
+        expect.objectContaining({
+          hotelId: 'hotel-1',
+          occurredAt: expect.any(Date),
+        }),
       );
     });
 

@@ -4,6 +4,7 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { Plan } from '../plans/plan.entity';
 import { Subscription } from '../subscriptions/subscription.entity';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
+import { TenantRolesModule } from '../tenant-roles/tenant-roles.module';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { TenantUsersModule } from '../tenant-users/tenant-users.module';
 import { HotelOnboardingService } from './hotel-onboarding.service';
@@ -17,6 +18,7 @@ import { TenantUrlsService } from './tenant-urls.service';
     TypeOrmModule.forFeature([Hotel, Subscription, Plan, TenantUser]),
     SubscriptionsModule,
     TenantUsersModule,
+    TenantRolesModule,
     AuditLogsModule,
   ],
   controllers: [HotelsController],

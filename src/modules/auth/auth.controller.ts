@@ -1,4 +1,13 @@
-import { Body, Controller, Get, HttpCode, Patch, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { CurrentAdmin } from '../../common/decorators/current-admin.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { Admin } from '../admins/admin.entity';
@@ -13,6 +22,8 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Public()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('login')
   @HttpCode(200)
   login(@Body() dto: LoginDto) {
@@ -20,6 +31,8 @@ export class AuthController {
   }
 
   @Public()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Post('refresh')
   @HttpCode(200)
   refresh(@Body() dto: RefreshTokenDto) {

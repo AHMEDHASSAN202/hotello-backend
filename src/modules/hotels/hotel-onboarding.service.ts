@@ -1,9 +1,15 @@
-import { Injectable, UnprocessableEntityException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { Injectable, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { DataSource } from 'typeorm';
 import { Admin } from '../admins/admin.entity';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import {
+  NOTIFICATION_EVENTS,
+  OwnerSetupLinkRequestedEvent,
+  safeEmit,
+} from '../notifications/notification-events';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import { TenantRolesService } from '../tenant-roles/tenant-roles.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { TenantUsersService } from '../tenant-users/tenant-users.service';
 import { OnboardHotelDto } from './dto/onboard-hotel.dto';
@@ -19,21 +25,26 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  */
 @Injectable()
 export class HotelOnboardingService {
+  private readonly logger = new Logger(HotelOnboardingService.name);
+
   constructor(
     private readonly dataSource: DataSource,
-    @InjectRepository(TenantUser)
-    private readonly tenantUsersRepo: Repository<TenantUser>,
     private readonly hotelsService: HotelsService,
     private readonly subscriptionsService: SubscriptionsService,
     private readonly tenantUsersService: TenantUsersService,
+    private readonly tenantRolesService: TenantRolesService,
     private readonly auditLogs: AuditLogsService,
+    private readonly events: EventEmitter2,
   ) {}
 
   async onboard(dto: OnboardHotelDto, actor: Admin) {
     // Fast-fail validation before opening the transaction.
     await this.hotelsService.assertSlugUsable(dto.profile.slug);
+    // Owner email is unique PER HOTEL (Epic 08, Story 8.3 AC1: the same email
+    // at another hotel is a different account), so an email that already owns
+    // another hotel is fine here — the new hotel has no users yet, and the DB
+    // composite unique (hotelId, email) backs the invariant.
     const ownerEmail = dto.owner.email.toLowerCase();
-    await this.assertOwnerEmailAvailable(ownerEmail);
 
     const result = await this.dataSource.transaction(async (manager) => {
       const hotelsRepo = manager.getRepository(Hotel);
@@ -67,14 +78,21 @@ export class HotelOnboardingService {
           actor,
         );
 
+      // Story 9.1 AC1 — seed the hotel's default roles inside the same
+      // transaction; the owner is assigned the seeded (system) Owner role.
+      const roles = await this.tenantRolesService.seedDefaultRoles(
+        hotel.id,
+        manager,
+      );
+      const ownerRole = roles.find((r) => r.isSystem)!;
+
       const tenantUsersRepo = manager.getRepository(TenantUser);
       const owner = await tenantUsersRepo.save(
         tenantUsersRepo.create({
           hotelId: hotel.id,
           name: dto.owner.name,
           email: ownerEmail,
-          role: 'owner',
-          permissions: ['*'],
+          roleId: ownerRole.id,
           status: 'pending',
         }),
       );
@@ -99,6 +117,27 @@ export class HotelOnboardingService {
         ownerEmail,
       },
     });
+
+    // Story 6.4 AC1 — automated setup email. The raw token exists only in
+    // this call stack; the awaited listener persists a masked outbox record
+    // before we return (persist-first), then sends in the background.
+    await safeEmit(
+      this.events,
+      NOTIFICATION_EVENTS.OWNER_SETUP_LINK_REQUESTED,
+      {
+        hotelId: result.hotel.id,
+        ownerId: result.owner.id,
+        ownerName: result.owner.name,
+        ownerEmail: result.owner.email,
+        hotelNameEn: result.hotel.nameEn,
+        hotelNameAr: result.hotel.nameAr,
+        slug: result.hotel.slug,
+        language: result.hotel.defaultLanguage,
+        rawToken: result.token.raw,
+        expiresAt: result.token.expiresAt,
+      } satisfies OwnerSetupLinkRequestedEvent,
+      this.logger,
+    );
 
     return {
       hotel: this.hotelsService.toDetail(result.hotel, result.owner),
@@ -132,14 +171,4 @@ export class HotelOnboardingService {
     };
   }
 
-  /** Story 5.6 AC2 — 422 so the wizard keeps its state and targets step 3. */
-  private async assertOwnerEmailAvailable(email: string) {
-    const existing = await this.tenantUsersRepo.findOne({ where: { email } });
-    if (existing) {
-      throw new UnprocessableEntityException({
-        message: 'Owner email already in use',
-        field: 'owner.email',
-      });
-    }
-  }
 }

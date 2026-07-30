@@ -1,7 +1,5 @@
-import {
-  ConflictException,
-  UnprocessableEntityException,
-} from '@nestjs/common';
+import { ConflictException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
@@ -9,6 +7,7 @@ import { Admin } from '../admins/admin.entity';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Role } from '../roles/role.entity';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import { TenantRolesService } from '../tenant-roles/tenant-roles.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { TenantUsersService } from '../tenant-users/tenant-users.service';
 import { OnboardHotelDto } from './dto/onboard-hotel.dto';
@@ -23,8 +22,10 @@ describe('HotelOnboardingService', () => {
     issueSetupToken: jest.Mock;
     buildSetupLink: jest.Mock;
   };
+  let tenantRolesService: { seedDefaultRoles: jest.Mock };
   let tenantUsersRepo: { findOne: jest.Mock };
   let auditLogs: { log: jest.Mock };
+  let events: { emitAsync: jest.Mock };
   let managerRepos: Map<unknown, { create: jest.Mock; save: jest.Mock }>;
   let dataSource: { transaction: jest.Mock };
 
@@ -92,8 +93,15 @@ describe('HotelOnboardingService', () => {
           `https://${slug}.gxp.example/setup?token=${raw}`,
       ),
     };
+    tenantRolesService = {
+      seedDefaultRoles: jest.fn().mockResolvedValue([
+        { id: 'role-owner', nameEn: 'Owner', isSystem: true },
+        { id: 'role-manager', nameEn: 'Manager', isSystem: false },
+      ]),
+    };
     tenantUsersRepo = { findOne: jest.fn().mockResolvedValue(null) };
     auditLogs = { log: jest.fn() };
+    events = { emitAsync: jest.fn().mockResolvedValue([]) };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -103,7 +111,9 @@ describe('HotelOnboardingService', () => {
         { provide: HotelsService, useValue: hotelsService },
         { provide: SubscriptionsService, useValue: subscriptionsService },
         { provide: TenantUsersService, useValue: tenantUsersService },
+        { provide: TenantRolesService, useValue: tenantRolesService },
         { provide: AuditLogsService, useValue: auditLogs },
+        { provide: EventEmitter2, useValue: events },
       ],
     }).compile();
 
@@ -124,11 +134,11 @@ describe('HotelOnboardingService', () => {
         { planId: 'plan-trial' },
         actor,
       );
-      // Owner is a pending tenant-scoped super admin with the wildcard.
+      // Owner is a pending user assigned the seeded (system) Owner role.
+      expect(tenantRolesService.seedDefaultRoles).toHaveBeenCalled();
       expect(tenantUsersService.issueSetupToken).toHaveBeenCalledWith(
         expect.objectContaining({
-          role: 'owner',
-          permissions: ['*'],
+          roleId: 'role-owner',
           status: 'pending',
           email: 'owner@nilegrand.example', // lowercased
         }),
@@ -148,6 +158,19 @@ describe('HotelOnboardingService', () => {
             slug: 'nile-grand',
             ownerEmail: 'owner@nilegrand.example',
           }),
+        }),
+      );
+    });
+
+    it('emits the setup-link event post-commit with the raw token in memory only (6.4 AC1)', async () => {
+      await service.onboard(makeDto(), actor);
+
+      expect(events.emitAsync).toHaveBeenCalledWith(
+        'hotel.owner_setup_link_requested',
+        expect.objectContaining({
+          slug: 'nile-grand',
+          ownerEmail: 'owner@nilegrand.example',
+          rawToken: 'raw-token',
         }),
       );
     });
@@ -186,18 +209,20 @@ describe('HotelOnboardingService', () => {
       // guarantee is that no post-commit side effects ran.
       expect(auditLogs.log).not.toHaveBeenCalled();
       expect(tenantUsersService.issueSetupToken).not.toHaveBeenCalled();
+      expect(events.emitAsync).not.toHaveBeenCalled();
     });
   });
 
-  describe('owner email conflict (SA-HTL-6 AC2)', () => {
-    it('returns 422 with the offending field for a duplicate owner email', async () => {
-      tenantUsersRepo.findOne.mockResolvedValue({ id: 'existing' });
-
-      await expect(service.onboard(makeDto(), actor)).rejects.toMatchObject({
-        constructor: UnprocessableEntityException,
-        response: expect.objectContaining({ field: 'owner.email' }),
+  describe('owner email scoping (8.3 AC1)', () => {
+    it('allows an email that already owns another hotel — uniqueness is per hotel', async () => {
+      // An owner exists elsewhere with the same email; onboarding must not 422.
+      tenantUsersRepo.findOne.mockResolvedValue({
+        id: 'existing',
+        hotelId: 'other-hotel',
       });
-      expect(dataSource.transaction).not.toHaveBeenCalled();
+
+      await expect(service.onboard(makeDto(), actor)).resolves.toBeDefined();
+      expect(dataSource.transaction).toHaveBeenCalled();
     });
   });
 });

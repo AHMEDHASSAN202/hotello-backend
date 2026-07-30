@@ -47,9 +47,16 @@ export class RolesService {
 
   async update(id: string, dto: UpdateRoleDto): Promise<Role> {
     const role = await this.rolesRepo.findOne({ where: { id } });
-    if (!role) throw new NotFoundException('Role not found');
+    if (!role)
+      throw new NotFoundException({
+        code: 'ROLE_NOT_FOUND',
+        message: 'Role not found',
+      });
     if (role.isSystem) {
-      throw new BadRequestException('System roles cannot be modified');
+      throw new BadRequestException({
+        code: 'SYSTEM_ROLE_READONLY',
+        message: 'System roles cannot be modified',
+      });
     }
     if (dto.permissions) this.assertKnownPermissions(dto.permissions);
     if (dto.name && dto.name.toLowerCase() !== role.name.toLowerCase()) {
@@ -61,13 +68,23 @@ export class RolesService {
 
   async remove(id: string): Promise<void> {
     const role = await this.rolesRepo.findOne({ where: { id } });
-    if (!role) throw new NotFoundException('Role not found');
+    if (!role)
+      throw new NotFoundException({
+        code: 'ROLE_NOT_FOUND',
+        message: 'Role not found',
+      });
     if (role.isSystem) {
-      throw new BadRequestException('System roles cannot be deleted');
+      throw new BadRequestException({
+        code: 'SYSTEM_ROLE_UNDELETABLE',
+        message: 'System roles cannot be deleted',
+      });
     }
     const inUse = await this.adminsRepo.count({ where: { roleId: id } });
     if (inUse > 0) {
-      throw new ConflictException(`Role is assigned to ${inUse} admin(s)`);
+      throw new ConflictException({
+        code: 'ROLE_IN_USE',
+        message: `Role is assigned to ${inUse} admin(s)`,
+      });
     }
     await this.rolesRepo.remove(role);
   }
@@ -77,9 +94,10 @@ export class RolesService {
       (key) => !ALL_PERMISSION_KEYS.includes(key),
     );
     if (invalid.length > 0) {
-      throw new BadRequestException(
-        `Unknown permission keys: ${invalid.join(', ')}`,
-      );
+      throw new BadRequestException({
+        code: 'INVALID_PERMISSIONS',
+        message: `Unknown permission keys: ${invalid.join(', ')}`,
+      });
     }
   }
 
@@ -89,6 +107,10 @@ export class RolesService {
         ? { name: ILike(name), id: Not(excludeId) }
         : { name: ILike(name) },
     });
-    if (existing) throw new ConflictException('Role name already in use');
+    if (existing)
+      throw new ConflictException({
+        code: 'ROLE_NAME_TAKEN',
+        message: 'Role name already in use',
+      });
   }
 }

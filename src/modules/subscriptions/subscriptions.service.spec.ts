@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Admin } from '../admins/admin.entity';
@@ -27,6 +28,7 @@ describe('SubscriptionsService', () => {
   let plansRepo: { findOne: jest.Mock };
   let hotelsRepo: { findOne: jest.Mock };
   let auditLogs: { log: jest.Mock };
+  let events: { emitAsync: jest.Mock };
 
   const superAdmin = {
     id: 'admin-1',
@@ -92,6 +94,7 @@ describe('SubscriptionsService', () => {
     plansRepo = { findOne: jest.fn() };
     hotelsRepo = { findOne: jest.fn().mockResolvedValue(makeHotel()) };
     auditLogs = { log: jest.fn() };
+    events = { emitAsync: jest.fn().mockResolvedValue([]) };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -100,6 +103,7 @@ describe('SubscriptionsService', () => {
         { provide: getRepositoryToken(Plan), useValue: plansRepo },
         { provide: getRepositoryToken(Hotel), useValue: hotelsRepo },
         { provide: AuditLogsService, useValue: auditLogs },
+        { provide: EventEmitter2, useValue: events },
       ],
     }).compile();
 
@@ -465,6 +469,92 @@ describe('SubscriptionsService', () => {
     });
   });
 
+  describe('trial countdown emission (6.5)', () => {
+    const runningTrial = (daysFromNow: number, overrides: Partial<Subscription> = {}) =>
+      makeSub({
+        status: 'trial',
+        trialEndsAt: new Date(Date.now() + daysFromNow * DAY_MS),
+        nextRenewalAt: null,
+        ...overrides,
+      });
+
+    it.each([[7], [3], [1]])(
+      'emits the %i-day threshold at exactly %i days remaining',
+      async (days) => {
+        subsRepo.find.mockResolvedValue([runningTrial(days - 0.5)]);
+
+        const emitted = await service.emitTrialCountdowns();
+
+        expect(emitted).toBe(1);
+        expect(events.emitAsync).toHaveBeenCalledWith(
+          'subscription.trial_countdown',
+          expect.objectContaining({ subscriptionId: 'sub-1', threshold: days }),
+        );
+      },
+    );
+
+    it('catches up a missed run: 6 days remaining still emits the 7-day notice (AC2)', async () => {
+      subsRepo.find.mockResolvedValue([runningTrial(5.5)]);
+
+      await service.emitTrialCountdowns();
+
+      // The notice tier is 7 (dedupe key), but the email must show the
+      // actual days left — never claim "7 days" when 6 remain.
+      expect(events.emitAsync).toHaveBeenCalledWith(
+        'subscription.trial_countdown',
+        expect.objectContaining({ threshold: 7, daysRemaining: 6 }),
+      );
+    });
+
+    it('emits only the smallest applicable threshold: 2 days remaining → 3, never 7', async () => {
+      subsRepo.find.mockResolvedValue([runningTrial(1.5)]);
+
+      await service.emitTrialCountdowns();
+
+      expect(events.emitAsync).toHaveBeenCalledTimes(1);
+      expect(events.emitAsync).toHaveBeenCalledWith(
+        'subscription.trial_countdown',
+        expect.objectContaining({ threshold: 3 }),
+      );
+    });
+
+    it('emits nothing for trials with more than 7 days remaining', async () => {
+      subsRepo.find.mockResolvedValue([runningTrial(10)]);
+
+      const emitted = await service.emitTrialCountdowns();
+
+      expect(emitted).toBe(0);
+      expect(events.emitAsync).not.toHaveBeenCalled();
+    });
+
+    it('queries only running (non-ended, future) trials — overdue ones get the expiry notice instead', async () => {
+      subsRepo.find.mockResolvedValue([]);
+
+      await service.emitTrialCountdowns();
+
+      const where = subsRepo.find.mock.calls[0][0].where;
+      expect(where.status).toBe('trial');
+      expect(where.endDate).toBeDefined();
+      expect(where.trialEndsAt).toBeDefined();
+    });
+
+    it('carries the (new) trialEndsAt in the payload so an extension re-arms thresholds (AC4)', async () => {
+      const extendedEnd = new Date(Date.now() + 6 * DAY_MS);
+      subsRepo.find.mockResolvedValue([
+        runningTrial(6, { trialEndsAt: extendedEnd }),
+      ]);
+
+      await service.emitTrialCountdowns();
+
+      // The listener keys dedupe on threshold + this date: a new trialEndsAt
+      // yields new keys, so 7/3/1 all apply again after an extension.
+      expect(events.emitAsync).toHaveBeenCalledWith(
+        'subscription.trial_countdown',
+        expect.objectContaining({ threshold: 7, trialEndsAt: extendedEnd }),
+      );
+    });
+  });
+
   describe('expireOverdueTrials (SA-SUB-4)', () => {
     it('flips overdue trials to expired, keeps the row current, audits with null actor', async () => {
       const overdue = makeSub({
@@ -485,6 +575,11 @@ describe('SubscriptionsService', () => {
           action: 'subscription.expired',
           actorId: null,
         }),
+      );
+      // Story 6.5 AC3 — expiry notice event per flipped subscription.
+      expect(events.emitAsync).toHaveBeenCalledWith(
+        'subscription.trial_expired',
+        expect.objectContaining({ subscriptionId: 'sub-1', hotelId: 'hotel-1' }),
       );
     });
 

@@ -11,6 +11,7 @@ export const PERMISSION_CATALOG: Record<string, string[]> = {
   plans: ['plans.read', 'plans.create', 'plans.update', 'plans.archive'],
   subscriptions: ['subscriptions.read', 'subscriptions.update'],
   hotels: ['hotels.read', 'hotels.create', 'hotels.update', 'hotels.suspend'],
+  notifications: ['notifications.read', 'notifications.resend'],
 };
 
 export const ALL_PERMISSION_KEYS: string[] =

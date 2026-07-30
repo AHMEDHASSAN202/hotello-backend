@@ -4,12 +4,20 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import { Admin } from '../admins/admin.entity';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import {
+  HotelReactivatedEvent,
+  HotelSuspendedEvent,
+  NOTIFICATION_EVENTS,
+  safeEmit,
+} from '../notifications/notification-events';
 import { WILDCARD } from '../roles/permissions.constants';
 import { STORAGE_DRIVER, StorageDriver } from '../storage/storage.interface';
 import { Subscription } from '../subscriptions/subscription.entity';
@@ -48,6 +56,8 @@ type HotelWithCurrentSub = Hotel & { currentSubscription?: Subscription };
 
 @Injectable()
 export class HotelsService {
+  private readonly logger = new Logger(HotelsService.name);
+
   constructor(
     @InjectRepository(Hotel) private readonly hotelsRepo: Repository<Hotel>,
     @InjectRepository(Subscription)
@@ -57,6 +67,7 @@ export class HotelsService {
     @Inject(STORAGE_DRIVER) private readonly storage: StorageDriver,
     private readonly tenantUrls: TenantUrlsService,
     private readonly auditLogs: AuditLogsService,
+    private readonly events: EventEmitter2,
   ) {}
 
   /** Story 5.1 — paginated list with current plan + subscription status. */
@@ -115,9 +126,14 @@ export class HotelsService {
       where: { id },
       relations: ['onboardedBy', 'suspendedBy'],
     });
-    if (!hotel) throw new NotFoundException('Hotel not found');
+    if (!hotel)
+      throw new NotFoundException({
+        code: 'HOTEL_NOT_FOUND',
+        message: 'Hotel not found',
+      });
     const owner = await this.tenantUsersRepo.findOne({
-      where: { hotelId: id, role: 'owner' },
+      where: { hotelId: id, role: { isSystem: true } },
+      relations: ['role'],
     });
     return this.toDetail(hotel, owner);
   }
@@ -138,31 +154,44 @@ export class HotelsService {
   /** Validates a slug for create/update — throws with a specific error. */
   async assertSlugUsable(slug: string, excludeHotelId?: string) {
     if (!SLUG_REGEX.test(slug)) {
-      throw new BadRequestException(
-        'Slug must be lowercase kebab-case (a-z, 0-9, hyphens), 3–40 characters',
-      );
+      throw new BadRequestException({
+        code: 'SLUG_INVALID',
+        message:
+          'Slug must be lowercase kebab-case (a-z, 0-9, hyphens), 3–40 characters',
+      });
     }
     if ((RESERVED_SLUGS as readonly string[]).includes(slug)) {
-      throw new BadRequestException(`"${slug}" is a reserved word`);
+      throw new BadRequestException({
+        code: 'SLUG_RESERVED',
+        message: `"${slug}" is a reserved word`,
+      });
     }
     const existing = await this.hotelsRepo.findOne({ where: { slug } });
     if (existing && existing.id !== excludeHotelId) {
-      throw new ConflictException('Slug is already taken');
+      throw new ConflictException({
+        code: 'SLUG_TAKEN',
+        message: 'Slug is already taken',
+      });
     }
   }
 
   /** Story 5.4 — profile edit with slug + rooms-count guards. */
   async update(id: string, dto: UpdateHotelDto, actor: Admin) {
     const hotel = await this.hotelsRepo.findOne({ where: { id } });
-    if (!hotel) throw new NotFoundException('Hotel not found');
+    if (!hotel)
+      throw new NotFoundException({
+        code: 'HOTEL_NOT_FOUND',
+        message: 'Hotel not found',
+      });
 
     // Slug immutability (5.3 AC3): wildcard only, separately audit-logged.
     let slugChange: { old: string; new: string } | null = null;
     if (dto.slug !== undefined && dto.slug !== hotel.slug) {
       if (!this.isWildcard(actor)) {
-        throw new ForbiddenException(
-          'Only Super Admin (*) can change a hotel slug',
-        );
+        throw new ForbiddenException({
+          code: 'HOTEL_SLUG_FORBIDDEN',
+          message: 'Only Super Admin (*) can change a hotel slug',
+        });
       }
       await this.assertSlugUsable(dto.slug, id);
       slugChange = { old: hotel.slug, new: dto.slug };
@@ -172,9 +201,10 @@ export class HotelsService {
     // Rooms-count vs plan limit (5.4 AC3) — mirrors the downgrade guard.
     const force = dto.force === true;
     if (force && !this.isWildcard(actor)) {
-      throw new ForbiddenException(
-        'Only Super Admin (*) can force past plan limits',
-      );
+      throw new ForbiddenException({
+        code: 'FORCE_LIMIT_FORBIDDEN',
+        message: 'Only Super Admin (*) can force past plan limits',
+      });
     }
     if (dto.roomsCount !== undefined && !force) {
       await this.assertRoomsWithinPlanLimit(hotel, dto.roomsCount);
@@ -215,9 +245,16 @@ export class HotelsService {
   /** Story 5.5 — full tenant lock; the subscription is left untouched. */
   async suspend(id: string, dto: SuspendHotelDto, actor: Admin) {
     const hotel = await this.hotelsRepo.findOne({ where: { id } });
-    if (!hotel) throw new NotFoundException('Hotel not found');
+    if (!hotel)
+      throw new NotFoundException({
+        code: 'HOTEL_NOT_FOUND',
+        message: 'Hotel not found',
+      });
     if (hotel.status === 'suspended') {
-      throw new ConflictException('Hotel is already suspended');
+      throw new ConflictException({
+        code: 'HOTEL_ALREADY_SUSPENDED',
+        message: 'Hotel is already suspended',
+      });
     }
 
     hotel.status = 'suspended';
@@ -234,15 +271,34 @@ export class HotelsService {
       actorId: actor.id,
       metadata: { reason: dto.reason, note: dto.note ?? null },
     });
+
+    // Story 6.6 AC1 — owner notice carries the category only, never the note.
+    await safeEmit(
+      this.events,
+      NOTIFICATION_EVENTS.HOTEL_SUSPENDED,
+      {
+        hotelId: id,
+        reason: dto.reason,
+        suspendedAt: hotel.suspendedAt!,
+      } satisfies HotelSuspendedEvent,
+      this.logger,
+    );
     return this.findOne(id);
   }
 
   /** Story 5.5 AC5 — restores prior access immediately. */
   async reactivate(id: string, actor: Admin) {
     const hotel = await this.hotelsRepo.findOne({ where: { id } });
-    if (!hotel) throw new NotFoundException('Hotel not found');
+    if (!hotel)
+      throw new NotFoundException({
+        code: 'HOTEL_NOT_FOUND',
+        message: 'Hotel not found',
+      });
     if (hotel.status !== 'suspended') {
-      throw new ConflictException('Hotel is not suspended');
+      throw new ConflictException({
+        code: 'HOTEL_NOT_SUSPENDED',
+        message: 'Hotel is not suspended',
+      });
     }
 
     hotel.status = 'active';
@@ -258,21 +314,44 @@ export class HotelsService {
       entityId: id,
       actorId: actor.id,
     });
+
+    // Story 6.6 AC2 — the timestamp is the per-occurrence idempotency
+    // discriminator (no column stores it after the flags are cleared).
+    await safeEmit(
+      this.events,
+      NOTIFICATION_EVENTS.HOTEL_REACTIVATED,
+      { hotelId: id, occurredAt: new Date() } satisfies HotelReactivatedEvent,
+      this.logger,
+    );
     return this.findOne(id);
   }
 
   /** Story 5.3 AC2 / note 10 — png/jpg/webp/svg, ≤ 2MB; stores the key. */
   async uploadLogo(id: string, file: Express.Multer.File, actor: Admin) {
     const hotel = await this.hotelsRepo.findOne({ where: { id } });
-    if (!hotel) throw new NotFoundException('Hotel not found');
-    if (!file) throw new BadRequestException('No file uploaded');
+    if (!hotel)
+      throw new NotFoundException({
+        code: 'HOTEL_NOT_FOUND',
+        message: 'Hotel not found',
+      });
+    if (!file)
+      throw new BadRequestException({
+        code: 'NO_FILE',
+        message: 'No file uploaded',
+      });
 
     const ext = LOGO_MIME_TYPES[file.mimetype];
     if (!ext) {
-      throw new BadRequestException('Logo must be PNG, JPG, WebP or SVG');
+      throw new BadRequestException({
+        code: 'LOGO_INVALID_TYPE',
+        message: 'Logo must be PNG, JPG, WebP or SVG',
+      });
     }
     if (file.size > LOGO_MAX_BYTES) {
-      throw new BadRequestException('Logo must be 2MB or smaller');
+      throw new BadRequestException({
+        code: 'LOGO_TOO_LARGE',
+        message: 'Logo must be 2MB or smaller',
+      });
     }
 
     const key = `hotels/${id}/logo-${Date.now()}.${ext}`;
@@ -304,6 +383,7 @@ export class HotelsService {
     const maxRooms = current?.plan?.maxRooms ?? null;
     if (maxRooms !== null && roomsCount > maxRooms) {
       throw new ConflictException({
+        code: 'PLAN_LIMIT_VIOLATION',
         message: `Rooms count exceeds the current plan limit of ${maxRooms}`,
         violations: [
           {

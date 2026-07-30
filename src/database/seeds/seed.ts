@@ -1,32 +1,22 @@
 import 'reflect-metadata';
 import * as bcrypt from 'bcrypt';
-import { config } from 'dotenv';
-import { DataSource } from 'typeorm';
 import { Admin } from '../../modules/admins/admin.entity';
-import { AuditLog } from '../../modules/audit-logs/audit-log.entity';
 import { Hotel } from '../../modules/hotels/hotel.entity';
 import { ALL_MODULE_KEYS } from '../../modules/plans/modules.constants';
 import { Plan } from '../../modules/plans/plan.entity';
 import { WILDCARD } from '../../modules/roles/permissions.constants';
 import { Role } from '../../modules/roles/role.entity';
-import { Subscription } from '../../modules/subscriptions/subscription.entity';
-import { TenantUser } from '../../modules/tenant-users/tenant-user.entity';
-
-config();
+import { DEFAULT_TENANT_ROLES } from '../../modules/tenant-roles/default-tenant-roles';
+import { TenantRole } from '../../modules/tenant-roles/tenant-role.entity';
+import { AppDataSource } from '../../data-source';
 
 const SUPER_ADMIN_ROLE = 'Super Admin';
 
 async function seed() {
-  const dataSource = new DataSource({
-    type: 'postgres',
-    host: process.env.DB_HOST ?? 'localhost',
-    port: parseInt(process.env.DB_PORT ?? '5432', 10),
-    username: process.env.DB_USER ?? 'hotello',
-    password: process.env.DB_PASSWORD ?? 'hotello',
-    database: process.env.DB_NAME ?? 'hotello',
-    entities: [Admin, Role, Plan, Hotel, Subscription, AuditLog, TenantUser],
-    synchronize: true,
-  });
+  // Reuse the CLI data source: same connection settings, all entities loaded
+  // by glob, and `synchronize: false`. Tables must already exist — run
+  // `npm run migration:run` before seeding a fresh database.
+  const dataSource = AppDataSource;
   await dataSource.initialize();
 
   const rolesRepo = dataSource.getRepository(Role);
@@ -143,6 +133,27 @@ async function seed() {
     } else {
       console.log(`"Demo Hotel" already exists — skipping`);
     }
+  }
+
+  // Story 9.1 AC2 — every hotel gets the default tenant roles (idempotent
+  // find-or-create; backfills existing hotels too).
+  const hotelsRepo = dataSource.getRepository(Hotel);
+  const tenantRolesRepo = dataSource.getRepository(TenantRole);
+  const hotels = await hotelsRepo.find();
+  for (const hotel of hotels) {
+    for (const def of DEFAULT_TENANT_ROLES) {
+      const existingRole = await tenantRolesRepo.findOne({
+        where: { hotelId: hotel.id, nameEn: def.nameEn },
+      });
+      if (!existingRole) {
+        await tenantRolesRepo.save(
+          tenantRolesRepo.create({ hotelId: hotel.id, ...def }),
+        );
+      }
+    }
+  }
+  if (hotels.length > 0) {
+    console.log(`Ensured default tenant roles for ${hotels.length} hotel(s)`);
   }
 
   await dataSource.destroy();

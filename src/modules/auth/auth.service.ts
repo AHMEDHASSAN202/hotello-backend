@@ -36,10 +36,16 @@ export class AuthService {
     });
     // Same 401 for unknown email and wrong password — no account enumeration.
     if (!admin || !(await bcrypt.compare(dto.password, admin.passwordHash))) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException({
+        code: 'INVALID_CREDENTIALS',
+        message: 'Invalid credentials',
+      });
     }
     if (!admin.isActive) {
-      throw new ForbiddenException('Account is deactivated');
+      throw new ForbiddenException({
+        code: 'ACCOUNT_DEACTIVATED',
+        message: 'Account is deactivated',
+      });
     }
 
     admin.lastLoginAt = new Date();
@@ -52,6 +58,7 @@ export class AuthService {
         id: admin.id,
         name: admin.name,
         email: admin.email,
+        preferredLanguage: admin.preferredLanguage,
         role: {
           id: admin.role.id,
           name: admin.role.name,
@@ -81,7 +88,10 @@ export class AuthService {
       throw new UnauthorizedException('Invalid refresh token');
     }
     if (!admin.isActive) {
-      throw new ForbiddenException('Account is deactivated');
+      throw new ForbiddenException({
+        code: 'ACCOUNT_DEACTIVATED',
+        message: 'Account is deactivated',
+      });
     }
 
     const tokens = await this.issueTokens(admin);
@@ -98,18 +108,26 @@ export class AuthService {
       const email = dto.email.toLowerCase();
       if (email !== admin.email) {
         const existing = await this.adminsRepo.findOne({ where: { email } });
-        if (existing) throw new ConflictException('Email already in use');
+        if (existing)
+          throw new ConflictException({
+            code: 'EMAIL_TAKEN',
+            message: 'Email already in use',
+          });
       }
       admin.email = email;
     }
     if (dto.name) admin.name = dto.name;
+    if (dto.preferredLanguage) admin.preferredLanguage = dto.preferredLanguage;
     return this.adminsRepo.save(admin);
   }
 
   async changePassword(admin: Admin, dto: ChangePasswordDto): Promise<void> {
     const valid = await bcrypt.compare(dto.currentPassword, admin.passwordHash);
     if (!valid) {
-      throw new BadRequestException('Current password is incorrect');
+      throw new BadRequestException({
+        code: 'CURRENT_PASSWORD_INCORRECT',
+        message: 'Current password is incorrect',
+      });
     }
     admin.passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
     // Invalidate every other session.

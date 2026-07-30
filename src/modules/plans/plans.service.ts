@@ -68,7 +68,11 @@ export class PlansService {
       where: { id },
       relations: ['createdBy'],
     });
-    if (!plan) throw new NotFoundException('Plan not found');
+    if (!plan)
+      throw new NotFoundException({
+        message: 'Plan not found',
+        code: 'PLAN_NOT_FOUND',
+      });
     return {
       ...plan,
       subscriberCount: await this.countCurrentSubscribers(id),
@@ -77,7 +81,11 @@ export class PlansService {
 
   async findSubscribers(id: string) {
     const plan = await this.plansRepo.findOne({ where: { id } });
-    if (!plan) throw new NotFoundException('Plan not found');
+    if (!plan)
+      throw new NotFoundException({
+        message: 'Plan not found',
+        code: 'PLAN_NOT_FOUND',
+      });
     const subs = await this.subsRepo.find({
       where: { planId: id, endDate: IsNull() },
       relations: ['hotel'],
@@ -102,9 +110,10 @@ export class PlansService {
     await this.assertNamesAvailable(dto.nameEn, dto.nameAr);
     if (dto.isTrial) {
       if (!dto.trialDurationDays) {
-        throw new BadRequestException(
-          'trialDurationDays is required for trial plans',
-        );
+        throw new BadRequestException({
+          message: 'trialDurationDays is required for trial plans',
+          code: 'INVALID_PRICING',
+        });
       }
       await this.assertSingleActiveTrial();
     }
@@ -139,7 +148,11 @@ export class PlansService {
 
   async update(id: string, dto: UpdatePlanDto, actor: Admin): Promise<Plan> {
     const plan = await this.plansRepo.findOne({ where: { id } });
-    if (!plan) throw new NotFoundException('Plan not found');
+    if (!plan)
+      throw new NotFoundException({
+        message: 'Plan not found',
+        code: 'PLAN_NOT_FOUND',
+      });
 
     if (dto.enabledModules) this.assertKnownModules(dto.enabledModules);
     await this.assertNamesAvailable(
@@ -153,9 +166,10 @@ export class PlansService {
     );
     if (dto.isTrial === true && !plan.isTrial) {
       if (!(dto.trialDurationDays ?? plan.trialDurationDays)) {
-        throw new BadRequestException(
-          'trialDurationDays is required for trial plans',
-        );
+        throw new BadRequestException({
+          message: 'trialDurationDays is required for trial plans',
+          code: 'INVALID_PRICING',
+        });
       }
       if (plan.status === 'active') await this.assertSingleActiveTrial(id);
     }
@@ -186,15 +200,23 @@ export class PlansService {
 
   async archive(id: string, actor: Admin): Promise<Plan> {
     const plan = await this.plansRepo.findOne({ where: { id } });
-    if (!plan) throw new NotFoundException('Plan not found');
+    if (!plan)
+      throw new NotFoundException({
+        message: 'Plan not found',
+        code: 'PLAN_NOT_FOUND',
+      });
     if (plan.status === 'archived') {
-      throw new ConflictException('Plan is already archived');
+      throw new ConflictException({
+        message: 'Plan is already archived',
+        code: 'PLAN_ALREADY_ARCHIVED',
+      });
     }
     const subscriberCount = await this.countCurrentSubscribers(id);
     if (subscriberCount > 0) {
       throw new ConflictException({
         message: `Plan has ${subscriberCount} subscribed hotel(s). Migrate them to another plan first.`,
         subscriberCount,
+        code: 'PLAN_HAS_SUBSCRIBERS',
       });
     }
     plan.status = 'archived';
@@ -210,9 +232,16 @@ export class PlansService {
 
   async restore(id: string, actor: Admin): Promise<Plan> {
     const plan = await this.plansRepo.findOne({ where: { id } });
-    if (!plan) throw new NotFoundException('Plan not found');
+    if (!plan)
+      throw new NotFoundException({
+        message: 'Plan not found',
+        code: 'PLAN_NOT_FOUND',
+      });
     if (plan.status === 'active') {
-      throw new ConflictException('Plan is already active');
+      throw new ConflictException({
+        message: 'Plan is already active',
+        code: 'PLAN_ALREADY_ACTIVE',
+      });
     }
     if (plan.isTrial) await this.assertSingleActiveTrial(id);
     plan.status = 'active';
@@ -272,7 +301,10 @@ export class PlansService {
           : { [field]: ILike(value) },
       });
       if (existing) {
-        throw new ConflictException(`Plan name already in use (${field})`);
+        throw new ConflictException({
+          message: `Plan name already in use (${field})`,
+          code: 'PLAN_NAME_TAKEN',
+        });
       }
     }
   }
@@ -330,6 +362,7 @@ export class PlansService {
       throw new ConflictException({
         message: `New limits are below the current usage of ${new Set(violations.map((v) => v.hotelId)).size} hotel(s)`,
         violations,
+        code: 'PLAN_LIMIT_VIOLATION',
       });
     }
   }

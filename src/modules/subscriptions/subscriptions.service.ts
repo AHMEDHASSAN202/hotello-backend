@@ -6,11 +6,22 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, IsNull, LessThan, Not, Repository } from 'typeorm';
+import { EntityManager, IsNull, LessThan, MoreThan, Repository, Not } from 'typeorm';
 import { Admin } from '../admins/admin.entity';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
+import {
+  NOTIFICATION_EVENTS,
+  safeEmit,
+  TrialCountdownEvent,
+  TrialExpiredEvent,
+} from '../notifications/notification-events';
+import {
+  TRIAL_THRESHOLDS,
+  TrialThreshold,
+} from '../notifications/notifications.constants';
 import { Plan } from '../plans/plan.entity';
 import { WILDCARD } from '../roles/permissions.constants';
 import { ChangeSubscriptionDto } from './dto/change-subscription.dto';
@@ -40,12 +51,17 @@ export class SubscriptionsService {
     @InjectRepository(Plan) private readonly plansRepo: Repository<Plan>,
     @InjectRepository(Hotel) private readonly hotelsRepo: Repository<Hotel>,
     private readonly auditLogs: AuditLogsService,
+    private readonly events: EventEmitter2,
   ) {}
 
   /** Story 4.6 — current subscription + usage vs limits + history. */
   async getForHotel(hotelId: string) {
     const hotel = await this.hotelsRepo.findOne({ where: { id: hotelId } });
-    if (!hotel) throw new NotFoundException('Hotel not found');
+    if (!hotel)
+      throw new NotFoundException({
+        code: 'HOTEL_NOT_FOUND',
+        message: 'Hotel not found',
+      });
 
     const current = await this.subsRepo.findOne({
       where: { hotelId, endDate: IsNull() },
@@ -88,24 +104,37 @@ export class SubscriptionsService {
     actor: Admin,
   ): Promise<Subscription> {
     const hotel = await this.hotelsRepo.findOne({ where: { id: hotelId } });
-    if (!hotel) throw new NotFoundException('Hotel not found');
+    if (!hotel)
+      throw new NotFoundException({
+        code: 'HOTEL_NOT_FOUND',
+        message: 'Hotel not found',
+      });
 
     const plan = await this.plansRepo.findOne({ where: { id: dto.planId } });
-    if (!plan) throw new NotFoundException('Plan not found');
+    if (!plan)
+      throw new NotFoundException({
+        code: 'PLAN_NOT_FOUND',
+        message: 'Plan not found',
+      });
     if (plan.status !== 'active') {
-      throw new ConflictException('Archived plans cannot be selected');
+      throw new ConflictException({
+        code: 'ARCHIVED_PLAN_SELECTED',
+        message: 'Archived plans cannot be selected',
+      });
     }
     if (dto.billingCycle === 'yearly' && plan.yearlyPrice === null) {
-      throw new BadRequestException(
-        'Yearly billing is unavailable for this plan',
-      );
+      throw new BadRequestException({
+        code: 'YEARLY_UNAVAILABLE',
+        message: 'Yearly billing is unavailable for this plan',
+      });
     }
 
     const force = dto.force === true;
     if (force && !this.isWildcard(actor)) {
-      throw new ForbiddenException(
-        'Only Super Admin (*) can force a plan change',
-      );
+      throw new ForbiddenException({
+        code: 'FORCE_LIMIT_FORBIDDEN',
+        message: 'Only Super Admin (*) can force a plan change',
+      });
     }
 
     if (!force) this.assertUsageWithinLimits(hotel, plan);
@@ -167,19 +196,28 @@ export class SubscriptionsService {
     actor: Admin,
   ): Promise<Subscription> {
     const plan = await this.plansRepo.findOne({ where: { id: opts.planId } });
-    if (!plan) throw new NotFoundException('Plan not found');
+    if (!plan)
+      throw new NotFoundException({
+        code: 'PLAN_NOT_FOUND',
+        message: 'Plan not found',
+      });
     if (plan.status !== 'active') {
-      throw new ConflictException('Archived plans cannot be selected');
+      throw new ConflictException({
+        code: 'ARCHIVED_PLAN_SELECTED',
+        message: 'Archived plans cannot be selected',
+      });
     }
     if (!plan.isTrial && !opts.billingCycle) {
-      throw new BadRequestException(
-        'Billing cycle is required for paid plans',
-      );
+      throw new BadRequestException({
+        code: 'BILLING_CYCLE_REQUIRED',
+        message: 'Billing cycle is required for paid plans',
+      });
     }
     if (opts.billingCycle === 'yearly' && plan.yearlyPrice === null) {
-      throw new BadRequestException(
-        'Yearly billing is unavailable for this plan',
-      );
+      throw new BadRequestException({
+        code: 'YEARLY_UNAVAILABLE',
+        message: 'Yearly billing is unavailable for this plan',
+      });
     }
     this.assertUsageWithinLimits(hotel, plan);
 
@@ -210,13 +248,19 @@ export class SubscriptionsService {
     actor: Admin,
   ): Promise<Subscription> {
     if (!this.isWildcard(actor)) {
-      throw new ForbiddenException('Only Super Admin (*) can extend a trial');
+      throw new ForbiddenException({
+        code: 'SUPER_ADMIN_ONLY_TRIAL',
+        message: 'Only Super Admin (*) can extend a trial',
+      });
     }
     const current = await this.subsRepo.findOne({
       where: { hotelId, endDate: IsNull() },
     });
     if (!current || current.status !== 'trial' || !current.trialEndsAt) {
-      throw new ConflictException('Hotel has no running trial to extend');
+      throw new ConflictException({
+        code: 'NO_RUNNING_TRIAL',
+        message: 'Hotel has no running trial to extend',
+      });
     }
     const oldTrialEndsAt = current.trialEndsAt;
     current.trialEndsAt = new Date(
@@ -239,6 +283,44 @@ export class SubscriptionsService {
   }
 
   /**
+   * Story 6.5 AC1/AC2 — countdown events for running trials. For each trial,
+   * only the *smallest* applicable threshold fires: a job that was down at
+   * the 7-day mark and runs at 6 days still sends the 7-day notice (once —
+   * the listener's dedupe key guarantees at-most-once per threshold+date).
+   */
+  async emitTrialCountdowns(): Promise<number> {
+    const now = new Date();
+    const running = await this.subsRepo.find({
+      where: { status: 'trial', endDate: IsNull(), trialEndsAt: MoreThan(now) },
+    });
+    let emitted = 0;
+    for (const sub of running) {
+      const daysRemaining = Math.ceil(
+        (sub.trialEndsAt!.getTime() - now.getTime()) / DAY_MS,
+      );
+      const applicable = TRIAL_THRESHOLDS.filter((t) => t >= daysRemaining);
+      if (applicable.length === 0) continue;
+      const threshold = Math.min(...applicable) as TrialThreshold;
+      await safeEmit(
+        this.events,
+        NOTIFICATION_EVENTS.TRIAL_COUNTDOWN,
+        {
+          subscriptionId: sub.id,
+          hotelId: sub.hotelId,
+          threshold,
+          // The email shows real days left — on a catch-up run (missed the
+          // 7-day mark, 6 remain) the 7-day *notice* fires but says 6.
+          daysRemaining,
+          trialEndsAt: sub.trialEndsAt!,
+        } satisfies TrialCountdownEvent,
+        this.logger,
+      );
+      emitted += 1;
+    }
+    return emitted;
+  }
+
+  /**
    * Story 4.10 AC1 — daily job body. Overdue trials flip to `expired`; the
    * row stays current (endDate null) until an admin converts the hotel.
    */
@@ -256,6 +338,17 @@ export class SubscriptionsService {
         actorId: null,
         metadata: { hotelId: sub.hotelId, trialEndsAt: sub.trialEndsAt },
       });
+      // Story 6.5 AC3 — expiry notice explaining read-only mode.
+      await safeEmit(
+        this.events,
+        NOTIFICATION_EVENTS.TRIAL_EXPIRED,
+        {
+          subscriptionId: sub.id,
+          hotelId: sub.hotelId,
+          trialEndsAt: sub.trialEndsAt!,
+        } satisfies TrialExpiredEvent,
+        this.logger,
+      );
     }
     if (overdue.length > 0) {
       this.logger.log(`Expired ${overdue.length} overdue trial(s)`);
@@ -282,6 +375,7 @@ export class SubscriptionsService {
     }));
     if (violations.length > 0) {
       throw new ConflictException({
+        code: 'PLAN_LIMIT_VIOLATION',
         message: `Hotel usage exceeds ${violations.length} limit(s) of the target plan`,
         violations,
       });
@@ -294,7 +388,11 @@ export class SubscriptionsService {
     const priorTrial = await this.subsRepo.findOne({
       where: { hotelId, trialEndsAt: Not(IsNull()) },
     });
-    if (priorTrial) throw new ConflictException('Trial already used');
+    if (priorTrial)
+      throw new ConflictException({
+        code: 'TRIAL_ALREADY_USED',
+        message: 'Trial already used',
+      });
   }
 
   private addCycle(from: Date, cycle: 'monthly' | 'yearly'): Date {

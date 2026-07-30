@@ -1,0 +1,57 @@
+import { WILDCARD } from '../tenant-users/tenant-permissions.constants';
+
+/**
+ * Story 9.1 AC1/AC4 — the default roles seeded into every hotel, bilingual.
+ * The permission catalog is staff/roles-only today; each future module epic
+ * extends the operational roles (Manager/Front Desk/Housekeeping) with its own
+ * keys. The Owner role always holds the wildcard and is a system role.
+ */
+export interface DefaultTenantRole {
+  nameEn: string;
+  nameAr: string;
+  descriptionEn: string;
+  descriptionAr: string;
+  permissions: string[];
+  isSystem: boolean;
+}
+
+export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
+  {
+    nameEn: 'Owner',
+    nameAr: 'المالك',
+    descriptionEn: 'Full access to everything in the hotel dashboard.',
+    descriptionAr: 'صلاحية كاملة على كل شيء في لوحة تحكم الفندق.',
+    permissions: [WILDCARD],
+    isSystem: true,
+  },
+  {
+    nameEn: 'Manager',
+    nameAr: 'المدير',
+    descriptionEn: 'Manages staff and day-to-day operations.',
+    descriptionAr: 'يدير الموظفين والعمليات اليومية.',
+    permissions: [
+      'staff.read',
+      'staff.invite',
+      'staff.update',
+      'staff.disable',
+      'roles.read',
+    ],
+    isSystem: false,
+  },
+  {
+    nameEn: 'Front Desk',
+    nameAr: 'موظف الاستقبال',
+    descriptionEn: 'Handles front-desk guest operations.',
+    descriptionAr: 'يتولى عمليات الاستقبال والنزلاء.',
+    permissions: [],
+    isSystem: false,
+  },
+  {
+    nameEn: 'Housekeeping',
+    nameAr: 'التدبير الفندقي',
+    descriptionEn: 'Handles housekeeping operations.',
+    descriptionAr: 'يتولى عمليات التدبير الفندقي.',
+    permissions: [],
+    isSystem: false,
+  },
+];

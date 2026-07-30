@@ -36,6 +36,7 @@ describe('AuthService', () => {
       passwordHash: 'stored-hash',
       refreshTokenHash: 'stored-refresh-hash',
       isActive: true,
+      preferredLanguage: 'en',
       lastLoginAt: null,
       roleId: 'role-1',
       role: { id: 'role-1', name: 'Super Admin', permissions: ['*'] },
@@ -95,6 +96,7 @@ describe('AuthService', () => {
         id: 'admin-1',
         name: 'Ahmed',
         email: 'ahmed@hotello.app',
+        preferredLanguage: 'en',
         role: { id: 'role-1', name: 'Super Admin', permissions: ['*'] },
       });
       expect(admin.lastLoginAt).toBeInstanceOf(Date);
@@ -222,6 +224,18 @@ describe('AuthService', () => {
 
       expect(repo.findOne).not.toHaveBeenCalled();
       expect(updated.email).toBe('ahmed@hotello.app');
+    });
+
+    it('updates the preferred UI language (Epic 07 — language persistence)', async () => {
+      const admin = makeAdmin();
+
+      const updated = await service.updateProfile(admin, {
+        preferredLanguage: 'ar',
+      });
+
+      expect(repo.findOne).not.toHaveBeenCalled(); // no email lookup
+      expect(updated.preferredLanguage).toBe('ar');
+      expect(repo.save).toHaveBeenCalledWith(admin);
     });
   });
 
