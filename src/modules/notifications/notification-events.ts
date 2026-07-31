@@ -11,6 +11,7 @@ import { TrialThreshold } from './notifications.constants';
 export const NOTIFICATION_EVENTS = {
   OWNER_SETUP_LINK_REQUESTED: 'hotel.owner_setup_link_requested',
   STAFF_INVITE_REQUESTED: 'tenant_user.staff_invite_requested',
+  STAFF_WELCOME_REQUESTED: 'tenant_user.staff_welcome_requested',
   TENANT_PASSWORD_RESET_REQUESTED: 'tenant_user.password_reset_requested',
   TRIAL_COUNTDOWN: 'subscription.trial_countdown',
   TRIAL_EXPIRED: 'subscription.trial_expired',
@@ -50,6 +51,20 @@ export interface StaffInviteRequestedEvent {
   expiresAt: Date;
   /** Set by an admin resend path to link outbox lineage. */
   resendOfId?: string;
+}
+
+export interface StaffWelcomeRequestedEvent {
+  hotelId: string;
+  tenantUserId: string;
+  userName: string;
+  /** Present only when the account has an email (welcome email is email-gated). */
+  userEmail: string;
+  username: string;
+  hotelNameEn: string;
+  hotelNameAr: string;
+  slug: string;
+  /** Hotel default language — a fresh account has no preference yet. */
+  language: string;
 }
 
 export interface OwnerSetupLinkRequestedEvent {

@@ -10,12 +10,15 @@ import {
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
+import * as bcrypt from 'bcrypt';
 import { DataSource, EntityManager, Repository } from 'typeorm';
+import { generateTempPassword } from '../../common/utils/credentials';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
 import {
   NOTIFICATION_EVENTS,
   StaffInviteRequestedEvent,
+  StaffWelcomeRequestedEvent,
   safeEmit,
 } from '../notifications/notification-events';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
@@ -23,12 +26,19 @@ import { TenantRole } from '../tenant-roles/tenant-role.entity';
 import { TenantRolesService } from '../tenant-roles/tenant-roles.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { TenantUsersService } from '../tenant-users/tenant-users.service';
+import { CreateStaffDirectDto } from './dto/create-staff-direct.dto';
 import { InviteStaffDto } from './dto/invite-staff.dto';
 import { ListStaffQueryDto } from './dto/list-staff-query.dto';
 import { UpdateStaffDto } from './dto/update-staff.dto';
 
+const BCRYPT_ROUNDS = 10;
+
 /** Story 9.6 AC2 — one resend per user per 10 minutes. */
 const RESEND_COOLDOWN_MS = 10 * 60 * 1000;
+
+/** Story 9.8 AC4 — a manager may reset a given staff member 3× per hour. */
+const RESET_LIMIT_PER_HOUR = 3;
+const HOUR_MS = 60 * 60 * 1000;
 
 /** Statuses that occupy a plan seat (Story 9.3 AC2, spec note #4). */
 const SEAT_STATUSES = ['pending', 'active'] as const;
@@ -384,7 +394,213 @@ export class TenantStaffService {
     return this.toStaffItem(user);
   }
 
+  /**
+   * Story 9.7 — create a staff account directly with a username and a
+   * temporary password (generated when not supplied). The account is `active`
+   * with `mustChangePassword` set, and the plaintext password is returned to
+   * the caller exactly once (never stored). Same seat guard as invites.
+   */
+  async createDirect(actor: TenantUser, dto: CreateStaffDirectDto) {
+    const username = dto.username.toLowerCase();
+    const email = dto.email?.toLowerCase() ?? null;
+    const rawPassword = dto.password ?? generateTempPassword();
+
+    const result = await this.dataSource.transaction(async (manager) => {
+      const hotel = await manager.getRepository(Hotel).findOne({
+        where: { id: actor.hotelId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!hotel) {
+        throw new NotFoundException({
+          code: 'HOTEL_NOT_FOUND',
+          message: 'Hotel not found',
+        });
+      }
+
+      const role = await this.rolesService.findInHotel(
+        actor.hotelId,
+        dto.roleId,
+      );
+      if (role.isSystem) {
+        throw new BadRequestException({
+          code: 'OWNER_ROLE_NOT_ASSIGNABLE',
+          message: 'The Owner role cannot be assigned to staff',
+        });
+      }
+
+      const usersRepo = manager.getRepository(TenantUser);
+      if (await usersRepo.findOne({ where: { hotelId: actor.hotelId, username } })) {
+        // Story 9.7 AC2 — username unique within the hotel.
+        throw new UnprocessableEntityException({
+          code: 'USERNAME_TAKEN',
+          message: 'That username is already taken in this hotel',
+        });
+      }
+      if (email && (await usersRepo.findOne({ where: { hotelId: actor.hotelId, email } }))) {
+        throw new UnprocessableEntityException({
+          code: 'EMAIL_TAKEN',
+          message: 'A staff member with this email already exists',
+        });
+      }
+
+      const seatCount = await this.countSeats(manager, actor.hotelId);
+      const limit = await this.staffLimit(actor.hotelId);
+      if (limit !== null && seatCount >= limit) {
+        throw new ConflictException({
+          code: 'STAFF_LIMIT_REACHED',
+          message: `Your plan allows up to ${limit} staff member(s)`,
+          limit,
+        });
+      }
+
+      const user = await usersRepo.save(
+        usersRepo.create({
+          hotelId: actor.hotelId,
+          name: dto.name,
+          username,
+          email,
+          roleId: role.id,
+          status: 'active',
+          passwordHash: await bcrypt.hash(rawPassword, BCRYPT_ROUNDS),
+          mustChangePassword: true, // Story 9.7 AC4
+        }),
+      );
+
+      hotel.staffUsersCount = seatCount + 1;
+      await manager.getRepository(Hotel).save(hotel);
+
+      user.role = role;
+      return { user, role, hotel };
+    });
+
+    const welcomeEmailSent = !!(email && dto.sendWelcomeEmail);
+    await this.auditLogs.log({
+      action: 'staff.created_direct',
+      entityType: 'tenant_user',
+      entityId: result.user.id,
+      actorId: actor.id,
+      metadata: {
+        actorType: 'tenant_user',
+        hotelId: actor.hotelId,
+        username,
+        roleId: result.role.id,
+        welcomeEmailSent, // never the password (AC8)
+      },
+    });
+    if (welcomeEmailSent) {
+      await this.emitWelcome(result.user, result.hotel, email!);
+    }
+
+    // Story 9.7 AC5 — credentials returned once; never persisted or retrievable.
+    return {
+      staff: this.toStaffItem(result.user),
+      credentials: {
+        username,
+        tempPassword: rawPassword,
+        loginUrl: this.tenantUsersService.buildLoginLink(result.hotel.slug),
+      },
+    };
+  }
+
+  /**
+   * Story 9.8 — manager-driven password reset. Issues a new temporary password
+   * (returned once), forces a change on next login, kills every session and
+   * invalidates outstanding tokens. Not allowed against the owner or oneself.
+   */
+  async resetPassword(actor: TenantUser, id: string) {
+    const user = await this.findStaffInHotel(actor.hotelId, id);
+    if (user.role.isSystem) {
+      // The owner self-resets via email only (9.8 AC3).
+      throw new BadRequestException({
+        code: 'CANNOT_RESET_OWNER',
+        message: 'The owner account cannot be reset here',
+      });
+    }
+    if (user.id === actor.id) {
+      throw new BadRequestException({
+        code: 'CANNOT_RESET_SELF',
+        message: 'Change your own password from My Profile',
+      });
+    }
+    if (user.status !== 'active') {
+      throw new ConflictException({
+        code: 'STAFF_NOT_ACTIVE',
+        message: 'Only active staff can have their password reset',
+      });
+    }
+
+    // Story 9.8 AC4 — per-target rate limit, using the audit log as the ledger.
+    const recentResets = await this.auditLogs.countSince(
+      'staff.password_reset_by_manager',
+      user.id,
+      new Date(Date.now() - HOUR_MS),
+    );
+    if (recentResets >= RESET_LIMIT_PER_HOUR) {
+      throw new HttpException(
+        {
+          code: 'PASSWORD_RESET_RATE_LIMIT',
+          message: 'Too many password resets for this user — try again later',
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const hotel = await this.hotelsRepo.findOne({ where: { id: actor.hotelId } });
+    if (!hotel) {
+      throw new NotFoundException({
+        code: 'HOTEL_NOT_FOUND',
+        message: 'Hotel not found',
+      });
+    }
+
+    const rawPassword = generateTempPassword();
+    user.passwordHash = await bcrypt.hash(rawPassword, BCRYPT_ROUNDS);
+    user.mustChangePassword = true;
+    // Story 9.8 AC2 — kill sessions + invalidate any outstanding tokens.
+    user.refreshTokenHash = null;
+    user.setupTokenHash = null;
+    user.setupTokenExpiresAt = null;
+    user.resetTokenHash = null;
+    user.resetTokenExpiresAt = null;
+    await this.tenantUsersRepo.save(user);
+
+    await this.auditLogs.log({
+      action: 'staff.password_reset_by_manager',
+      entityType: 'tenant_user',
+      entityId: user.id,
+      actorId: actor.id,
+      metadata: { actorType: 'tenant_user', hotelId: actor.hotelId },
+    });
+
+    return {
+      credentials: {
+        username: user.username,
+        tempPassword: rawPassword,
+        loginUrl: this.tenantUsersService.buildLoginLink(hotel.slug),
+      },
+    };
+  }
+
   // --- helpers ---------------------------------------------------------------
+
+  private async emitWelcome(user: TenantUser, hotel: Hotel, email: string) {
+    await safeEmit(
+      this.events,
+      NOTIFICATION_EVENTS.STAFF_WELCOME_REQUESTED,
+      {
+        hotelId: hotel.id,
+        tenantUserId: user.id,
+        userName: user.name,
+        userEmail: email,
+        username: user.username ?? '',
+        hotelNameEn: hotel.nameEn,
+        hotelNameAr: hotel.nameAr,
+        slug: hotel.slug,
+        language: hotel.defaultLanguage,
+      } satisfies StaffWelcomeRequestedEvent,
+      this.logger,
+    );
+  }
 
   private async findStaffInHotel(
     hotelId: string,
@@ -431,6 +647,16 @@ export class TenantStaffService {
     hotel: Hotel,
     token: { raw: string; expiresAt: Date },
   ) {
+    // Invites only exist for email accounts (username-only staff get a temp
+    // password instead). Reaching here without one is an upstream invariant
+    // break — log loudly, never fail the business op (6.1 AC3).
+    const userEmail = user.email;
+    if (!userEmail) {
+      this.logger.error(
+        `Staff invite for user ${user.id} skipped — account has no email`,
+      );
+      return;
+    }
     await safeEmit(
       this.events,
       NOTIFICATION_EVENTS.STAFF_INVITE_REQUESTED,
@@ -438,7 +664,7 @@ export class TenantStaffService {
         hotelId: hotel.id,
         tenantUserId: user.id,
         userName: user.name,
-        userEmail: user.email,
+        userEmail,
         roleNameEn: role.nameEn,
         roleNameAr: role.nameAr,
         hotelNameEn: hotel.nameEn,
@@ -458,6 +684,7 @@ export class TenantStaffService {
       id: user.id,
       name: user.name,
       email: user.email,
+      username: user.username,
       status: user.status,
       lastLoginAt: user.lastLoginAt,
       inviteSentAt: user.inviteSentAt,

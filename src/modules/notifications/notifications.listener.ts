@@ -12,6 +12,7 @@ import {
   NOTIFICATION_EVENTS,
   OwnerSetupLinkRequestedEvent,
   StaffInviteRequestedEvent,
+  StaffWelcomeRequestedEvent,
   TenantPasswordResetRequestedEvent,
   TrialCountdownEvent,
   TrialExpiredEvent,
@@ -136,6 +137,37 @@ export class NotificationsListener {
     }
   }
 
+  @OnEvent(NOTIFICATION_EVENTS.STAFF_WELCOME_REQUESTED)
+  async onStaffWelcomeRequested(event: StaffWelcomeRequestedEvent) {
+    try {
+      const language = this.notifications.resolveLanguage({
+        defaultLanguage: event.language,
+      });
+      // No secret in this email (login URL + username only) — a single plain
+      // render, persisted and sent as-is.
+      const row = await this.notifications.enqueue({
+        type: 'staff_welcome',
+        recipientName: event.userName,
+        recipientEmail: event.userEmail,
+        hotelId: event.hotelId,
+        tenantUserId: event.tenantUserId,
+        language,
+        variables: {
+          hotelName: language === 'ar' ? event.hotelNameAr : event.hotelNameEn,
+          userName: event.userName,
+          username: event.username,
+          loginUrl: this.tenantUsersService.buildLoginLink(event.slug),
+        },
+        dedupeKey: dedupeKeys.staffWelcome(event.tenantUserId),
+      });
+      if (row) {
+        this.dispatchSend(row, NOTIFICATION_EVENTS.STAFF_WELCOME_REQUESTED);
+      }
+    } catch (err) {
+      this.logError(NOTIFICATION_EVENTS.STAFF_WELCOME_REQUESTED, err);
+    }
+  }
+
   @OnEvent(NOTIFICATION_EVENTS.TENANT_PASSWORD_RESET_REQUESTED)
   async onTenantPasswordResetRequested(
     event: TenantPasswordResetRequestedEvent,
@@ -188,11 +220,11 @@ export class NotificationsListener {
     try {
       const target = await this.loadHotelAndOwner(event.hotelId);
       if (!target) return;
-      const { hotel, owner, language } = target;
+      const { hotel, owner, ownerEmail, language } = target;
       const row = await this.notifications.enqueue({
         type: 'trial_countdown',
         recipientName: owner.name,
-        recipientEmail: owner.email,
+        recipientEmail: ownerEmail,
         hotelId: hotel.id,
         tenantUserId: owner.id,
         language,
@@ -219,11 +251,11 @@ export class NotificationsListener {
     try {
       const target = await this.loadHotelAndOwner(event.hotelId);
       if (!target) return;
-      const { hotel, owner, language } = target;
+      const { hotel, owner, ownerEmail, language } = target;
       const row = await this.notifications.enqueue({
         type: 'trial_expired',
         recipientName: owner.name,
-        recipientEmail: owner.email,
+        recipientEmail: ownerEmail,
         hotelId: hotel.id,
         tenantUserId: owner.id,
         language,
@@ -247,11 +279,11 @@ export class NotificationsListener {
     try {
       const target = await this.loadHotelAndOwner(event.hotelId);
       if (!target) return;
-      const { hotel, owner, language } = target;
+      const { hotel, owner, ownerEmail, language } = target;
       const row = await this.notifications.enqueue({
         type: 'hotel_suspended',
         recipientName: owner.name,
-        recipientEmail: owner.email,
+        recipientEmail: ownerEmail,
         hotelId: hotel.id,
         tenantUserId: owner.id,
         language,
@@ -274,11 +306,11 @@ export class NotificationsListener {
     try {
       const target = await this.loadHotelAndOwner(event.hotelId);
       if (!target) return;
-      const { hotel, owner, language } = target;
+      const { hotel, owner, ownerEmail, language } = target;
       const row = await this.notifications.enqueue({
         type: 'hotel_reactivated',
         recipientName: owner.name,
-        recipientEmail: owner.email,
+        recipientEmail: ownerEmail,
         hotelId: hotel.id,
         tenantUserId: owner.id,
         language,
@@ -297,6 +329,8 @@ export class NotificationsListener {
   private async loadHotelAndOwner(hotelId: string): Promise<{
     hotel: Hotel;
     owner: TenantUser;
+    /** Narrowed non-null — owners always have an email (entity invariant). */
+    ownerEmail: string;
     language: NotificationLanguage;
   } | null> {
     const hotel = await this.hotelsRepo.findOne({ where: { id: hotelId } });
@@ -308,15 +342,16 @@ export class NotificationsListener {
       where: { hotelId, role: { isSystem: true } },
       relations: ['role'],
     });
-    if (!owner) {
+    if (!owner || !owner.email) {
       this.logger.warn(
-        `Hotel ${hotelId} has no owner account — notification skipped`,
+        `Hotel ${hotelId} has no emailable owner account — notification skipped`,
       );
       return null;
     }
     return {
       hotel,
       owner,
+      ownerEmail: owner.email,
       language: this.notifications.resolveLanguage(hotel),
     };
   }

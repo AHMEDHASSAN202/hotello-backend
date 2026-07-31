@@ -81,7 +81,12 @@ export class TenantUsersService {
       where: { hotelId, role: { isSystem: true } },
       relations: ['role'],
     });
-    if (!owner) throw new NotFoundException('Hotel has no owner account');
+    // Owners always have an email (entity invariant) — the null check is for
+    // the type system and guards against corrupt data reaching the mailer.
+    const ownerEmail = owner?.email;
+    if (!owner || !ownerEmail) {
+      throw new NotFoundException('Hotel has no owner account');
+    }
 
     const { raw, expiresAt } = await this.issueSetupToken(owner);
     await this.auditLogs.log({
@@ -102,7 +107,7 @@ export class TenantUsersService {
         hotelId: hotel.id,
         ownerId: owner.id,
         ownerName: owner.name,
-        ownerEmail: owner.email,
+        ownerEmail,
         hotelNameEn: hotel.nameEn,
         hotelNameAr: hotel.nameAr,
         slug: hotel.slug,
@@ -199,6 +204,12 @@ export class TenantUsersService {
   buildResetLink(slug: string, rawToken: string): string {
     const domain = this.config.get('TENANT_BASE_DOMAIN', 'gxp.example');
     return `https://${slug}.${domain}/reset-password?token=${rawToken}`;
+  }
+
+  /** Plain login URL (no secret) — for the welcome email + credentials handoff (9.7). */
+  buildLoginLink(slug: string): string {
+    const domain = this.config.get('TENANT_BASE_DOMAIN', 'gxp.example');
+    return `https://${slug}.${domain}/login`;
   }
 
   private hash(raw: string): string {

@@ -1,5 +1,6 @@
 import { Exclude } from 'class-transformer';
 import {
+  Check,
   Column,
   CreateDateColumn,
   Entity,
@@ -17,9 +18,11 @@ import { TenantRole } from '../tenant-roles/tenant-role.entity';
  * (holding the seeded Owner role with the tenant wildcard ['*']); staff
  * accounts arrive in Epic 09.
  *
- * Email is unique **per hotel**, not globally (Epic 08, Story 8.3 AC1): the
- * same person can own/work at more than one hotel with the same address, and
- * credentials never cross tenants.
+ * Both `email` and `username` are unique **per hotel**, not globally (Epic 08,
+ * Story 8.3 AC1): the same person can own/work at more than one hotel, and
+ * credentials never cross tenants. A user signs in with whichever they have —
+ * owners always have an email; username-only staff accounts (Epic 09) have no
+ * email and therefore cannot self-reset (Story 8.4 AC5).
  *
  * Permissions resolve through the assigned role (Epic 09, spec note #1) — the
  * single source of truth, reloaded per request by the tenant-jwt strategy so
@@ -27,6 +30,9 @@ import { TenantRole } from '../tenant-roles/tenant-role.entity';
  */
 @Entity('tenant_users')
 @Unique('UQ_tenant_users_hotel_email', ['hotelId', 'email'])
+@Unique('UQ_tenant_users_hotel_username', ['hotelId', 'username'])
+// Story 9.7 AC3 — every account carries at least one login identifier.
+@Check('CHK_tenant_users_identifier', `"email" IS NOT NULL OR "username" IS NOT NULL`)
 export class TenantUser {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -41,8 +47,17 @@ export class TenantUser {
   @Column()
   name: string;
 
-  @Column()
-  email: string;
+  /**
+   * Null for username-only accounts (Epic 09). Owners always have one.
+   * `varchar` (not text) to match the baseline column — the username migration
+   * only dropped NOT NULL; keep the entity in sync or migration:check drifts.
+   */
+  @Column({ type: 'varchar', nullable: true })
+  email: string | null;
+
+  /** Set for staff accounts created without an email (Epic 09, Story 9.7). */
+  @Column({ type: 'text', nullable: true })
+  username: string | null;
 
   @Column('uuid')
   roleId: string;
@@ -90,6 +105,14 @@ export class TenantUser {
 
   @Column({ type: 'timestamptz', nullable: true })
   resetTokenExpiresAt: Date | null;
+
+  /**
+   * Story 9.7 AC4 / 9.8 AC1 — set when an account is created directly or reset
+   * by a manager with a temporary password. Until the user changes it, a guard
+   * blocks every tenant route except the change-password flow itself.
+   */
+  @Column({ default: false })
+  mustChangePassword: boolean;
 
   @Column({ type: 'timestamptz', nullable: true })
   lastLoginAt: Date | null;

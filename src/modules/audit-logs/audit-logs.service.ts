@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { MoreThanOrEqual, Repository } from 'typeorm';
 import { AuditLog } from './audit-log.entity';
 
 export interface AuditEntry {
@@ -28,5 +28,20 @@ export class AuditLogsService {
         metadata: entry.metadata ?? null,
       }),
     );
+  }
+
+  /**
+   * Count audit rows for one action against one entity since a timestamp —
+   * used as a per-target rate-limit ledger (e.g. manager password resets,
+   * Story 9.8 AC4) without adding bespoke counter columns.
+   */
+  async countSince(
+    action: string,
+    entityId: string,
+    since: Date,
+  ): Promise<number> {
+    return this.auditRepo.count({
+      where: { action, entityId, createdAt: MoreThanOrEqual(since) },
+    });
   }
 }

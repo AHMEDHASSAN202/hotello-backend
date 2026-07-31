@@ -22,6 +22,12 @@ const FULL_VARS: Record<NotificationType, Record<string, unknown>> = {
     setupUrl: 'https://nile-grand.gxp.example/setup?token=abc',
     expiresAt: '1 Aug 2026, 14:00',
   },
+  staff_welcome: {
+    hotelName: 'Nile Grand',
+    userName: 'Staff One',
+    username: 'staff.one',
+    loginUrl: 'https://nile-grand.gxp.example/login',
+  },
   tenant_password_reset: {
     hotelName: 'Nile Grand',
     userName: 'Owner One',

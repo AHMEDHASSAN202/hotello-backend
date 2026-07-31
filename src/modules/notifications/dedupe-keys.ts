@@ -30,6 +30,9 @@ export const dedupeKeys = {
       .digest('hex')
       .slice(0, 12)}`,
 
+  /** One welcome email per account (9.7 AC7) — keyed on the user id. */
+  staffWelcome: (userId: string): string => `staff_welcome:${userId}`,
+
   /** Keyed per reset-token issuance — a new request mints a new key/email. */
   tenantPasswordReset: (userId: string, rawToken: string): string =>
     `tenant_password_reset:${userId}:${createHash('sha256')

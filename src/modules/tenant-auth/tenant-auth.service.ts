@@ -45,6 +45,18 @@ const HOTEL_SUSPENDED = {
   message: 'This hotel is currently unavailable',
 };
 
+/**
+ * Story 8.3 AC1 — an identifier is an email when it contains `@`, otherwise a
+ * username. Emails are matched case-insensitively; usernames as entered (Epic 09
+ * owns username normalization). Returns the `where` fragment scoped to the hotel.
+ */
+function identifierWhere(hotelId: string, identifier: string) {
+  const value = identifier.trim();
+  return value.includes('@')
+    ? { hotelId, email: value.toLowerCase() }
+    : { hotelId, username: value };
+}
+
 @Injectable()
 export class TenantAuthService {
   private readonly logger = new Logger(TenantAuthService.name);
@@ -61,8 +73,9 @@ export class TenantAuthService {
   ) {}
 
   /**
-   * Story 8.3 — login scoped to the resolved tenant. The same email at another
-   * hotel is a different account; credentials never cross tenants.
+   * Story 8.3 — login scoped to the resolved tenant, by email OR username. The
+   * same identifier at another hotel is a different account; credentials never
+   * cross tenants.
    */
   async login(dto: TenantLoginDto) {
     const hotel = await this.hotelsRepo.findOne({
@@ -75,7 +88,7 @@ export class TenantAuthService {
     }
 
     const user = await this.tenantUsersRepo.findOne({
-      where: { hotelId: hotel.id, email: dto.email.toLowerCase() },
+      where: identifierWhere(hotel.id, dto.identifier),
       relations: ['role'],
     });
     // Unknown user, no password set (pending), disabled, or wrong password all
@@ -160,6 +173,11 @@ export class TenantAuthService {
    * prior reset token, invalidating it (AC2).
    */
   async requestPasswordReset(dto: TenantPasswordResetRequestDto) {
+    const identifier = dto.identifier.trim();
+    // Username-shaped input can never self-reset (no email to send to) — silent
+    // success, no email, no account-type leak (Story 8.4 AC5).
+    if (!identifier.includes('@')) return RESET_REQUEST_ACK;
+
     const hotel = await this.hotelsRepo.findOne({
       where: { slug: dto.slug.toLowerCase() },
     });
@@ -167,9 +185,12 @@ export class TenantAuthService {
     if (!hotel || hotel.status === 'suspended') return RESET_REQUEST_ACK;
 
     const user = await this.tenantUsersRepo.findOne({
-      where: { hotelId: hotel.id, email: dto.email.toLowerCase() },
+      where: { hotelId: hotel.id, email: identifier.toLowerCase() },
     });
-    if (!user || user.status !== 'active') return RESET_REQUEST_ACK;
+    // No email on the account (username-only) → can't self-reset (AC5).
+    if (!user || user.status !== 'active' || !user.email) {
+      return RESET_REQUEST_ACK;
+    }
 
     const raw = randomBytes(32).toString('base64url');
     const ttlHours = parseInt(this.config.get('RESET_TOKEN_TTL_HOURS', '2'), 10);

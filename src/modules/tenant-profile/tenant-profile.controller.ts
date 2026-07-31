@@ -1,5 +1,6 @@
 import { Body, Controller, Get, HttpCode, Patch, Post } from '@nestjs/common';
 import { CurrentTenantUser } from '../../common/decorators/current-tenant-user.decorator';
+import { PasswordChangeExempt } from '../../common/decorators/password-change-exempt.decorator';
 import { SubscriptionExempt } from '../../common/decorators/subscription-exempt.decorator';
 import { TenantScope } from '../../common/decorators/tenant-scope.decorator';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
@@ -14,6 +15,7 @@ import { TenantProfileService } from './tenant-profile.service';
  */
 @TenantScope()
 @SubscriptionExempt()
+@PasswordChangeExempt()
 @Controller('tenant/me')
 export class TenantProfileController {
   constructor(private readonly profile: TenantProfileService) {}

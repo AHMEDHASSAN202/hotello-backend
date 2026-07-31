@@ -7,6 +7,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { databaseConnectionOptions } from './config/database.config';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
+import { MustChangePasswordGuard } from './common/guards/must-change-password.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { TenantAccessGuard } from './common/guards/tenant-access.guard';
 import { TenantJwtAuthGuard } from './common/guards/tenant-jwt-auth.guard';
@@ -67,10 +68,12 @@ import { TenantUsersModule } from './modules/tenant-users/tenant-users.module';
     // Injected into JwtAuthGuard so tenant-scoped routes authenticate with the
     // tenant-jwt strategy; not an APP_GUARD itself.
     TenantJwtAuthGuard,
-    // Order matters: authenticate, then authorize, then enforce access state.
+    // Order matters: authenticate, authorize, enforce access state, then the
+    // forced-password-change gate (needs the loaded user; runs last).
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
     { provide: APP_GUARD, useClass: TenantAccessGuard },
+    { provide: APP_GUARD, useClass: MustChangePasswordGuard },
     { provide: APP_INTERCEPTOR, useClass: ClassSerializerInterceptor },
   ],
 })

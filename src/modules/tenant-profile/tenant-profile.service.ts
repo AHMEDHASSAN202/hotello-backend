@@ -44,6 +44,9 @@ export class TenantProfileService {
         permissions: user.role?.permissions ?? [],
         preferredLanguage: user.preferredLanguage,
         lastLoginAt: user.lastLoginAt,
+        // Story 9.7 AC4 — the shell redirects to the forced change-password
+        // screen while this is true.
+        mustChangePassword: user.mustChangePassword,
       },
       hotel: {
         slug: hotel?.slug,

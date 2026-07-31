@@ -8,6 +8,7 @@ import { hotelSuspendedTemplate } from './hotel-suspended.template';
 import { baseLayout } from './layout';
 import { ownerSetupLinkTemplate } from './owner-setup-link.template';
 import { staffInviteTemplate } from './staff-invite.template';
+import { staffWelcomeTemplate } from './staff-welcome.template';
 import { tenantPasswordResetTemplate } from './tenant-password-reset.template';
 import { NotificationTemplate } from './template.types';
 import { trialCountdownTemplate } from './trial-countdown.template';
@@ -29,6 +30,7 @@ export class MissingTemplateVariableError extends Error {
 const REGISTRY: Record<NotificationType, NotificationTemplate<any>> = {
   owner_setup_link: ownerSetupLinkTemplate,
   staff_invite: staffInviteTemplate,
+  staff_welcome: staffWelcomeTemplate,
   tenant_password_reset: tenantPasswordResetTemplate,
   trial_countdown: trialCountdownTemplate,
   trial_expired: trialExpiredTemplate,

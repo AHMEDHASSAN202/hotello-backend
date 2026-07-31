@@ -12,6 +12,7 @@ import { CurrentTenantUser } from '../../common/decorators/current-tenant-user.d
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { TenantScope } from '../../common/decorators/tenant-scope.decorator';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
+import { CreateStaffDirectDto } from './dto/create-staff-direct.dto';
 import { InviteStaffDto } from './dto/invite-staff.dto';
 import { ListStaffQueryDto } from './dto/list-staff-query.dto';
 import { UpdateStaffDto } from './dto/update-staff.dto';
@@ -38,6 +39,16 @@ export class TenantStaffController {
   @RequirePermissions('staff.invite')
   invite(@CurrentTenantUser() user: TenantUser, @Body() dto: InviteStaffDto) {
     return this.staffService.invite(user, dto);
+  }
+
+  /** Story 9.7 — create directly with a username + temporary password. */
+  @Post('direct')
+  @RequirePermissions('staff.invite')
+  createDirect(
+    @CurrentTenantUser() user: TenantUser,
+    @Body() dto: CreateStaffDirectDto,
+  ) {
+    return this.staffService.createDirect(user, dto);
   }
 
   @Patch(':id')
@@ -75,5 +86,15 @@ export class TenantStaffController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.staffService.resendInvite(user, id);
+  }
+
+  /** Story 9.8 — manager resets a staff member's password (temp password once). */
+  @Post(':id/reset-password')
+  @RequirePermissions('staff.update')
+  resetPassword(
+    @CurrentTenantUser() user: TenantUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.staffService.resetPassword(user, id);
   }
 }

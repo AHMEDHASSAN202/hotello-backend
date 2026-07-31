@@ -128,7 +128,9 @@ export class HotelOnboardingService {
         hotelId: result.hotel.id,
         ownerId: result.owner.id,
         ownerName: result.owner.name,
-        ownerEmail: result.owner.email,
+        // The validated DTO email — owners always have one (entity invariant);
+        // the entity field is nullable only for username-only staff accounts.
+        ownerEmail,
         hotelNameEn: result.hotel.nameEn,
         hotelNameAr: result.hotel.nameAr,
         slug: result.hotel.slug,

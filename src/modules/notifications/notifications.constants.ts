@@ -1,6 +1,7 @@
 export const NOTIFICATION_TYPES = [
   'owner_setup_link',
   'staff_invite',
+  'staff_welcome',
   'tenant_password_reset',
   'trial_countdown',
   'trial_expired',

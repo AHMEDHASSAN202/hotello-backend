@@ -67,8 +67,8 @@ describe('TenantStaffService', () => {
   let hotelsRepo: { findOne: jest.Mock };
   let rolesService: { findInHotel: jest.Mock };
   let subscriptions: { getForHotel: jest.Mock };
-  let tenantUsers: { issueSetupToken: jest.Mock };
-  let auditLogs: { log: jest.Mock };
+  let tenantUsers: { issueSetupToken: jest.Mock; buildLoginLink: jest.Mock };
+  let auditLogs: { log: jest.Mock; countSince: jest.Mock };
   let events: { emitAsync: jest.Mock };
 
   // Transaction manager wiring — configurable seat count per test.
@@ -162,8 +162,9 @@ describe('TenantStaffService', () => {
         raw: 'raw-token',
         expiresAt: new Date('2026-08-01T00:00:00Z'),
       }),
+      buildLoginLink: jest.fn((slug: string) => `https://${slug}.gxp.example/login`),
     };
-    auditLogs = { log: jest.fn() };
+    auditLogs = { log: jest.fn(), countSince: jest.fn().mockResolvedValue(0) };
     events = { emitAsync: jest.fn().mockResolvedValue([]) };
 
     const moduleRef = await Test.createTestingModule({
@@ -497,6 +498,140 @@ describe('TenantStaffService', () => {
         service.resendInvite(makeActor(), 'staff-1'),
       ).resolves.toBeDefined();
       expect(tenantUsers.issueSetupToken).toHaveBeenCalled();
+    });
+  });
+
+  describe('create directly (9.7)', () => {
+    const dto = {
+      name: 'Ground Staff',
+      username: 'Ground.Staff',
+      roleId: 'role-mgr',
+    };
+
+    it('creates an active username account with mustChangePassword and returns the temp password once', async () => {
+      const result = await service.createDirect(makeActor(), dto);
+
+      expect(managerUsers.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          username: 'ground.staff', // lowercased (AC2)
+          email: null,
+          status: 'active',
+          mustChangePassword: true, // AC4
+        }),
+      );
+      expect(managerHotel.save).toHaveBeenCalledWith(
+        expect.objectContaining({ staffUsersCount: 1 }),
+      );
+      expect(result.credentials.username).toBe('ground.staff');
+      expect(result.credentials.tempPassword).toEqual(expect.any(String));
+      expect(result.credentials.loginUrl).toContain('/login');
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'staff.created_direct',
+          metadata: expect.objectContaining({ username: 'ground.staff' }),
+        }),
+      );
+      // AC8 — the password is never in the audit metadata.
+      const auditMeta = auditLogs.log.mock.calls.at(-1)![0].metadata;
+      expect(JSON.stringify(auditMeta)).not.toContain(
+        result.credentials.tempPassword,
+      );
+      // No email → no welcome email.
+      expect(events.emitAsync).not.toHaveBeenCalled();
+    });
+
+    it('AC2 — a provided password is used instead of a generated one', async () => {
+      const result = await service.createDirect(makeActor(), {
+        ...dto,
+        password: 'Chosen123',
+      });
+      expect(result.credentials.tempPassword).toBe('Chosen123');
+    });
+
+    it('AC7 — queues a welcome email only when an email is present and requested', async () => {
+      await service.createDirect(makeActor(), {
+        ...dto,
+        email: 'Ground@Hotel.Example',
+        sendWelcomeEmail: true,
+      });
+      expect(events.emitAsync).toHaveBeenCalledWith(
+        'tenant_user.staff_welcome_requested',
+        expect.objectContaining({
+          username: 'ground.staff',
+          userEmail: 'ground@hotel.example',
+        }),
+      );
+    });
+
+    it('AC2 — rejects a username already taken in the hotel (422)', async () => {
+      managerUsers.findOne.mockResolvedValueOnce(makeStaff()); // username lookup hit
+      await expect(service.createDirect(makeActor(), dto)).rejects.toMatchObject({
+        response: { code: 'USERNAME_TAKEN' },
+      });
+    });
+
+    it('the Owner role cannot be assigned', async () => {
+      rolesService.findInHotel.mockResolvedValue(ownerRole);
+      await expect(service.createDirect(makeActor(), dto)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('AC6 — counts toward the seat limit like invites (409 at the cap)', async () => {
+      seatCounts = [5];
+      subscriptions.getForHotel.mockResolvedValue({
+        current: { plan: { maxStaffUsers: 5 } },
+      });
+      await expect(service.createDirect(makeActor(), dto)).rejects.toMatchObject({
+        response: { code: 'STAFF_LIMIT_REACHED' },
+      });
+    });
+  });
+
+  describe('reset password (9.8)', () => {
+    it('AC1/AC2 — issues a temp password, forces change, kills sessions + tokens', async () => {
+      const target = makeStaff({
+        status: 'active',
+        refreshTokenHash: 'rt',
+        setupTokenHash: 'sth',
+      });
+      usersRepo.findOne.mockResolvedValue(target);
+
+      const result = await service.resetPassword(makeActor(), 'staff-1');
+
+      expect(target.mustChangePassword).toBe(true);
+      expect(target.refreshTokenHash).toBeNull();
+      expect(target.setupTokenHash).toBeNull();
+      expect(result.credentials.tempPassword).toEqual(expect.any(String));
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'staff.password_reset_by_manager' }),
+      );
+      const auditMeta = auditLogs.log.mock.calls.at(-1)![0].metadata;
+      expect(JSON.stringify(auditMeta)).not.toContain(
+        result.credentials.tempPassword,
+      );
+    });
+
+    it('AC3 — cannot reset the owner', async () => {
+      usersRepo.findOne.mockResolvedValue(makeStaff({ role: ownerRole }));
+      await expect(service.resetPassword(makeActor(), 'staff-1')).rejects.toMatchObject(
+        { response: { code: 'CANNOT_RESET_OWNER' } },
+      );
+    });
+
+    it('AC3 — cannot reset yourself', async () => {
+      usersRepo.findOne.mockResolvedValue(makeStaff({ id: 'actor-1' }));
+      await expect(service.resetPassword(makeActor(), 'actor-1')).rejects.toMatchObject(
+        { response: { code: 'CANNOT_RESET_SELF' } },
+      );
+    });
+
+    it('AC4 — enforces the per-target hourly rate limit (429)', async () => {
+      usersRepo.findOne.mockResolvedValue(makeStaff({ status: 'active' }));
+      auditLogs.countSince.mockResolvedValue(3);
+      await expect(service.resetPassword(makeActor(), 'staff-1')).rejects.toBeInstanceOf(
+        HttpException,
+      );
     });
   });
 });

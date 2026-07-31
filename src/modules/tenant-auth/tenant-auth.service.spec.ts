@@ -101,11 +101,11 @@ describe('TenantAuthService', () => {
 
       const result = await service.login({
         slug: 'sunrise',
-        email: 'owner@sunrise.com',
+        identifier: 'owner@sunrise.com',
         password: 'pw',
       });
 
-      // Lookup is scoped to the resolved hotel id + email.
+      // An `@`-shaped identifier is matched by email, scoped to the hotel.
       expect(usersRepo.findOne).toHaveBeenCalledWith({
         where: { hotelId: 'hotel-1', email: 'owner@sunrise.com' },
         relations: ['role'],
@@ -118,13 +118,30 @@ describe('TenantAuthService', () => {
       expect(tokens.issueTokens).toHaveBeenCalled();
     });
 
+    it('AC1 — a non-@ identifier is matched by username', async () => {
+      hotelsRepo.findOne.mockResolvedValue(makeHotel());
+      usersRepo.findOne.mockResolvedValue(makeUser({ username: 'frontdesk1' }));
+      (mockedBcrypt.compare as jest.Mock).mockResolvedValue(true);
+
+      await service.login({
+        slug: 'sunrise',
+        identifier: 'frontdesk1',
+        password: 'pw',
+      });
+
+      expect(usersRepo.findOne).toHaveBeenCalledWith({
+        where: { hotelId: 'hotel-1', username: 'frontdesk1' },
+        relations: ['role'],
+      });
+    });
+
     it('AC5 — records lastLoginAt', async () => {
       hotelsRepo.findOne.mockResolvedValue(makeHotel());
       const user = makeUser({ lastLoginAt: null });
       usersRepo.findOne.mockResolvedValue(user);
       (mockedBcrypt.compare as jest.Mock).mockResolvedValue(true);
 
-      await service.login({ slug: 'sunrise', email: 'owner@sunrise.com', password: 'pw' });
+      await service.login({ slug: 'sunrise', identifier: 'owner@sunrise.com', password: 'pw' });
 
       expect(user.lastLoginAt).toBeInstanceOf(Date);
     });
@@ -132,7 +149,7 @@ describe('TenantAuthService', () => {
     it('AC1 — unknown slug yields the same generic 401 (no enumeration)', async () => {
       hotelsRepo.findOne.mockResolvedValue(null);
       await expect(
-        service.login({ slug: 'nope', email: 'x@y.com', password: 'pw' }),
+        service.login({ slug: 'nope', identifier: 'x@y.com', password: 'pw' }),
       ).rejects.toBeInstanceOf(UnauthorizedException);
       expect(usersRepo.findOne).not.toHaveBeenCalled();
     });
@@ -142,7 +159,7 @@ describe('TenantAuthService', () => {
       usersRepo.findOne.mockResolvedValue(makeUser());
       (mockedBcrypt.compare as jest.Mock).mockResolvedValue(false);
       await expect(
-        service.login({ slug: 'sunrise', email: 'owner@sunrise.com', password: 'bad' }),
+        service.login({ slug: 'sunrise', identifier: 'owner@sunrise.com', password: 'bad' }),
       ).rejects.toBeInstanceOf(UnauthorizedException);
     });
 
@@ -151,7 +168,7 @@ describe('TenantAuthService', () => {
       usersRepo.findOne.mockResolvedValue(makeUser({ status: 'pending' }));
       (mockedBcrypt.compare as jest.Mock).mockResolvedValue(true);
       await expect(
-        service.login({ slug: 'sunrise', email: 'owner@sunrise.com', password: 'pw' }),
+        service.login({ slug: 'sunrise', identifier: 'owner@sunrise.com', password: 'pw' }),
       ).rejects.toBeInstanceOf(UnauthorizedException);
     });
 
@@ -160,14 +177,14 @@ describe('TenantAuthService', () => {
       usersRepo.findOne.mockResolvedValue(makeUser({ status: 'disabled' }));
       (mockedBcrypt.compare as jest.Mock).mockResolvedValue(true);
       await expect(
-        service.login({ slug: 'sunrise', email: 'owner@sunrise.com', password: 'pw' }),
+        service.login({ slug: 'sunrise', identifier: 'owner@sunrise.com', password: 'pw' }),
       ).rejects.toBeInstanceOf(UnauthorizedException);
     });
 
     it('AC2 — users of a suspended hotel cannot log in (403 HOTEL_SUSPENDED)', async () => {
       hotelsRepo.findOne.mockResolvedValue(makeHotel({ status: 'suspended' }));
       await expect(
-        service.login({ slug: 'sunrise', email: 'owner@sunrise.com', password: 'pw' }),
+        service.login({ slug: 'sunrise', identifier: 'owner@sunrise.com', password: 'pw' }),
       ).rejects.toBeInstanceOf(ForbiddenException);
       expect(usersRepo.findOne).not.toHaveBeenCalled();
     });
@@ -232,7 +249,7 @@ describe('TenantAuthService', () => {
   });
 
   describe('requestPasswordReset (8.4)', () => {
-    const dto = { slug: 'sunrise', email: 'owner@sunrise.com' };
+    const dto = { slug: 'sunrise', identifier: 'owner@sunrise.com' };
 
     it('AC1 — mints a token and emits the reset event for an active user', async () => {
       hotelsRepo.findOne.mockResolvedValue(makeHotel());
@@ -269,6 +286,23 @@ describe('TenantAuthService', () => {
     it('does not email a non-active (pending) user', async () => {
       hotelsRepo.findOne.mockResolvedValue(makeHotel());
       usersRepo.findOne.mockResolvedValue(makeUser({ status: 'pending' }));
+      await service.requestPasswordReset(dto);
+      expect(events.emitAsync).not.toHaveBeenCalled();
+    });
+
+    it('AC5 — a username-shaped identifier never emails (accepted silently)', async () => {
+      await service.requestPasswordReset({
+        slug: 'sunrise',
+        identifier: 'frontdesk1',
+      });
+      // Short-circuits before touching the hotel/user — no lookup, no email.
+      expect(hotelsRepo.findOne).not.toHaveBeenCalled();
+      expect(events.emitAsync).not.toHaveBeenCalled();
+    });
+
+    it('AC5 — a matched account without an email is accepted silently', async () => {
+      hotelsRepo.findOne.mockResolvedValue(makeHotel());
+      usersRepo.findOne.mockResolvedValue(makeUser({ email: null }));
       await service.requestPasswordReset(dto);
       expect(events.emitAsync).not.toHaveBeenCalled();
     });

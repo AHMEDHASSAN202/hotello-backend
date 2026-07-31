@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { CurrentTenantUser } from '../../common/decorators/current-tenant-user.decorator';
+import { PasswordChangeExempt } from '../../common/decorators/password-change-exempt.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { TenantScope } from '../../common/decorators/tenant-scope.decorator';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
@@ -22,6 +23,7 @@ import { TenantAuthService } from './tenant-auth.service';
  * Public routes are rate-limited (the caller has no session yet).
  */
 @TenantScope()
+@PasswordChangeExempt()
 @Controller('tenant/auth')
 export class TenantAuthController {
   constructor(private readonly tenantAuthService: TenantAuthService) {}
