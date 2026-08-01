@@ -1,4 +1,12 @@
-import { Body, Controller, Get, HttpCode, Patch, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  Patch,
+  Post,
+} from '@nestjs/common';
 import { CurrentTenantUser } from '../../common/decorators/current-tenant-user.decorator';
 import { PasswordChangeExempt } from '../../common/decorators/password-change-exempt.decorator';
 import { SubscriptionExempt } from '../../common/decorators/subscription-exempt.decorator';
@@ -31,6 +39,20 @@ export class TenantProfileController {
     @Body() dto: UpdateTenantProfileDto,
   ) {
     return this.profile.updateProfile(user, dto);
+  }
+
+  /**
+   * Epic 12, Story 12.4 AC2 — dismiss a first-run HintCard. Rides on the
+   * profile controller (user-scoped, no permission needed) and inherits
+   * @SubscriptionExempt: hint dismissal must work in read-only mode.
+   */
+  @Post('hints/:key/dismiss')
+  @HttpCode(204)
+  dismissHint(
+    @CurrentTenantUser() user: TenantUser,
+    @Param('key') key: string,
+  ) {
+    return this.profile.dismissHint(user, key);
   }
 
   @Post('change-password')

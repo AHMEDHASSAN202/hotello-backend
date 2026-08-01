@@ -4,6 +4,8 @@ import * as bcrypt from 'bcrypt';
 import { Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { TenantAccessService } from '../tenant-access/tenant-access.service';
+import { TenantRole } from '../tenant-roles/tenant-role.entity';
+import { isTenantHintKey } from '../tenant-users/tenant-hint-keys.constants';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { TenantChangePasswordDto } from './dto/tenant-change-password.dto';
 import { UpdateTenantProfileDto } from './dto/update-tenant-profile.dto';
@@ -15,6 +17,8 @@ export class TenantProfileService {
   constructor(
     @InjectRepository(TenantUser)
     private readonly tenantUsersRepo: Repository<TenantUser>,
+    @InjectRepository(TenantRole)
+    private readonly tenantRolesRepo: Repository<TenantRole>,
     private readonly access: TenantAccessService,
     private readonly auditLogs: AuditLogsService,
   ) {}
@@ -28,6 +32,15 @@ export class TenantProfileService {
   async me(user: TenantUser) {
     const state = await this.access.getAccessState(user.hotelId);
     const hotel = user.hotel;
+    // Epic 12, Story 12.4 AC3 — setup-step completion is derived from data the
+    // hotel already has (no tracking tables). staffUsersCount includes the
+    // owner, so "> 1" means a real staff member was added. Rooms/QR steps
+    // join this object with Epic 11.
+    const customRolesCount = await this.tenantRolesRepo.count({
+      where: { hotelId: user.hotelId, isSystem: false },
+    });
+    const staffAdded = (hotel?.staffUsersCount ?? 0) > 1;
+    const roleCreated = customRolesCount > 0;
     return {
       user: {
         id: user.id,
@@ -47,6 +60,13 @@ export class TenantProfileService {
         // Story 9.7 AC4 — the shell redirects to the forced change-password
         // screen while this is true.
         mustChangePassword: user.mustChangePassword,
+        // Epic 12, Story 12.4 AC2 — HintCards render only for keys not here.
+        dismissedHints: user.dismissedHints ?? [],
+      },
+      setup: {
+        staffAdded,
+        roleCreated,
+        complete: staffAdded && roleCreated,
       },
       hotel: {
         slug: hotel?.slug,
@@ -66,6 +86,24 @@ export class TenantProfileService {
         planNameAr: state.planNameAr,
       },
     };
+  }
+
+  /**
+   * Epic 12, Story 12.4 AC2 — mark a first-run hint as dismissed for this
+   * user. Idempotent; keys outside the code-side allowlist are rejected so
+   * the jsonb column cannot grow unbounded.
+   */
+  async dismissHint(user: TenantUser, key: string): Promise<void> {
+    if (!isTenantHintKey(key)) {
+      throw new BadRequestException({
+        code: 'INVALID_HINT_KEY',
+        message: 'Unknown hint key',
+      });
+    }
+    const dismissed = user.dismissedHints ?? [];
+    if (dismissed.includes(key)) return;
+    user.dismissedHints = [...dismissed, key];
+    await this.tenantUsersRepo.save(user);
   }
 
   async updateProfile(user: TenantUser, dto: UpdateTenantProfileDto) {

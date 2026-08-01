@@ -118,6 +118,14 @@ export class TenantUser {
   lastLoginAt: Date | null;
 
   /**
+   * Epic 12, Story 12.4 AC2 — first-run hint keys this user dismissed,
+   * persisted server-side so dismissal survives devices/browsers. Values are
+   * validated against TENANT_HINT_KEYS (code is the source of truth).
+   */
+  @Column({ type: 'jsonb', default: () => `'[]'` })
+  dismissedHints: string[];
+
+  /**
    * When the current setup invite was (re)sent — Epic 09, Story 9.6 AC2. Backs
    * the per-user 10-minute resend cooldown; stamped on invite and each resend.
    */
