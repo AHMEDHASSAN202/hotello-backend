@@ -4,9 +4,9 @@ Feature specs — single source of truth. Read the relevant epic fully before pl
 
 | # | Epic | Status |
 |---|---|---|
-| 01 | Super Admin auth & RBAC | implemented (no spec file) |
-| 02 | Admin management | implemented (no spec file) |
-| 03 | Roles & permissions | implemented (no spec file) |
+| 01 | [Super Admin auth & RBAC](epic-01-03-super-admin-foundation.md) | implemented |
+| 02 | [Admin management](epic-01-03-super-admin-foundation.md) | implemented |
+| 03 | [Roles & permissions](epic-01-03-super-admin-foundation.md) | implemented |
 | 04 | [Plans & Subscriptions](epic-04-plans-subscriptions.md) | implemented |
 | 05 | [Hotels (Tenants) Management](epic-05-hotels-management.md) | implemented |
 | 06 | [Notifications](epic-06-notifications.md) | implemented |
@@ -20,9 +20,11 @@ Feature specs — single source of truth. Read the relevant epic fully before pl
 
 ## Notes
 
-- **Epics 01–03** predate these spec files. Their acceptance criteria live in
-  `user stories/user-stories-super-admin.md` in the workspace (story IDs
-  `SA-AUTH-*`, `SA-ADM-*`, `SA-ROLE-*`), which the code still references in test names.
+- **Epics 01–03** share one legacy combined spec,
+  [epic-01-03-super-admin-foundation.md](epic-01-03-super-admin-foundation.md),
+  which predates the per-epic format (story IDs `SA-AUTH-*`, `SA-ADM-*`,
+  `SA-ROLE-*` — the backend test names still reference them). That copy is
+  canonical; the workspace original is a historical artifact.
 - **Epic 11 (Rooms & QR)** has no spec file yet — write it before implementation.
   Epic 12's definition-of-done rule applies to it: no form, filter, list, status,
   or confirmation ships without its guidance strings.
