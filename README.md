@@ -2,6 +2,33 @@
 
 Hotello (GXP) unified backend API — NestJS 10 · TypeORM · PostgreSQL.
 
+## Running the local stack
+
+[`scripts/dev.sh`](scripts/dev.sh) brings up everything at once: Postgres (Docker),
+this API, and whichever frontends are checked out alongside this repo.
+
+```bash
+./scripts/dev.sh                 # Postgres + backend + both frontends
+./scripts/dev.sh backend         # this repo only
+./scripts/dev.sh --no-db         # a Postgres is already running on 5433
+./scripts/dev.sh --no-migrate    # don't run migrations on boot
+```
+
+| Service | URL |
+|---|---|
+| Backend API | http://localhost:4000/api/v1 |
+| Super Admin dashboard | http://localhost:3000 |
+| Tenant dashboard | http://localhost:3001/t/`<slug>` — or `<slug>`.lvh.me:3001 |
+| Postgres | `localhost:5433` (container `hotello-db`) |
+
+It waits for the database healthcheck, applies migrations, bootstraps any missing
+`.env` from `.env.example`, and prefixes each service's log lines. Ctrl+C stops
+everything it started; the Postgres container is left up (`docker compose down`).
+
+The frontends live in sibling repos (`../hotello-admin-frontend`,
+`../hotello-hotel-frontend`). If they aren't checked out the script says so and
+runs what it can, so a standalone clone of this repo still works.
+
 ## Database migrations
 
 The schema is owned by **TypeORM migrations**. `synchronize` is disabled
