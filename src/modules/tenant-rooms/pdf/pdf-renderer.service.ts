@@ -36,17 +36,46 @@ export class PdfRendererService implements OnModuleDestroy {
     }
   }
 
-  private getBrowser(): Promise<Browser> {
-    if (!this.browserPromise) {
-      this.browserPromise = chromium.launch();
+  /**
+   * Self-healing lazy singleton — two failure modes guarded against:
+   *  - `chromium.launch()` itself rejects (bad install, OOM, ...). Review
+   *    round 1: the original version left the rejected promise cached in
+   *    `browserPromise` forever, so every later `render()` replayed the same
+   *    stale rejection until process restart. `launchBrowser()` now clears
+   *    the field in its `catch` before rethrowing, so the NEXT call gets a
+   *    fresh launch attempt instead of the cached error.
+   *  - A previously-healthy browser crashes/disconnects mid-process. Caught
+   *    here via `isConnected()` before reuse — a disconnected browser
+   *    triggers a fresh launch rather than handing back a browser no page
+   *    can open.
+   */
+  private async getBrowser(): Promise<Browser> {
+    if (this.browserPromise) {
+      const browser = await this.browserPromise;
+      if (browser.isConnected()) {
+        return browser;
+      }
+      this.browserPromise = null;
     }
+    this.browserPromise = this.launchBrowser();
     return this.browserPromise;
+  }
+
+  private async launchBrowser(): Promise<Browser> {
+    try {
+      return await chromium.launch();
+    } catch (err) {
+      // Don't cache a rejected launch forever (Task 9 review, round 1) — the
+      // next render() call must get a fresh attempt, not the same stale error.
+      this.browserPromise = null;
+      throw err;
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
     if (!this.browserPromise) return;
-    const browser = await this.browserPromise;
+    const browser = await this.browserPromise.catch(() => null);
     this.browserPromise = null;
-    await browser.close();
+    await browser?.close();
   }
 }
