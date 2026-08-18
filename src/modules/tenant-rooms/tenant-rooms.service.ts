@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
 import { TenantUrlsService } from '../hotels/tenant-urls.service';
@@ -80,6 +80,8 @@ export class TenantRoomsService {
   constructor(
     @InjectRepository(Room)
     private readonly roomsRepo: Repository<Room>,
+    @InjectRepository(RoomType)
+    private readonly roomTypesRepo: Repository<RoomType>,
     @InjectRepository(Hotel)
     private readonly hotelsRepo: Repository<Hotel>,
     private readonly subscriptions: SubscriptionsService,
@@ -99,9 +101,21 @@ export class TenantRoomsService {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 50;
 
+    // IMPORTANT — never leftJoinAndSelect('r.roomType', …) on this query.
+    // TypeORM only special-cases raw-SQL addOrderBy() through its normal
+    // planner when the query has NO joins. The moment skip/take is combined
+    // with ANY join, TypeORM switches to a two-pass "distinct ids" pagination
+    // algorithm (SelectQueryBuilder#executeEntitiesAndRawResults: `(skip ||
+    // take) && joinAttributes.length > 0`) that tries to recombine every
+    // orderBy entry with the SELECT by naively splitting it on the first
+    // "." — which blows up on NATURAL_ROOM_ORDER's embedded `r."roomNumber"`
+    // with `"NULLIF(regexp_replace(r" alias was not found` against real
+    // Postgres (fully-mocked unit tests never generate real SQL, so they
+    // can't catch this). Fix: fetch the bare Room page with zero joins
+    // (matches RoomsPdfService.roomsForScope, already smoke-tested), then
+    // batch-load roomType for just that page below.
     const qb = this.roomsRepo
       .createQueryBuilder('r')
-      .leftJoinAndSelect('r.roomType', 'type')
       .where('r.hotelId = :hotelId', { hotelId });
 
     if (query.floor !== undefined) {
@@ -119,19 +133,22 @@ export class TenantRoomsService {
       });
     }
 
+    // The total count is taken before orderBy/skip/take are applied — cheap
+    // and keeps the count query minimal regardless of the pagination path.
+    const total = await qb.getCount();
+
     // Story 11.2 AC2 — floor groups first (unset floors last), then the
     // "101, 102, …, 110" natural order within a floor.
     qb.orderBy('r.floor', 'ASC', 'NULLS LAST')
       .addOrderBy(NATURAL_ROOM_ORDER, 'ASC', 'NULLS LAST')
-      .addOrderBy('r.roomNumber', 'ASC');
+      .addOrderBy('r.roomNumber', 'ASC')
+      .skip((page - 1) * pageSize)
+      .take(pageSize);
 
-    // Rooms page, hotel (for the derived counter) and the plan limit are
-    // independent lookups — fetch them concurrently.
-    const [[rows, total], hotel, max] = await Promise.all([
-      qb
-        .skip((page - 1) * pageSize)
-        .take(pageSize)
-        .getManyAndCount(),
+    // The now-ordered page, hotel (for the derived counter) and the plan
+    // limit are independent lookups — fetch them concurrently.
+    const [rows, hotel, max] = await Promise.all([
+      qb.getMany(),
       this.hotelsRepo.findOne({ where: { id: hotelId } }),
       this.roomsLimit(hotelId),
     ]);
@@ -142,8 +159,17 @@ export class TenantRoomsService {
       });
     }
 
+    const roomTypes = await this.loadRoomTypesByIds(
+      rows.map((room) => room.roomTypeId),
+    );
+
     return {
-      data: rows.map((room) => this.toRoomView(room)),
+      data: rows.map((room) =>
+        this.toRoomView({
+          ...room,
+          roomType: roomTypes.get(room.roomTypeId) as RoomType,
+        }),
+      ),
       total,
       page,
       pageSize,
@@ -152,6 +178,18 @@ export class TenantRoomsService {
         max,
       },
     };
+  }
+
+  /** Batch-loads room types for a page of rooms — no join, no N+1. */
+  private async loadRoomTypesByIds(
+    ids: string[],
+  ): Promise<Map<string, RoomType>> {
+    const uniqueIds = [...new Set(ids)];
+    if (uniqueIds.length === 0) return new Map();
+    const types = await this.roomTypesRepo.find({
+      where: { id: In(uniqueIds) },
+    });
+    return new Map(types.map((type) => [type.id, type]));
   }
 
   /**

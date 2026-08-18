@@ -1,6 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { DataSource, EntityManager } from 'typeorm';
+import { DataSource, EntityManager, In } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
 import { TenantUrlsService } from '../hotels/tenant-urls.service';
@@ -35,6 +35,7 @@ const makeRoom = (o: Record<string, unknown> = {}) => ({
 describe('TenantRoomsService', () => {
   let service: TenantRoomsService;
   let roomsRepo: { createQueryBuilder: jest.Mock; findOne: jest.Mock };
+  let roomTypesRepo: { find: jest.Mock };
   let hotelsRepo: { findOne: jest.Mock };
   let subscriptions: { getForHotel: jest.Mock };
   let auditLogs: { log: jest.Mock };
@@ -68,23 +69,17 @@ describe('TenantRoomsService', () => {
 
   beforeEach(async () => {
     qb = {};
-    for (const method of [
-      'leftJoinAndSelect',
-      'where',
-      'andWhere',
-      'orderBy',
-      'addOrderBy',
-      'skip',
-      'take',
-    ]) {
+    for (const method of ['where', 'andWhere', 'orderBy', 'addOrderBy', 'skip', 'take']) {
       qb[method] = jest.fn().mockReturnValue(qb);
     }
-    qb.getManyAndCount = jest.fn().mockResolvedValue([[], 0]);
+    qb.getCount = jest.fn().mockResolvedValue(0);
+    qb.getMany = jest.fn().mockResolvedValue([]);
 
     roomsRepo = {
       createQueryBuilder: jest.fn(() => qb),
       findOne: jest.fn(),
     };
+    roomTypesRepo = { find: jest.fn().mockResolvedValue([]) };
     hotelsRepo = { findOne: jest.fn() };
     subscriptions = { getForHotel: jest.fn() };
     auditLogs = { log: jest.fn() };
@@ -143,6 +138,7 @@ describe('TenantRoomsService', () => {
       providers: [
         TenantRoomsService,
         { provide: getRepositoryToken(Room), useValue: roomsRepo },
+        { provide: getRepositoryToken(RoomType), useValue: roomTypesRepo },
         { provide: getRepositoryToken(Hotel), useValue: hotelsRepo },
         { provide: SubscriptionsService, useValue: subscriptions },
         { provide: DataSource, useValue: dataSource },
@@ -164,7 +160,11 @@ describe('TenantRoomsService', () => {
 
     it('AC2 — scopes by hotelId and paginates { data, total, page, pageSize }', async () => {
       const rooms = [makeRoom()];
-      qb.getManyAndCount.mockResolvedValue([rooms, 1]);
+      qb.getCount.mockResolvedValue(1);
+      qb.getMany.mockResolvedValue(rooms);
+      roomTypesRepo.find.mockResolvedValue([
+        { id: 'rt-1', nameEn: 'Standard', nameAr: 'قياسية' },
+      ]);
 
       const result = await service.list(HOTEL_ID, {
         page: 2,
@@ -172,7 +172,6 @@ describe('TenantRoomsService', () => {
       } as ListRoomsQueryDto);
 
       expect(roomsRepo.createQueryBuilder).toHaveBeenCalledWith('r');
-      expect(qb.leftJoinAndSelect).toHaveBeenCalledWith('r.roomType', 'type');
       expect(qb.where).toHaveBeenCalledWith('r.hotelId = :hotelId', {
         hotelId: HOTEL_ID,
       });
@@ -190,6 +189,49 @@ describe('TenantRoomsService', () => {
           roomType: { id: 'rt-1', nameEn: 'Standard', nameAr: 'قياسية' },
         },
       ]);
+    });
+
+    it('AC2 — never joins roomType into the paginated query (real-Postgres regression: join + skip/take + raw orderBy 500s)', async () => {
+      qb.getMany.mockResolvedValue([makeRoom()]);
+      roomTypesRepo.find.mockResolvedValue([
+        { id: 'rt-1', nameEn: 'Standard', nameAr: 'قياسية' },
+      ]);
+
+      await service.list(HOTEL_ID, {} as ListRoomsQueryDto);
+
+      expect(qb.leftJoinAndSelect).toBeUndefined();
+      expect(roomTypesRepo.find).toHaveBeenCalledWith({
+        where: { id: In(['rt-1']) },
+      });
+    });
+
+    it('AC2 — page with zero rooms never calls roomTypesRepo.find', async () => {
+      qb.getMany.mockResolvedValue([]);
+
+      await service.list(HOTEL_ID, {} as ListRoomsQueryDto);
+
+      expect(roomTypesRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('AC2 — takes the total count BEFORE any orderBy is applied (getManyAndCount 500s on the raw-SQL natural-order expression against real Postgres)', async () => {
+      const callOrder: string[] = [];
+      qb.getCount.mockImplementation(async () => {
+        callOrder.push('getCount');
+        return 0;
+      });
+      qb.orderBy.mockImplementation(() => {
+        callOrder.push('orderBy');
+        return qb;
+      });
+      qb.getMany.mockImplementation(async () => {
+        callOrder.push('getMany');
+        return [];
+      });
+
+      await service.list(HOTEL_ID, {} as ListRoomsQueryDto);
+
+      expect(callOrder).toEqual(['getCount', 'orderBy', 'getMany']);
+      expect(qb.getManyAndCount).toBeUndefined();
     });
 
     it('AC2 — applies floor/type/status filters and roomNumber ILIKE search only when present', async () => {
