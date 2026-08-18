@@ -408,11 +408,28 @@ describe('TenantRoomsService', () => {
     });
 
     it('AC3 — count runs inside the transaction with a pessimistic hotel lock (race guard)', async () => {
+      // Prove ordering, not just presence: the locked hotel fetch must
+      // complete before the countable-rooms query runs, or a concurrent
+      // create could count against a stale, unlocked snapshot.
+      const callOrder: string[] = [];
+      managerHotel.findOne.mockImplementation(async (opts: Record<string, unknown>) => {
+        if (opts?.lock) callOrder.push('lock');
+        return { id: HOTEL_ID, roomsCount: 0 };
+      });
+      const spyQb = countQb();
+      const rawGetCount = spyQb.getCount;
+      spyQb.getCount = jest.fn(async () => {
+        callOrder.push('count');
+        return rawGetCount();
+      });
+      managerRooms.createQueryBuilder.mockReturnValue(spyQb);
+
       await service.createRoom(makeActor(), {
         roomNumber: '5',
         roomTypeId: 'rt-1',
       } as CreateRoomDto);
 
+      expect(callOrder).toEqual(['lock', 'count']);
       expect(dataSource.transaction).toHaveBeenCalled();
       expect(managerHotel.findOne).toHaveBeenCalledWith(
         expect.objectContaining({
