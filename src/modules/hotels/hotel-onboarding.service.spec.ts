@@ -45,7 +45,7 @@ describe('HotelOnboardingService', () => {
         contactEmail: 'Info@NileGrand.example',
         contactPhone: '+20 100 000 0000',
         city: 'Cairo',
-        roomsCount: 80,
+        declaredRoomsCount: 80,
       },
       plan: { planId: 'plan-trial' },
       owner: { name: 'Owner One', email: 'Owner@NileGrand.example' },
@@ -217,6 +217,24 @@ describe('HotelOnboardingService', () => {
       expect(created).not.toHaveProperty('timezone');
       expect(created.contactEmail).toBe('info@nilegrand.example');
       expect(created.onboardedById).toBe('admin-1');
+    });
+
+    it('maps the sales-declared count to declaredRoomsCount, never the derived roomsCount (11.6)', async () => {
+      await service.onboard(makeDto(), actor);
+      const hotelRepo = [...managerRepos.values()][0];
+      const created = hotelRepo.create.mock.calls[0][0];
+      expect(created.declaredRoomsCount).toBe(80);
+      expect(created).not.toHaveProperty('roomsCount');
+    });
+
+    it('defaults declaredRoomsCount to 0 when omitted', async () => {
+      await service.onboard(
+        makeDto({ profile: { ...makeDto().profile, declaredRoomsCount: undefined } }),
+        actor,
+      );
+      const hotelRepo = [...managerRepos.values()][0];
+      const created = hotelRepo.create.mock.calls[0][0];
+      expect(created.declaredRoomsCount).toBe(0);
     });
 
     it('rejects a taken slug before opening the transaction', async () => {

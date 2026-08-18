@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { Admin } from '../admins/admin.entity';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import {
@@ -51,7 +51,6 @@ const PROFILE_FIELDS = [
   'defaultLanguage',
   'currency',
   'starRating',
-  'roomsCount',
 ] as const;
 
 type HotelWithCurrentSub = Hotel & { currentSubscription?: Subscription };
@@ -62,8 +61,6 @@ export class HotelsService {
 
   constructor(
     @InjectRepository(Hotel) private readonly hotelsRepo: Repository<Hotel>,
-    @InjectRepository(Subscription)
-    private readonly subsRepo: Repository<Subscription>,
     @InjectRepository(TenantUser)
     private readonly tenantUsersRepo: Repository<TenantUser>,
     @Inject(STORAGE_DRIVER) private readonly storage: StorageDriver,
@@ -177,7 +174,11 @@ export class HotelsService {
     }
   }
 
-  /** Story 5.4 — profile edit with slug + rooms-count guards. */
+  /**
+   * Story 5.4 — profile edit with slug guard. roomsCount is no longer
+   * updatable here (11.6 AC2) — it's the derived counter Tasks 4–6 keep in
+   * sync; the Epic 05 plan-limit-on-edit guard is retired with it.
+   */
   async update(id: string, dto: UpdateHotelDto, actor: Admin) {
     const hotel = await this.hotelsRepo.findOne({ where: { id } });
     if (!hotel)
@@ -198,18 +199,6 @@ export class HotelsService {
       await this.assertSlugUsable(dto.slug, id);
       slugChange = { old: hotel.slug, new: dto.slug };
       hotel.slug = dto.slug;
-    }
-
-    // Rooms-count vs plan limit (5.4 AC3) — mirrors the downgrade guard.
-    const force = dto.force === true;
-    if (force && !this.isWildcard(actor)) {
-      throw new ForbiddenException({
-        code: 'FORCE_LIMIT_FORBIDDEN',
-        message: 'Only Super Admin (*) can force past plan limits',
-      });
-    }
-    if (dto.roomsCount !== undefined && !force) {
-      await this.assertRoomsWithinPlanLimit(hotel, dto.roomsCount);
     }
 
     const diff: Record<string, { from: unknown; to: unknown }> = {};
@@ -238,7 +227,7 @@ export class HotelsService {
         entityType: 'hotel',
         entityId: id,
         actorId: actor.id,
-        metadata: { diff, ...(force ? { force: true } : {}) },
+        metadata: { diff },
       });
     }
     return this.findOne(saved.id);
@@ -377,30 +366,6 @@ export class HotelsService {
     return { logoPath: key, logoUrl: this.logoUrl(key) };
   }
 
-  private async assertRoomsWithinPlanLimit(hotel: Hotel, roomsCount: number) {
-    const current = await this.subsRepo.findOne({
-      where: { hotelId: hotel.id, endDate: IsNull() },
-      relations: ['plan'],
-    });
-    const maxRooms = current?.plan?.maxRooms ?? null;
-    if (maxRooms !== null && roomsCount > maxRooms) {
-      throw new ConflictException({
-        code: 'PLAN_LIMIT_VIOLATION',
-        message: `Rooms count exceeds the current plan limit of ${maxRooms}`,
-        violations: [
-          {
-            hotelId: hotel.id,
-            hotelName: hotel.nameEn,
-            field: 'maxRooms',
-            usage: roomsCount,
-            limit: maxRooms,
-            message: `Requested ${roomsCount} rooms; current plan allows ${maxRooms}`,
-          },
-        ],
-      });
-    }
-  }
-
   private isWildcard(actor: Admin): boolean {
     return actor.role?.permissions?.includes(WILDCARD) ?? false;
   }
@@ -457,7 +422,10 @@ export class HotelsService {
       timezone: hotel.timezone,
       defaultLanguage: hotel.defaultLanguage,
       currency: hotel.currency,
+      // 11.6 AC1/AC2 — roomsCount is the live derived counter; declaredRoomsCount
+      // is the renamed Epic 05 manual field, kept for reference/sales context only.
       roomsCount: hotel.roomsCount,
+      declaredRoomsCount: hotel.declaredRoomsCount,
       staffUsersCount: hotel.staffUsersCount,
       monthlyGuestRequests: hotel.monthlyGuestRequests,
       suspension:

@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { TenantAccessService } from '../tenant-access/tenant-access.service';
 import { TenantRole } from '../tenant-roles/tenant-role.entity';
+import { Room } from '../tenant-rooms/room.entity';
 import { isTenantHintKey } from '../tenant-users/tenant-hint-keys.constants';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { TenantChangePasswordDto } from './dto/tenant-change-password.dto';
@@ -19,6 +20,8 @@ export class TenantProfileService {
     private readonly tenantUsersRepo: Repository<TenantUser>,
     @InjectRepository(TenantRole)
     private readonly tenantRolesRepo: Repository<TenantRole>,
+    @InjectRepository(Room)
+    private readonly roomsRepo: Repository<Room>,
     private readonly access: TenantAccessService,
     private readonly auditLogs: AuditLogsService,
   ) {}
@@ -34,13 +37,21 @@ export class TenantProfileService {
     const hotel = user.hotel;
     // Epic 12, Story 12.4 AC3 — setup-step completion is derived from data the
     // hotel already has (no tracking tables). staffUsersCount includes the
-    // owner, so "> 1" means a real staff member was added. Rooms/QR steps
-    // join this object with Epic 11.
+    // owner, so "> 1" means a real staff member was added.
     const customRolesCount = await this.tenantRolesRepo.count({
       where: { hotelId: user.hotelId, isSystem: false },
     });
     const staffAdded = (hotel?.staffUsersCount ?? 0) > 1;
     const roleCreated = customRolesCount > 0;
+    // Epic 11, Story 11.6 — rooms/QR setup steps join the checklist.
+    // roomsAdded counts ANY room row regardless of status (a hotel that only
+    // has an out_of_service room has still started); qrGenerated is set once
+    // by the first QR PDF download (Task 9), never unset.
+    const roomsAddedCount = await this.roomsRepo.count({
+      where: { hotelId: user.hotelId },
+    });
+    const roomsAdded = roomsAddedCount > 0;
+    const qrGenerated = hotel?.qrGeneratedAt != null;
     return {
       user: {
         id: user.id,
@@ -66,7 +77,9 @@ export class TenantProfileService {
       setup: {
         staffAdded,
         roleCreated,
-        complete: staffAdded && roleCreated,
+        roomsAdded,
+        qrGenerated,
+        complete: staffAdded && roleCreated && roomsAdded && qrGenerated,
       },
       hotel: {
         slug: hotel?.slug,

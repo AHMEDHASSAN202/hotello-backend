@@ -85,11 +85,16 @@ export class OnboardHotelProfileDto {
   @Max(180)
   longitude?: number;
 
+  /**
+   * Sales-declared count for reference/sales context only (11.6 AC2) — no
+   * guard reads this; the plan-limit guards read the derived `roomsCount`
+   * (which starts at 0 and is kept in sync as rooms are actually created).
+   */
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(0)
-  roomsCount?: number;
+  declaredRoomsCount?: number;
 }
 
 export class OnboardHotelPlanDto {

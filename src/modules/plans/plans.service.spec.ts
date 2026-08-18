@@ -256,6 +256,32 @@ describe('PlansService', () => {
   });
 
   describe('update (SA-PLAN-4)', () => {
+    it('AC3 — downgrade guard reads hotel.roomsCount, now a derived counter, not the old manual field (11.6)', async () => {
+      plansRepo.findOne.mockResolvedValue(makePlan());
+      subsRepo.find.mockResolvedValue([
+        makeSub({
+          hotel: {
+            id: 'hotel-1',
+            nameEn: 'Nile Grand',
+            roomsCount: 80, // derived from active + out_of_service rooms (Tasks 4-6)
+            staffUsersCount: 12,
+            monthlyGuestRequests: 500,
+          } as Hotel,
+        }),
+      ]);
+
+      await expect(
+        service.update('plan-1', { maxRooms: 50 }, actor),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'PLAN_LIMIT_VIOLATION',
+          violations: [
+            expect.objectContaining({ field: 'maxRooms', usage: 80, limit: 50 }),
+          ],
+        }),
+      });
+    });
+
     it('returns 409 with violation details when a limit drops below usage', async () => {
       plansRepo.findOne.mockResolvedValue(makePlan());
       subsRepo.find.mockResolvedValue([makeSub()]); // hotel has 80 rooms

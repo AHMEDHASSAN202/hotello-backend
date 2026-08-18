@@ -1,6 +1,5 @@
 import { Type } from 'class-transformer';
 import {
-  IsBoolean,
   IsEmail,
   IsIn,
   IsInt,
@@ -14,7 +13,12 @@ import {
 } from 'class-validator';
 import { SLUG_REGEX } from '../hotels.constants';
 
-/** Story 5.4 — every profile field editable; slug guarded to wildcard (*). */
+/**
+ * Story 5.4 — every profile field editable; slug guarded to wildcard (*).
+ * `roomsCount` is intentionally absent (11.6 AC2): it's the derived counter
+ * Tasks 4–6 keep in sync from actual rooms — an admin PATCH must never
+ * corrupt it. The whitelist ValidationPipe rejects the field if sent.
+ */
 export class UpdateHotelDto {
   @IsOptional()
   @IsString()
@@ -86,15 +90,4 @@ export class UpdateHotelDto {
   @Min(-180)
   @Max(180)
   longitude?: number | null;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  roomsCount?: number;
-
-  /** Wildcard-only override of the rooms-vs-plan-limit guard; audit-logged. */
-  @IsOptional()
-  @IsBoolean()
-  force?: boolean;
 }

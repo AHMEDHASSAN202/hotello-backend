@@ -69,7 +69,7 @@ export class HotelOnboardingService {
           address: dto.profile.address ?? null,
           latitude: dto.profile.latitude ?? null,
           longitude: dto.profile.longitude ?? null,
-          declaredRoomsCount: dto.profile.roomsCount ?? 0,
+          declaredRoomsCount: dto.profile.declaredRoomsCount ?? 0,
           onboardedById: actor.id,
         }),
       );

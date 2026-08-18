@@ -13,6 +13,7 @@ import { Role } from '../roles/role.entity';
 import { STORAGE_DRIVER } from '../storage/storage.interface';
 import { Subscription } from '../subscriptions/subscription.entity';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
+import { UpdateHotelDto } from './dto/update-hotel.dto';
 import { Hotel } from './hotel.entity';
 import { HotelsService } from './hotels.service';
 import { TenantUrlsService } from './tenant-urls.service';
@@ -59,6 +60,7 @@ describe('HotelsService', () => {
       timezone: 'Africa/Cairo',
       defaultLanguage: 'ar',
       currency: 'EGP',
+      declaredRoomsCount: 80,
       roomsCount: 80,
       staffUsersCount: 12,
       monthlyGuestRequests: 500,
@@ -268,57 +270,6 @@ describe('HotelsService', () => {
   });
 
   describe('update (SA-HTL-4)', () => {
-    it('returns 409 with violation details when rooms exceed the plan limit', async () => {
-      subsRepo.findOne.mockResolvedValue({
-        plan: { maxRooms: 100 },
-      } as Subscription);
-
-      await expect(
-        service.update('hotel-1', { roomsCount: 150 }, regularAdmin),
-      ).rejects.toMatchObject({
-        response: expect.objectContaining({
-          violations: [
-            expect.objectContaining({
-              field: 'maxRooms',
-              usage: 150,
-              limit: 100,
-            }),
-          ],
-        }),
-      });
-      expect(hotelsRepo.save).not.toHaveBeenCalled();
-    });
-
-    it('rejects force from a non-wildcard admin', async () => {
-      await expect(
-        service.update('hotel-1', { roomsCount: 150, force: true }, regularAdmin),
-      ).rejects.toThrow(ForbiddenException);
-    });
-
-    it('lets Super Admin (*) force past the limit and audits the override', async () => {
-      subsRepo.findOne.mockResolvedValue({
-        plan: { maxRooms: 100 },
-      } as Subscription);
-
-      await service.update('hotel-1', { roomsCount: 150, force: true }, superAdmin);
-
-      expect(hotelsRepo.save).toHaveBeenCalled();
-      expect(auditLogs.log).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: 'hotel.updated',
-          metadata: expect.objectContaining({ force: true }),
-        }),
-      );
-    });
-
-    it('skips the guard when the plan has no rooms limit', async () => {
-      subsRepo.findOne.mockResolvedValue({
-        plan: { maxRooms: null },
-      } as Subscription);
-      await service.update('hotel-1', { roomsCount: 5000 }, regularAdmin);
-      expect(hotelsRepo.save).toHaveBeenCalled();
-    });
-
     it('audits hotel.updated with a diff of only the changed fields', async () => {
       await service.update(
         'hotel-1',
@@ -362,6 +313,39 @@ describe('HotelsService', () => {
           },
         }),
       );
+    });
+  });
+
+  describe('update (11.6)', () => {
+    it('AC2 — roomsCount is no longer updatable and no plan-limit assert runs on edit (5.4 AC3 removed)', async () => {
+      const dto = { roomsCount: 999 } as unknown as UpdateHotelDto;
+
+      await service.update('hotel-1', dto, regularAdmin);
+
+      expect(subsRepo.findOne).not.toHaveBeenCalled();
+      const saved = hotelsRepo.save.mock.calls[0][0] as Hotel;
+      expect(saved.roomsCount).toBe(80); // unchanged from makeHotel()
+    });
+
+    it('AC2 — a "force" flag no longer has any effect (Story 5.4 force path removed)', async () => {
+      const dto = { roomsCount: 999, force: true } as unknown as UpdateHotelDto;
+
+      await service.update('hotel-1', dto, regularAdmin);
+
+      const saved = hotelsRepo.save.mock.calls[0][0] as Hotel;
+      expect(saved.roomsCount).toBe(80);
+      expect(auditLogs.log).not.toHaveBeenCalled(); // nothing whitelisted changed
+    });
+
+    it('AC2 — toDetail exposes declaredRoomsCount alongside derived roomsCount', async () => {
+      hotelsRepo.findOne.mockResolvedValue(
+        makeHotel({ declaredRoomsCount: 80, roomsCount: 65 }),
+      );
+
+      const detail = await service.findOne('hotel-1');
+
+      expect(detail.roomsCount).toBe(65);
+      expect(detail.declaredRoomsCount).toBe(80);
     });
   });
 

@@ -337,6 +337,42 @@ describe('SubscriptionsService', () => {
     });
   });
 
+  describe('downgrade guard (11.6 AC3)', () => {
+    const dto = { planId: 'plan-1', billingCycle: 'monthly' as const };
+
+    it('AC3 — target maxRooms below hotel.roomsCount (derived) → 409 PLAN_LIMIT_VIOLATION with field maxRooms', async () => {
+      // roomsCount is no longer the Epic 05 manual field — Tasks 4-6 keep it
+      // live from actual rooms, so this guard is now genuinely derived-vs-plan.
+      hotelsRepo.findOne.mockResolvedValue(makeHotel({ roomsCount: 80 }));
+      plansRepo.findOne.mockResolvedValue(makePlan({ maxRooms: 50 }));
+
+      await expect(
+        service.changePlan('hotel-1', dto, regularAdmin),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'PLAN_LIMIT_VIOLATION',
+          violations: expect.arrayContaining([
+            expect.objectContaining({ field: 'maxRooms', usage: 80, limit: 50 }),
+          ]),
+        }),
+      });
+    });
+
+    it('AC1 — computeUsage reads the derived counter for the rooms row', async () => {
+      hotelsRepo.findOne.mockResolvedValue(makeHotel({ roomsCount: 42 }));
+      const plan = makePlan({ maxRooms: 100 });
+      subsRepo.findOne.mockResolvedValue(makeSub({ plan, planId: plan.id }));
+
+      const result = await service.getForHotel('hotel-1');
+
+      expect(result.usage).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ field: 'maxRooms', used: 42, max: 100, pct: 42 }),
+        ]),
+      );
+    });
+  });
+
   describe('extendTrial (SA-SUB-3)', () => {
     it('rejects non-wildcard admins with 403', async () => {
       await expect(

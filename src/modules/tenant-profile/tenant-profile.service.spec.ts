@@ -5,6 +5,7 @@ import * as bcrypt from 'bcrypt';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { TenantAccessService } from '../tenant-access/tenant-access.service';
 import { TenantRole } from '../tenant-roles/tenant-role.entity';
+import { Room } from '../tenant-rooms/room.entity';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { TenantProfileService } from './tenant-profile.service';
 
@@ -15,6 +16,7 @@ describe('TenantProfileService (8.7)', () => {
   let service: TenantProfileService;
   let repo: { save: jest.Mock };
   let rolesRepo: { count: jest.Mock };
+  let roomsRepo: { count: jest.Mock };
   let access: { getAccessState: jest.Mock };
   let audit: { log: jest.Mock };
 
@@ -36,13 +38,22 @@ describe('TenantProfileService (8.7)', () => {
       passwordHash: 'stored',
       refreshTokenHash: 'rt',
       dismissedHints: [],
-      hotel: { slug: 'sunrise', nameEn: 'Sunrise', nameAr: 'شروق', logoPath: null, defaultLanguage: 'ar', staffUsersCount: 1 },
+      hotel: {
+        slug: 'sunrise',
+        nameEn: 'Sunrise',
+        nameAr: 'شروق',
+        logoPath: null,
+        defaultLanguage: 'ar',
+        staffUsersCount: 1,
+        qrGeneratedAt: null,
+      },
       ...o,
     }) as TenantUser;
 
   beforeEach(async () => {
     repo = { save: jest.fn(async (u) => u) };
     rolesRepo = { count: jest.fn().mockResolvedValue(0) };
+    roomsRepo = { count: jest.fn().mockResolvedValue(0) };
     access = {
       getAccessState: jest.fn().mockResolvedValue({
         hotelStatus: 'active',
@@ -61,6 +72,7 @@ describe('TenantProfileService (8.7)', () => {
         TenantProfileService,
         { provide: getRepositoryToken(TenantUser), useValue: repo },
         { provide: getRepositoryToken(TenantRole), useValue: rolesRepo },
+        { provide: getRepositoryToken(Room), useValue: roomsRepo },
         { provide: TenantAccessService, useValue: access },
         { provide: AuditLogsService, useValue: audit },
       ],
@@ -133,10 +145,16 @@ describe('TenantProfileService (8.7)', () => {
     });
   });
 
-  describe('setup status (12.4 AC3)', () => {
-    it('fresh hotel (owner only, no custom roles) → nothing complete', async () => {
+  describe('setup status (12.4 AC3 / 11.6)', () => {
+    it('fresh hotel (owner only, no custom roles, no rooms, no QR) → nothing complete', async () => {
       const result = await service.me(user());
-      expect(result.setup).toEqual({ staffAdded: false, roleCreated: false, complete: false });
+      expect(result.setup).toEqual({
+        staffAdded: false,
+        roleCreated: false,
+        roomsAdded: false,
+        qrGenerated: false,
+        complete: false,
+      });
     });
 
     it('staffAdded flips when the hotel has staff beyond the owner', async () => {
@@ -155,12 +173,73 @@ describe('TenantProfileService (8.7)', () => {
       expect(result.setup.roleCreated).toBe(true);
     });
 
+    describe('AC4 — roomsAdded', () => {
+      it('false with zero rooms', async () => {
+        roomsRepo.count.mockResolvedValue(0);
+        const result = await service.me(user());
+        expect(roomsRepo.count).toHaveBeenCalledWith({
+          where: { hotelId: 'hotel-1' },
+        });
+        expect(result.setup.roomsAdded).toBe(false);
+      });
+
+      it('true once a room exists, counting ANY room row regardless of status', async () => {
+        roomsRepo.count.mockResolvedValue(1);
+        const result = await service.me(user());
+        expect(result.setup.roomsAdded).toBe(true);
+      });
+    });
+
+    describe('qrGenerated', () => {
+      it('reflects hotels.qrGeneratedAt — false while null', async () => {
+        const result = await service.me(
+          user({ hotel: { slug: 'sunrise', staffUsersCount: 1, qrGeneratedAt: null } as never }),
+        );
+        expect(result.setup.qrGenerated).toBe(false);
+      });
+
+      it('reflects hotels.qrGeneratedAt — true once set', async () => {
+        const result = await service.me(
+          user({
+            hotel: {
+              slug: 'sunrise',
+              staffUsersCount: 1,
+              qrGeneratedAt: new Date('2026-08-01'),
+            } as never,
+          }),
+        );
+        expect(result.setup.qrGenerated).toBe(true);
+      });
+    });
+
     it('complete only when every derivable step is done', async () => {
       rolesRepo.count.mockResolvedValue(1);
+      roomsRepo.count.mockResolvedValue(2);
       const result = await service.me(
-        user({ hotel: { slug: 'sunrise', staffUsersCount: 2 } as never }),
+        user({
+          hotel: {
+            slug: 'sunrise',
+            staffUsersCount: 2,
+            qrGeneratedAt: new Date('2026-08-01'),
+          } as never,
+        }),
       );
-      expect(result.setup).toEqual({ staffAdded: true, roleCreated: true, complete: true });
+      expect(result.setup).toEqual({
+        staffAdded: true,
+        roleCreated: true,
+        roomsAdded: true,
+        qrGenerated: true,
+        complete: true,
+      });
+    });
+
+    it('not complete when rooms/QR steps are still pending, even with staff + roles done', async () => {
+      rolesRepo.count.mockResolvedValue(1);
+      roomsRepo.count.mockResolvedValue(0);
+      const result = await service.me(
+        user({ hotel: { slug: 'sunrise', staffUsersCount: 2, qrGeneratedAt: null } as never }),
+      );
+      expect(result.setup.complete).toBe(false);
     });
   });
 });
