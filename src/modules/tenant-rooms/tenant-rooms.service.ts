@@ -296,8 +296,9 @@ export class TenantRoomsService {
 
   /**
    * Story 11.3 AC4/AC5 — commits a bulk batch (range or Excel import, Story
-   * 11.7) in one transaction: re-validates every row against a fresh,
-   * transaction-scoped read (a stale preview can't create a duplicate or
+   * 11.7) in one transaction: locks the hotel row FIRST (race guard — see
+   * `lockHotel`'s doc comment), only then re-validates every row against a
+   * fresh, lock-consistent read (a stale preview can't create a duplicate or
    * bust the seat limit), skips or rejects mid-flight duplicates per
    * `skipDuplicates`, rejects on any other issue, then inserts survivors in
    * one `manager.save` and bumps `hotel.roomsCount`. Audits after commit.
@@ -309,6 +310,13 @@ export class TenantRoomsService {
     const hotelId = actor.hotelId;
 
     const result = await this.dataSource.transaction(async (manager) => {
+      // Lock the hotel row and read the current countable count BEFORE
+      // reading existing room numbers/types — every other room-mutating path
+      // (createRoom) does the same, so any two concurrent mutations
+      // serialize here instead of both reading a pre-insert snapshot.
+      const hotel = await this.lockHotel(manager, hotelId);
+      const used = await this.countCountable(manager, hotelId);
+
       const [existingNumbers, typeIds] = await Promise.all([
         this.loadExistingNumbers(manager, hotelId),
         this.loadActiveTypeIds(manager, hotelId),
@@ -356,11 +364,11 @@ export class TenantRoomsService {
 
       const survivors = validated.filter((r) => !isDuplicate(r));
 
-      const { hotel, used } = await this.assertRoomSeatAvailable(
-        manager,
-        hotelId,
-        survivors.length,
-      );
+      // Limit check deferred until here — now that `survivors.length` (the
+      // real number of seats this commit needs) is known — but reuses the
+      // SAME `used` figure read right after the lock above, so the whole
+      // count-then-check stays atomic within this one locked transaction.
+      await this.assertWithinLimit(hotelId, used, survivors.length);
 
       const roomsRepo = manager.getRepository(Room);
       const entities = survivors.map((r) =>
@@ -454,6 +462,22 @@ export class TenantRoomsService {
     hotelId: string,
     adding: number,
   ): Promise<{ hotel: Hotel; used: number }> {
+    const hotel = await this.lockHotel(manager, hotelId);
+    const used = await this.countCountable(manager, hotelId);
+    await this.assertWithinLimit(hotelId, used, adding);
+    return { hotel, used };
+  }
+
+  /**
+   * Story 11.3 AC3/AC4 — the `pessimistic_write` hotel-row lock, split out of
+   * `assertRoomSeatAvailable` so `bulkCommit` can acquire it BEFORE reading
+   * existing room numbers / room types (fix for a race: two concurrent bulk
+   * commits — or a bulk commit racing `createRoom` — must not both read
+   * "not a duplicate" pre-lock and then both try to insert the same number;
+   * everyone that mutates rooms takes this lock first, so the loser's read
+   * of existing numbers always reflects the winner's committed insert).
+   */
+  private async lockHotel(manager: EntityManager, hotelId: string): Promise<Hotel> {
     const hotel = await manager.getRepository(Hotel).findOne({
       where: { id: hotelId },
       lock: { mode: 'pessimistic_write' },
@@ -464,8 +488,15 @@ export class TenantRoomsService {
         message: 'Hotel not found',
       });
     }
+    return hotel;
+  }
 
-    const used = await this.countCountable(manager, hotelId);
+  /** Story 11.3 AC3 — the plan-limit check on its own, given an already-known `used`. */
+  private async assertWithinLimit(
+    hotelId: string,
+    used: number,
+    adding: number,
+  ): Promise<void> {
     const limit = await this.roomsLimit(hotelId);
     if (limit !== null && used + adding > limit) {
       throw new ConflictException({
@@ -476,8 +507,6 @@ export class TenantRoomsService {
         remaining: Math.max(0, limit - used),
       });
     }
-
-    return { hotel, used };
   }
 
   /** Story 11.3 — resolve a room type within the hotel inside a transaction. */

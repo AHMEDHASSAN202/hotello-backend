@@ -624,6 +624,33 @@ describe('TenantRoomsService', () => {
       expect(result).toEqual({ created: 3, skipped: 0 });
     });
 
+    it('AC4 — locks the hotel row BEFORE reading existing room numbers (race guard: a concurrent commit or createRoom must not read a pre-insert snapshot)', async () => {
+      const callOrder: string[] = [];
+      managerHotel.findOne.mockImplementation(
+        async (opts: Record<string, unknown>) => {
+          if (opts?.lock) callOrder.push('lock');
+          return { id: HOTEL_ID, roomsCount: 0 };
+        },
+      );
+      managerRooms.find.mockImplementation(async () => {
+        callOrder.push('existingNumbers');
+        return [];
+      });
+
+      await service.bulkCommit(makeActor(), {
+        rooms: makeRows(['301']),
+        source: 'range',
+      } as BulkCommitDto);
+
+      expect(callOrder).toEqual(['lock', 'existingNumbers']);
+      expect(managerHotel.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: HOTEL_ID },
+          lock: { mode: 'pessimistic_write' },
+        }),
+      );
+    });
+
     it('AC4 — a mid-flight duplicate with skipDuplicates=true is silently skipped (deterministic re-resolve)', async () => {
       countable = 1;
       managerRooms.find.mockResolvedValue([{ roomNumber: '302' }]);
