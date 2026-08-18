@@ -44,4 +44,16 @@ describe('RoomQrService.generate (11.5)', () => {
       margin: 2,
     });
   });
+
+  it('AC5 (11.5 PDF) — toDataUrl returns a data:image/png URI at 600px width, M/margin 2', async () => {
+    (QRCode.toDataURL as jest.Mock).mockResolvedValue('data:image/png;base64,AAAA');
+
+    const dataUrl = await service.toDataUrl(url);
+    expect(dataUrl).toBe('data:image/png;base64,AAAA');
+    expect(QRCode.toDataURL).toHaveBeenCalledWith(url, {
+      errorCorrectionLevel: 'M',
+      margin: 2,
+      width: 600,
+    });
+  });
 });

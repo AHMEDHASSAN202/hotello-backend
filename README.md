@@ -29,6 +29,38 @@ The frontends live in sibling repos (`../hotello-admin-frontend`,
 `../hotello-hotel-frontend`). If they aren't checked out the script says so and
 runs what it can, so a standalone clone of this repo still works.
 
+## PDF generation
+
+Story 11.5's print-ready QR poster and room-card PDFs (`GET
+/tenant/rooms/pdf/poster`, `GET /tenant/rooms/pdf/cards`) render HTML through
+a headless Chromium via [Playwright](https://playwright.dev/). Two one-time
+setup steps beyond `npm install`:
+
+```bash
+npm install --cache /tmp/npm-cache playwright   # already in package.json; re-run after a fresh clone
+npx playwright install chromium                 # downloads a local Chromium build (~280MB)
+```
+
+The templates embed two font families for AR/EN + Latin-script coverage —
+vendored as TTFs in `assets/fonts/` (committed binaries, loaded via
+`file://` URLs so rendering needs no network access):
+
+- `NotoSans-Regular.ttf` / `NotoSans-Bold.ttf`
+- `NotoKufiArabic-Regular.ttf` / `NotoKufiArabic-Bold.ttf`
+
+Sourced from the [notofonts.github.io](https://github.com/notofonts/notofonts.github.io)
+hinted static builds (`fonts/<Family>/hinted/ttf/`) — the `google/fonts` repo
+only ships the variable-font source for these two families, which doesn't
+carry a separate static Bold instance the way `@font-face { font-weight: 700 }`
+needs. If these ever need re-vendoring, verify each download is a real TTF
+(`file assets/fonts/*.ttf` → `TrueType Font data`) before committing — a
+saved HTML 404 page with a `.ttf` extension is the classic failure mode.
+
+`PdfRendererService` (`src/modules/tenant-rooms/pdf/pdf-renderer.service.ts`)
+launches Chromium lazily on first use and reuses that one instance for every
+render (`onModuleDestroy` closes it on shutdown) — unit tests mock this
+service rather than launching a real browser.
+
 ## Database migrations
 
 The schema is owned by **TypeORM migrations**. `synchronize` is disabled

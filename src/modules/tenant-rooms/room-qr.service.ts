@@ -17,6 +17,21 @@ export interface QrResult {
  */
 @Injectable()
 export class RoomQrService {
+  /**
+   * Story 11.5 — a base64 `data:image/png;base64,...` URI for embedding a QR
+   * directly in a PDF template's `<img src>` (no temp file, no second HTTP
+   * hop for Chromium to resolve). Same error-correction/margin discipline as
+   * `generate()`; a fixed 600px width gives print-safe module density at the
+   * ~90mm poster / ~45mm card sizes the templates render it at.
+   */
+  async toDataUrl(url: string): Promise<string> {
+    return QRCode.toDataURL(url, {
+      errorCorrectionLevel: 'M',
+      margin: 2,
+      width: 600,
+    });
+  }
+
   async generate(url: string, format: QrFormat): Promise<QrResult> {
     if (format === 'svg') {
       const body = await QRCode.toString(url, {

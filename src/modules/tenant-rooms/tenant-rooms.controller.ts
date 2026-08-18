@@ -18,10 +18,13 @@ import { TenantScope } from '../../common/decorators/tenant-scope.decorator';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { BulkCommitDto } from './dto/bulk-commit.dto';
 import { BulkPreviewDto } from './dto/bulk-preview.dto';
+import { CardsPdfQueryDto } from './dto/cards-pdf.dto';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { ListRoomsQueryDto } from './dto/list-rooms-query.dto';
+import { PosterPdfQueryDto } from './dto/poster-pdf.dto';
 import { QrFormatQueryDto } from './dto/qr-format-query.dto';
 import { UpdateRoomDto } from './dto/update-room.dto';
+import { RoomsPdfService } from './pdf/rooms-pdf.service';
 import { TenantRoomsService } from './tenant-rooms.service';
 
 /**
@@ -33,7 +36,10 @@ import { TenantRoomsService } from './tenant-rooms.service';
 @TenantScope()
 @Controller('tenant/rooms')
 export class TenantRoomsController {
-  constructor(private readonly roomsService: TenantRoomsService) {}
+  constructor(
+    private readonly roomsService: TenantRoomsService,
+    private readonly roomsPdfService: RoomsPdfService,
+  ) {}
 
   @Get()
   @RequirePermissions('rooms.read')
@@ -95,6 +101,45 @@ export class TenantRoomsController {
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
     res.send(body);
+  }
+
+  /**
+   * Story 11.5 AC1/AC2 — print-ready QR PDFs. **GET, not POST, by ruling:**
+   * PDF generation is a read and must keep working for expired-trial
+   * (read-only) hotels — `SUBSCRIPTION_READ_ONLY` only blocks mutations, and
+   * a POST body would trip it. `pdf/*` stays declared above `:id` (same
+   * static-above-dynamic discipline as `qr/general` and the `bulk/*` routes).
+   * Nothing is persisted beyond the one-time `hotel.qrGeneratedAt` stamp the
+   * service sets on first generation.
+   */
+  @Get('pdf/poster')
+  @RequirePermissions('rooms.read')
+  async posterPdf(
+    @CurrentTenantUser() user: TenantUser,
+    @Query() query: PosterPdfQueryDto,
+    @Res() res: Response,
+  ) {
+    const size = (query.size ?? 'a4').toUpperCase() as 'A4' | 'A5';
+    const buffer = await this.roomsPdfService.generatePoster(user.hotelId, size);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="qr-poster-${size.toLowerCase()}.pdf"`,
+    );
+    res.send(buffer);
+  }
+
+  @Get('pdf/cards')
+  @RequirePermissions('rooms.read')
+  async cardsPdf(
+    @CurrentTenantUser() user: TenantUser,
+    @Query() query: CardsPdfQueryDto,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.roomsPdfService.generateCards(user.hotelId, query);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="room-qr-cards.pdf"');
+    res.send(buffer);
   }
 
   @Get(':id')
