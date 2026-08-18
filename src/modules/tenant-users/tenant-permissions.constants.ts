@@ -104,6 +104,34 @@ export const TENANT_PERMISSION_CATALOG: TenantPermissionGroup[] = [
       },
     ],
   },
+  {
+    group: 'rooms',
+    labelEn: 'Rooms',
+    labelAr: 'الغرف',
+    permissions: [
+      {
+        key: 'rooms.read',
+        labelEn: 'View rooms',
+        labelAr: 'عرض الغرف',
+        descriptionEn: 'See the room list, types and their status.',
+        descriptionAr: 'عرض قائمة الغرف وأنواعها وحالاتها.',
+      },
+      {
+        key: 'rooms.create',
+        labelEn: 'Add rooms',
+        labelAr: 'إضافة غرف',
+        descriptionEn: 'Add new rooms and room types.',
+        descriptionAr: 'إضافة غرف وأنواع غرف جديدة.',
+      },
+      {
+        key: 'rooms.update',
+        labelEn: 'Edit rooms & status',
+        labelAr: 'تعديل الغرف والحالات',
+        descriptionEn: 'Edit room details and change their status.',
+        descriptionAr: 'تعديل بيانات الغرف وتغيير حالاتها.',
+      },
+    ],
+  },
 ];
 
 export const ALL_TENANT_PERMISSION_KEYS: string[] =

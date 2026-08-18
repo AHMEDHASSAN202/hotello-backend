@@ -8,6 +8,7 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Role } from '../roles/role.entity';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { TenantRolesService } from '../tenant-roles/tenant-roles.service';
+import { RoomTypesService } from '../tenant-rooms/room-types.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { TenantUsersService } from '../tenant-users/tenant-users.service';
 import { OnboardHotelDto } from './dto/onboard-hotel.dto';
@@ -23,6 +24,7 @@ describe('HotelOnboardingService', () => {
     buildSetupLink: jest.Mock;
   };
   let tenantRolesService: { seedDefaultRoles: jest.Mock };
+  let roomTypesService: { seedDefaultRoomTypes: jest.Mock };
   let tenantUsersRepo: { findOne: jest.Mock };
   let auditLogs: { log: jest.Mock };
   let events: { emitAsync: jest.Mock };
@@ -99,6 +101,13 @@ describe('HotelOnboardingService', () => {
         { id: 'role-manager', nameEn: 'Manager', isSystem: false },
       ]),
     };
+    roomTypesService = {
+      seedDefaultRoomTypes: jest.fn().mockResolvedValue([
+        { id: 'type-standard', nameEn: 'Standard' },
+        { id: 'type-deluxe', nameEn: 'Deluxe' },
+        { id: 'type-suite', nameEn: 'Suite' },
+      ]),
+    };
     tenantUsersRepo = { findOne: jest.fn().mockResolvedValue(null) };
     auditLogs = { log: jest.fn() };
     events = { emitAsync: jest.fn().mockResolvedValue([]) };
@@ -112,6 +121,7 @@ describe('HotelOnboardingService', () => {
         { provide: SubscriptionsService, useValue: subscriptionsService },
         { provide: TenantUsersService, useValue: tenantUsersService },
         { provide: TenantRolesService, useValue: tenantRolesService },
+        { provide: RoomTypesService, useValue: roomTypesService },
         { provide: AuditLogsService, useValue: auditLogs },
         { provide: EventEmitter2, useValue: events },
       ],
@@ -136,6 +146,11 @@ describe('HotelOnboardingService', () => {
       );
       // Owner is a pending user assigned the seeded (system) Owner role.
       expect(tenantRolesService.seedDefaultRoles).toHaveBeenCalled();
+      // Story 11.1 AC2 — default room types are seeded in the same transaction.
+      expect(roomTypesService.seedDefaultRoomTypes).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.anything(),
+      );
       expect(tenantUsersService.issueSetupToken).toHaveBeenCalledWith(
         expect.objectContaining({
           roleId: 'role-owner',

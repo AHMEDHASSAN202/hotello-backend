@@ -5,6 +5,7 @@ import { Plan } from '../plans/plan.entity';
 import { Subscription } from '../subscriptions/subscription.entity';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 import { TenantRolesModule } from '../tenant-roles/tenant-roles.module';
+import { TenantRoomsModule } from '../tenant-rooms/tenant-rooms.module';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { TenantUsersModule } from '../tenant-users/tenant-users.module';
 import { HotelOnboardingService } from './hotel-onboarding.service';
@@ -19,6 +20,7 @@ import { TenantUrlsService } from './tenant-urls.service';
     SubscriptionsModule,
     TenantUsersModule,
     TenantRolesModule,
+    TenantRoomsModule,
     AuditLogsModule,
   ],
   controllers: [HotelsController],

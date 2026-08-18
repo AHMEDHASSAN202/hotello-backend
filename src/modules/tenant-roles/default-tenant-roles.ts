@@ -35,6 +35,9 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
       'staff.update',
       'staff.disable',
       'roles.read',
+      'rooms.read',
+      'rooms.create',
+      'rooms.update',
     ],
     isSystem: false,
   },
@@ -43,7 +46,7 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
     nameAr: 'موظف الاستقبال',
     descriptionEn: 'Handles front-desk guest operations.',
     descriptionAr: 'يتولى عمليات الاستقبال والنزلاء.',
-    permissions: [],
+    permissions: ['rooms.read'],
     isSystem: false,
   },
   {
@@ -51,7 +54,7 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
     nameAr: 'التدبير الفندقي',
     descriptionEn: 'Handles housekeeping operations.',
     descriptionAr: 'يتولى عمليات التدبير الفندقي.',
-    permissions: [],
+    permissions: ['rooms.read', 'rooms.update'],
     isSystem: false,
   },
 ];

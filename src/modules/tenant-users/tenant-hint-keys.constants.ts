@@ -10,6 +10,7 @@ export const TENANT_HINT_KEYS = [
   'staff.firstRun',
   'roles.firstRun',
   'home.setupSteps',
+  'rooms.firstRun',
 ] as const;
 
 export type TenantHintKey = (typeof TENANT_HINT_KEYS)[number];

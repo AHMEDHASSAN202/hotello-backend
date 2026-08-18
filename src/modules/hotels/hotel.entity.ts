@@ -71,7 +71,11 @@ export class Hotel {
   @Column({ default: 'EGP' })
   currency: string;
 
-  // Usage counters compared against plan limits by the subscription guards.
+  // Sales-declared count from onboarding — reference only, no guard reads it (11.6 AC2).
+  @Column({ type: 'int', default: 0 })
+  declaredRoomsCount: number;
+
+  // Derived: countable rooms (active + out_of_service), synced by TenantRoomsService (11.6 AC1).
   @Column({ type: 'int', default: 0 })
   roomsCount: number;
 
@@ -96,6 +100,10 @@ export class Hotel {
   @ManyToOne(() => Admin, { nullable: true })
   @JoinColumn({ name: 'suspendedById' })
   suspendedBy: Admin | null;
+
+  // Set on first QR PDF generation — drives the tenant setup checklist.
+  @Column({ type: 'timestamptz', nullable: true })
+  qrGeneratedAt: Date | null;
 
   @Column({ type: 'uuid', nullable: true })
   onboardedById: string | null;

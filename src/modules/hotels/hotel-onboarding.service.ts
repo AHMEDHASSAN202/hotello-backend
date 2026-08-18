@@ -10,6 +10,7 @@ import {
 } from '../notifications/notification-events';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { TenantRolesService } from '../tenant-roles/tenant-roles.service';
+import { RoomTypesService } from '../tenant-rooms/room-types.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { TenantUsersService } from '../tenant-users/tenant-users.service';
 import { OnboardHotelDto } from './dto/onboard-hotel.dto';
@@ -33,6 +34,7 @@ export class HotelOnboardingService {
     private readonly subscriptionsService: SubscriptionsService,
     private readonly tenantUsersService: TenantUsersService,
     private readonly tenantRolesService: TenantRolesService,
+    private readonly roomTypesService: RoomTypesService,
     private readonly auditLogs: AuditLogsService,
     private readonly events: EventEmitter2,
   ) {}
@@ -67,7 +69,7 @@ export class HotelOnboardingService {
           address: dto.profile.address ?? null,
           latitude: dto.profile.latitude ?? null,
           longitude: dto.profile.longitude ?? null,
-          roomsCount: dto.profile.roomsCount ?? 0,
+          declaredRoomsCount: dto.profile.roomsCount ?? 0,
           onboardedById: actor.id,
         }),
       );
@@ -87,6 +89,10 @@ export class HotelOnboardingService {
         manager,
       );
       const ownerRole = roles.find((r) => r.isSystem)!;
+
+      // Story 11.1 AC2 — seed the hotel's default room types in the same
+      // transaction, right after the default roles.
+      await this.roomTypesService.seedDefaultRoomTypes(hotel.id, manager);
 
       const tenantUsersRepo = manager.getRepository(TenantUser);
       const owner = await tenantUsersRepo.save(
