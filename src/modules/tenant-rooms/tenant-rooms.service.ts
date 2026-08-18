@@ -5,7 +5,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, In, Repository } from 'typeorm';
+import {
+  DataSource,
+  EntityManager,
+  In,
+  Repository,
+  SelectQueryBuilder,
+} from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
 import { TenantUrlsService } from '../hotels/tenant-urls.service';
@@ -114,24 +120,8 @@ export class TenantRoomsService {
     // can't catch this). Fix: fetch the bare Room page with zero joins
     // (matches RoomsPdfService.roomsForScope, already smoke-tested), then
     // batch-load roomType for just that page below.
-    const qb = this.roomsRepo
-      .createQueryBuilder('r')
-      .where('r.hotelId = :hotelId', { hotelId });
-
-    if (query.floor !== undefined) {
-      qb.andWhere('r.floor = :floor', { floor: query.floor });
-    }
-    if (query.typeId) {
-      qb.andWhere('r.roomTypeId = :typeId', { typeId: query.typeId });
-    }
-    if (query.status) {
-      qb.andWhere('r.status = :status', { status: query.status });
-    }
-    if (query.search) {
-      qb.andWhere('r."roomNumber" ILIKE :q', {
-        q: `%${query.search.trim().toUpperCase()}%`,
-      });
-    }
+    const qb = this.roomsRepo.createQueryBuilder('r');
+    this.applyRoomFilters(qb, hotelId, query);
 
     // The total count is taken before orderBy/skip/take are applied — cheap
     // and keeps the count query minimal regardless of the pagination path.
@@ -190,6 +180,64 @@ export class TenantRoomsService {
       where: { id: In(uniqueIds) },
     });
     return new Map(types.map((type) => [type.id, type]));
+  }
+
+  /**
+   * Story 11.2/11.7 — the hotelId scope + optional filter clauses shared by
+   * `list()` and `listAllForExport()`, kept in one place so the two paths
+   * can never drift apart (a filter added to one and not the other would
+   * make the export silently disagree with what the screen shows).
+   */
+  private applyRoomFilters(
+    qb: SelectQueryBuilder<Room>,
+    hotelId: string,
+    query: Pick<ListRoomsQueryDto, 'floor' | 'typeId' | 'status' | 'search'>,
+  ): SelectQueryBuilder<Room> {
+    qb.where('r.hotelId = :hotelId', { hotelId });
+
+    if (query.floor !== undefined) {
+      qb.andWhere('r.floor = :floor', { floor: query.floor });
+    }
+    if (query.typeId) {
+      qb.andWhere('r.roomTypeId = :typeId', { typeId: query.typeId });
+    }
+    if (query.status) {
+      qb.andWhere('r.status = :status', { status: query.status });
+    }
+    if (query.search) {
+      qb.andWhere('r."roomNumber" ILIKE :q', {
+        q: `%${query.search.trim().toUpperCase()}%`,
+      });
+    }
+    return qb;
+  }
+
+  /**
+   * Story 11.7 — the same hotel scope, filters and natural order as
+   * `list()`, but with no `skip`/`take`: every matching room, for the xlsx
+   * export. Same no-join + batch-load discipline as `list()` (see that
+   * method's doc comment for why a join here would be a real-Postgres
+   * regression) — there's no pagination to trip the two-pass planner in this
+   * path either way, but the fetch stays identical on purpose.
+   */
+  async listAllForExport(
+    hotelId: string,
+    query: ListRoomsQueryDto,
+  ): Promise<Room[]> {
+    const qb = this.roomsRepo.createQueryBuilder('r');
+    this.applyRoomFilters(qb, hotelId, query);
+    qb.orderBy('r.floor', 'ASC', 'NULLS LAST')
+      .addOrderBy(NATURAL_ROOM_ORDER, 'ASC', 'NULLS LAST')
+      .addOrderBy('r.roomNumber', 'ASC');
+
+    const rows = await qb.getMany();
+    const roomTypes = await this.loadRoomTypesByIds(
+      rows.map((room) => room.roomTypeId),
+    );
+    return rows.map((room) => ({
+      ...room,
+      roomType: roomTypes.get(room.roomTypeId) as RoomType,
+    }));
   }
 
   /**

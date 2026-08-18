@@ -13,6 +13,7 @@ import { RoomType } from './room-type.entity';
 import { RoomTypesService } from './room-types.service';
 import { TenantRoomsController } from './tenant-rooms.controller';
 import { TenantRoomsService } from './tenant-rooms.service';
+import { RoomsXlsxService } from './xlsx/rooms-xlsx.service';
 
 @Module({
   imports: [
@@ -37,6 +38,10 @@ import { TenantRoomsService } from './tenant-rooms.service';
     // comes from the @Global() StorageModule, no import needed here.
     PdfRendererService,
     RoomsPdfService,
+    // Story 11.7 — xlsx export + annotated import template. Pure workbook
+    // builders (buildExport/buildTemplate) plus the thin per-hotel
+    // orchestration the controller calls.
+    RoomsXlsxService,
   ],
   exports: [RoomTypesService, TenantRoomsService, TypeOrmModule],
 })

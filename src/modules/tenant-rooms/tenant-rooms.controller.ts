@@ -26,6 +26,7 @@ import { QrFormatQueryDto } from './dto/qr-format-query.dto';
 import { UpdateRoomDto } from './dto/update-room.dto';
 import { RoomsPdfService } from './pdf/rooms-pdf.service';
 import { TenantRoomsService } from './tenant-rooms.service';
+import { RoomsXlsxService } from './xlsx/rooms-xlsx.service';
 
 /**
  * Rooms (Epic 11, Story 11.2+). `hotel_id` always comes from the
@@ -39,6 +40,7 @@ export class TenantRoomsController {
   constructor(
     private readonly roomsService: TenantRoomsService,
     private readonly roomsPdfService: RoomsPdfService,
+    private readonly roomsXlsxService: RoomsXlsxService,
   ) {}
 
   @Get()
@@ -61,9 +63,9 @@ export class TenantRoomsController {
     return this.roomsService.toRoomView(room);
   }
 
-  // NOTE: later tasks add more static routes here (pdf/*, export, import/*)
-  // — every static route MUST be declared above `:id`, since Nest matches
-  // routes in declaration order and `:id` would otherwise swallow them.
+  // Every static route (bulk/*, qr/general, pdf/*, export, import/*) MUST be
+  // declared above `:id`, since Nest matches routes in declaration order and
+  // `:id` would otherwise swallow them.
   @Post('bulk/preview')
   @HttpCode(HttpStatus.OK)
   @RequirePermissions('rooms.create')
@@ -139,6 +141,48 @@ export class TenantRoomsController {
     const buffer = await this.roomsPdfService.generateCards(user.hotelId, query);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'attachment; filename="room-qr-cards.pdf"');
+    res.send(buffer);
+  }
+
+  /**
+   * Story 11.7 AC1 — the rooms Excel export. Accepts the same filter query
+   * params as `list()` (page/pageSize are accepted but ignored — export is
+   * always everything matching the filters, no pagination). `export` stays
+   * declared above `:id` (same static-above-dynamic discipline as `pdf/*`).
+   */
+  @Get('export')
+  @RequirePermissions('rooms.read')
+  async export(
+    @CurrentTenantUser() user: TenantUser,
+    @Query() query: ListRoomsQueryDto,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.roomsXlsxService.exportForHotel(user, query);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', 'attachment; filename="rooms-export.xlsx"');
+    res.send(buffer);
+  }
+
+  /**
+   * Story 11.7 AC2/AC3 — the annotated per-hotel import template. Generated
+   * fresh on every call (note 10: never cached) so the Type dropdown always
+   * reflects the hotel's current active room types.
+   */
+  @Get('import/template')
+  @RequirePermissions('rooms.create')
+  async importTemplate(@CurrentTenantUser() user: TenantUser, @Res() res: Response) {
+    const buffer = await this.roomsXlsxService.templateForHotel(user.hotelId);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="rooms-import-template.xlsx"',
+    );
     res.send(buffer);
   }
 

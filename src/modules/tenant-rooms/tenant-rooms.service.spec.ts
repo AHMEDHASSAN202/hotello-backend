@@ -294,6 +294,80 @@ describe('TenantRoomsService', () => {
     });
   });
 
+  describe('listAllForExport (11.7)', () => {
+    it('AC1 — scopes by hotelId, applies the same filters as list(), and never skip/take (exports everything matching)', async () => {
+      qb.getMany.mockResolvedValue([makeRoom()]);
+      roomTypesRepo.find.mockResolvedValue([
+        { id: 'rt-1', nameEn: 'Standard', nameAr: 'قياسية' },
+      ]);
+
+      await service.listAllForExport(HOTEL_ID, {
+        floor: 3,
+        typeId: 'rt-1',
+        status: 'active',
+        search: '  lobby  ',
+      } as ListRoomsQueryDto);
+
+      expect(roomsRepo.createQueryBuilder).toHaveBeenCalledWith('r');
+      expect(qb.where).toHaveBeenCalledWith('r.hotelId = :hotelId', {
+        hotelId: HOTEL_ID,
+      });
+      expect(qb.andWhere).toHaveBeenCalledWith('r.floor = :floor', {
+        floor: 3,
+      });
+      expect(qb.andWhere).toHaveBeenCalledWith('r.roomTypeId = :typeId', {
+        typeId: 'rt-1',
+      });
+      expect(qb.andWhere).toHaveBeenCalledWith('r.status = :status', {
+        status: 'active',
+      });
+      expect(qb.andWhere).toHaveBeenCalledWith('r."roomNumber" ILIKE :q', {
+        q: '%LOBBY%',
+      });
+      expect(qb.skip).not.toHaveBeenCalled();
+      expect(qb.take).not.toHaveBeenCalled();
+    });
+
+    it('AC1 — orders by floor NULLS LAST, then the natural numeric prefix, then roomNumber (same order as list())', async () => {
+      await service.listAllForExport(HOTEL_ID, {} as ListRoomsQueryDto);
+
+      expect(qb.orderBy).toHaveBeenCalledWith('r.floor', 'ASC', 'NULLS LAST');
+      expect(qb.addOrderBy).toHaveBeenNthCalledWith(
+        1,
+        NATURAL_ROOM_ORDER,
+        'ASC',
+        'NULLS LAST',
+      );
+      expect(qb.addOrderBy).toHaveBeenNthCalledWith(2, 'r.roomNumber', 'ASC');
+    });
+
+    it('AC1 — never joins roomType; batch-loads types for the whole result set (same no-join discipline as list())', async () => {
+      qb.getMany.mockResolvedValue([makeRoom(), makeRoom({ id: 'room-2', roomTypeId: 'rt-2' })]);
+      roomTypesRepo.find.mockResolvedValue([
+        { id: 'rt-1', nameEn: 'Standard', nameAr: 'قياسية' },
+        { id: 'rt-2', nameEn: 'Deluxe', nameAr: 'ديلوكس' },
+      ]);
+
+      const rows = await service.listAllForExport(HOTEL_ID, {} as ListRoomsQueryDto);
+
+      expect(qb.leftJoinAndSelect).toBeUndefined();
+      expect(roomTypesRepo.find).toHaveBeenCalledWith({
+        where: { id: In(['rt-1', 'rt-2']) },
+      });
+      expect(rows[0].roomType).toEqual({ id: 'rt-1', nameEn: 'Standard', nameAr: 'قياسية' });
+      expect(rows[1].roomType).toEqual({ id: 'rt-2', nameEn: 'Deluxe', nameAr: 'ديلوكس' });
+    });
+
+    it('AC1 — zero matches never calls roomTypesRepo.find and returns []', async () => {
+      qb.getMany.mockResolvedValue([]);
+
+      const rows = await service.listAllForExport(HOTEL_ID, {} as ListRoomsQueryDto);
+
+      expect(roomTypesRepo.find).not.toHaveBeenCalled();
+      expect(rows).toEqual([]);
+    });
+  });
+
   describe('findRoomInHotel (11.2)', () => {
     it('AC1/isolation — other hotel’s room id → 404 ROOM_NOT_FOUND', async () => {
       roomsRepo.findOne.mockResolvedValue(null);
