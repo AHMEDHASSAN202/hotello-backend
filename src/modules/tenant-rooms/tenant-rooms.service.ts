@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -9,8 +10,17 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
+import { BulkCommitDto } from './dto/bulk-commit.dto';
+import { BulkPreviewDto } from './dto/bulk-preview.dto';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { ListRoomsQueryDto } from './dto/list-rooms-query.dto';
+import {
+  expandRange,
+  RoomRowInput,
+  RowIssue,
+  validateRoomRows,
+  ValidatedRow,
+} from './room-rows';
 import { COUNTABLE_ROOM_STATUSES, Room } from './room.entity';
 import { RoomType } from './room-type.entity';
 
@@ -30,6 +40,26 @@ export interface RoomView {
   floor: number | null;
   status: Room['status'];
   roomType: { id: string; nameEn: string; nameAr: string };
+}
+
+/** One row of a bulk-range preview (Story 11.3 AC2). */
+export interface PreviewRow {
+  row: number;
+  roomNumber: string;
+  floor: number | null;
+  roomTypeId: string | null;
+  status: 'active' | 'out_of_service';
+  duplicate: boolean;
+  issues: RowIssue[];
+}
+
+/** `POST /tenant/rooms/bulk/preview` response (Story 11.3 AC2). */
+export interface BulkPreview {
+  rows: PreviewRow[];
+  validCount: number;
+  duplicateCount: number;
+  invalidCount: number;
+  remaining: number | null;
 }
 
 @Injectable()
@@ -219,6 +249,196 @@ export class TenantRoomsService {
     });
 
     return room;
+  }
+
+  /**
+   * Story 11.3 AC2 — expands the range, validates every number against a
+   * fresh (non-transactional) read of the hotel's existing numbers + active
+   * room types, and reports remaining seats. Read-only: nothing is written,
+   * so a stale preview just gets re-resolved by `bulkCommit`.
+   */
+  async bulkPreview(actor: TenantUser, dto: BulkPreviewDto): Promise<BulkPreview> {
+    const hotelId = actor.hotelId;
+    const manager = this.dataSource.manager;
+
+    const numbers = expandRange({
+      from: dto.from,
+      to: dto.to,
+      exclusions: dto.exclusions,
+    });
+    const rowInputs: RoomRowInput[] = numbers.map((roomNumber, i) => ({
+      row: i + 1,
+      roomNumber,
+      floor: dto.floor ?? null,
+      roomTypeId: dto.roomTypeId,
+      status: 'active',
+    }));
+
+    const [existingNumbers, typeIds, used, limit] = await Promise.all([
+      this.loadExistingNumbers(manager, hotelId),
+      this.loadActiveTypeIds(manager, hotelId),
+      this.countCountable(manager, hotelId),
+      this.roomsLimit(hotelId),
+    ]);
+
+    const { rows } = validateRoomRows(rowInputs, { existingNumbers, typeIds });
+    const previewRows = rows.map((row) => this.toPreviewRow(row));
+
+    return {
+      rows: previewRows,
+      validCount: previewRows.filter((r) => r.issues.length === 0).length,
+      duplicateCount: previewRows.filter((r) => r.duplicate).length,
+      invalidCount: previewRows.filter((r) => !r.duplicate && r.issues.length > 0)
+        .length,
+      remaining: limit === null ? null : Math.max(0, limit - used),
+    };
+  }
+
+  /**
+   * Story 11.3 AC4/AC5 — commits a bulk batch (range or Excel import, Story
+   * 11.7) in one transaction: re-validates every row against a fresh,
+   * transaction-scoped read (a stale preview can't create a duplicate or
+   * bust the seat limit), skips or rejects mid-flight duplicates per
+   * `skipDuplicates`, rejects on any other issue, then inserts survivors in
+   * one `manager.save` and bumps `hotel.roomsCount`. Audits after commit.
+   */
+  async bulkCommit(
+    actor: TenantUser,
+    dto: BulkCommitDto,
+  ): Promise<{ created: number; skipped: number }> {
+    const hotelId = actor.hotelId;
+
+    const result = await this.dataSource.transaction(async (manager) => {
+      const [existingNumbers, typeIds] = await Promise.all([
+        this.loadExistingNumbers(manager, hotelId),
+        this.loadActiveTypeIds(manager, hotelId),
+      ]);
+
+      const rowInputs: RoomRowInput[] = dto.rooms.map((row) => ({
+        row: row.row,
+        roomNumber: row.roomNumber,
+        floor: row.floor ?? null,
+        roomTypeId: row.roomTypeId,
+        // DTO status is typed as the full RoomStatus (mirrors CreateRoomDto)
+        // but @IsIn restricts it to active/out_of_service at the boundary.
+        status: (row.status ?? 'active') as 'active' | 'out_of_service',
+      }));
+      const { rows: validated } = validateRoomRows(rowInputs, {
+        existingNumbers,
+        typeIds,
+      });
+
+      const isDuplicate = (r: ValidatedRow) =>
+        r.issues.some(
+          (i) => i.code === 'DUPLICATE_IN_HOTEL' || i.code === 'DUPLICATE_IN_FILE',
+        );
+      const otherIssues = validated.filter((r) =>
+        r.issues.some(
+          (i) => i.code !== 'DUPLICATE_IN_HOTEL' && i.code !== 'DUPLICATE_IN_FILE',
+        ),
+      );
+      if (otherIssues.length > 0) {
+        throw new BadRequestException({
+          code: 'BULK_ROWS_INVALID',
+          message: 'Some rows failed validation',
+          issues: validated.flatMap((r) => r.issues),
+        });
+      }
+
+      const duplicateRows = validated.filter(isDuplicate);
+      if (duplicateRows.length > 0 && !dto.skipDuplicates) {
+        throw new ConflictException({
+          code: 'ROOM_NUMBER_TAKEN',
+          message: `Room ${duplicateRows[0].normalizedNumber} already exists`,
+          roomNumbers: duplicateRows.map((r) => r.normalizedNumber),
+        });
+      }
+
+      const survivors = validated.filter((r) => !isDuplicate(r));
+
+      const { hotel, used } = await this.assertRoomSeatAvailable(
+        manager,
+        hotelId,
+        survivors.length,
+      );
+
+      const roomsRepo = manager.getRepository(Room);
+      const entities = survivors.map((r) =>
+        roomsRepo.create({
+          hotelId,
+          roomNumber: r.normalizedNumber,
+          floor: r.floor,
+          // Survivors have no REQUIRED/UNKNOWN_TYPE issue (those were
+          // rejected above as "other issues"), so roomTypeId is guaranteed.
+          roomTypeId: r.roomTypeId as string,
+          status: r.status,
+        }),
+      );
+      const saved = entities.length > 0 ? await manager.save(Room, entities) : [];
+
+      hotel.roomsCount = used + saved.length;
+      await manager.getRepository(Hotel).save(hotel);
+
+      return { created: saved.length, skipped: duplicateRows.length };
+    });
+
+    // Audit outside the transaction (global rule: never audit inside it).
+    // There's no single room to point at for a bulk operation, so entityId
+    // is the hotel id — the metadata carries the per-row detail instead.
+    await this.auditLogs.log({
+      action: dto.source === 'import' ? 'rooms.imported' : 'rooms.bulk_created',
+      entityType: 'room',
+      entityId: hotelId,
+      actorId: actor.id,
+      metadata: {
+        actorType: 'tenant_user',
+        hotelId,
+        count: result.created,
+        skipped: result.skipped,
+        range: dto.range ?? null,
+        source: dto.source,
+      },
+    });
+
+    return result;
+  }
+
+  /** Story 11.3 — normalized room numbers already taken in the hotel. */
+  private async loadExistingNumbers(
+    manager: EntityManager,
+    hotelId: string,
+  ): Promise<Set<string>> {
+    const rows = await manager
+      .getRepository(Room)
+      .find({ where: { hotelId }, select: ['roomNumber'] });
+    return new Set(rows.map((r) => r.roomNumber));
+  }
+
+  /** Story 11.3 — ids of active room types the hotel can assign to a row. */
+  private async loadActiveTypeIds(
+    manager: EntityManager,
+    hotelId: string,
+  ): Promise<Set<string>> {
+    const rows = await manager
+      .getRepository(RoomType)
+      .find({ where: { hotelId, isActive: true }, select: ['id'] });
+    return new Set(rows.map((r) => r.id));
+  }
+
+  /** Story 11.3 — `ValidatedRow` → the shape `bulkPreview` returns to the UI. */
+  private toPreviewRow(row: ValidatedRow): PreviewRow {
+    const duplicate = row.issues.some(
+      (i) => i.code === 'DUPLICATE_IN_HOTEL' || i.code === 'DUPLICATE_IN_FILE',
+    );
+    return {
+      row: row.row,
+      roomNumber: row.normalizedNumber,
+      floor: row.floor,
+      roomTypeId: row.roomTypeId,
+      status: row.status,
+      duplicate,
+      issues: row.issues,
+    };
   }
 
   /**

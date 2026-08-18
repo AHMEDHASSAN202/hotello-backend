@@ -13,6 +13,8 @@ import { CurrentTenantUser } from '../../common/decorators/current-tenant-user.d
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { TenantScope } from '../../common/decorators/tenant-scope.decorator';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
+import { BulkCommitDto } from './dto/bulk-commit.dto';
+import { BulkPreviewDto } from './dto/bulk-preview.dto';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { ListRoomsQueryDto } from './dto/list-rooms-query.dto';
 import { TenantRoomsService } from './tenant-rooms.service';
@@ -48,10 +50,27 @@ export class TenantRoomsController {
     return this.roomsService.toRoomView(room);
   }
 
-  // NOTE: later tasks add static routes here (bulk/*, qr/general, pdf/*,
+  // NOTE: later tasks add more static routes here (qr/general, pdf/*,
   // export, import/*) — every static route MUST be declared above `:id`,
   // since Nest matches routes in declaration order and `:id` would
   // otherwise swallow them.
+  @Post('bulk/preview')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('rooms.create')
+  bulkPreview(
+    @CurrentTenantUser() user: TenantUser,
+    @Body() dto: BulkPreviewDto,
+  ) {
+    return this.roomsService.bulkPreview(user, dto);
+  }
+
+  @Post('bulk')
+  @HttpCode(HttpStatus.CREATED)
+  @RequirePermissions('rooms.create')
+  bulkCommit(@CurrentTenantUser() user: TenantUser, @Body() dto: BulkCommitDto) {
+    return this.roomsService.bulkCommit(user, dto);
+  }
+
   @Get(':id')
   @RequirePermissions('rooms.read')
   detail(

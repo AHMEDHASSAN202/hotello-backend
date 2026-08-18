@@ -5,6 +5,8 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
+import { BulkCommitDto, RoomRowDto } from './dto/bulk-commit.dto';
+import { BulkPreviewDto } from './dto/bulk-preview.dto';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { ListRoomsQueryDto } from './dto/list-rooms-query.dto';
 import { Room } from './room.entity';
@@ -38,16 +40,17 @@ describe('TenantRoomsService', () => {
   // Transaction manager wiring for createRoom (11.3) — configurable countable
   // room count per test.
   let countable: number;
-  let manager: { getRepository: jest.Mock };
+  let manager: { getRepository: jest.Mock; save: jest.Mock };
   let managerHotel: { findOne: jest.Mock; save: jest.Mock };
-  let managerRoomTypes: { findOne: jest.Mock };
+  let managerRoomTypes: { findOne: jest.Mock; find: jest.Mock };
   let managerRooms: {
     findOne: jest.Mock;
+    find: jest.Mock;
     create: jest.Mock;
     save: jest.Mock;
     createQueryBuilder: jest.Mock;
   };
-  let dataSource: { transaction: jest.Mock };
+  let dataSource: { transaction: jest.Mock; manager?: unknown };
 
   const countQb = () => {
     const qb: Record<string, jest.Mock> = {};
@@ -93,9 +96,11 @@ describe('TenantRoomsService', () => {
         nameEn: 'Standard',
         nameAr: 'قياسية',
       }),
+      find: jest.fn().mockResolvedValue([{ id: 'rt-1' }]),
     };
     managerRooms = {
       findOne: jest.fn().mockResolvedValue(null),
+      find: jest.fn().mockResolvedValue([]),
       create: jest.fn((d) => ({ id: 'room-new', createdAt: new Date(), ...d })),
       save: jest.fn(async (r) => r),
       createQueryBuilder: jest.fn(() => countQb()),
@@ -106,9 +111,13 @@ describe('TenantRoomsService', () => {
         if (entity === RoomType) return managerRoomTypes;
         return managerRooms;
       }),
+      save: jest.fn(async (_entity: unknown, rows: unknown[]) => rows),
     };
     dataSource = {
       transaction: jest.fn(async (cb: (m: unknown) => unknown) => cb(manager)),
+      // bulkPreview (11.3) reads through the default (non-transactional)
+      // manager — reuse the same fake repos so tests configure one place.
+      manager,
     };
 
     const moduleRef = await Test.createTestingModule({
@@ -495,6 +504,264 @@ describe('TenantRoomsService', () => {
           }),
         }),
       );
+    });
+  });
+
+  describe('bulkPreview (11.3)', () => {
+    beforeEach(() => {
+      subscriptions.getForHotel.mockResolvedValue({
+        current: { plan: { maxRooms: 50 } },
+      });
+      managerRoomTypes.find.mockResolvedValue([{ id: 'rt-1' }]);
+      managerRooms.find.mockResolvedValue([]);
+    });
+
+    it('AC2 — returns per-number duplicate flags and remaining seats (limit − countable)', async () => {
+      countable = 10;
+      managerRooms.find.mockResolvedValue([{ roomNumber: '302' }]);
+
+      const result = await service.bulkPreview(makeActor(), {
+        from: 301,
+        to: 303,
+        roomTypeId: 'rt-1',
+      } as BulkPreviewDto);
+
+      expect(result.rows).toEqual([
+        {
+          row: 1,
+          roomNumber: '301',
+          floor: null,
+          roomTypeId: 'rt-1',
+          status: 'active',
+          duplicate: false,
+          issues: [],
+        },
+        {
+          row: 2,
+          roomNumber: '302',
+          floor: null,
+          roomTypeId: 'rt-1',
+          status: 'active',
+          duplicate: true,
+          issues: [{ row: 2, field: 'roomNumber', code: 'DUPLICATE_IN_HOTEL' }],
+        },
+        {
+          row: 3,
+          roomNumber: '303',
+          floor: null,
+          roomTypeId: 'rt-1',
+          status: 'active',
+          duplicate: false,
+          issues: [],
+        },
+      ]);
+      expect(result.validCount).toBe(2);
+      expect(result.duplicateCount).toBe(1);
+      expect(result.invalidCount).toBe(0);
+      expect(result.remaining).toBe(40);
+    });
+
+    it('AC2 — remaining is null on unlimited plans', async () => {
+      countable = 999;
+      subscriptions.getForHotel.mockResolvedValue({
+        current: { plan: { maxRooms: null } },
+      });
+
+      const result = await service.bulkPreview(makeActor(), {
+        from: 1,
+        to: 2,
+        roomTypeId: 'rt-1',
+      } as BulkPreviewDto);
+
+      expect(result.remaining).toBeNull();
+    });
+  });
+
+  describe('bulkCommit (11.3)', () => {
+    const makeRows = (numbers: string[]): RoomRowDto[] =>
+      numbers.map(
+        (roomNumber, i) =>
+          ({
+            row: i + 1,
+            roomNumber,
+            roomTypeId: 'rt-1',
+            status: 'active',
+          }) as RoomRowDto,
+      );
+
+    beforeEach(() => {
+      subscriptions.getForHotel.mockResolvedValue({
+        current: { plan: { maxRooms: 50 } },
+      });
+      managerRoomTypes.find.mockResolvedValue([{ id: 'rt-1' }]);
+      managerRooms.find.mockResolvedValue([]);
+      countable = 0;
+      managerHotel.findOne.mockResolvedValue({ id: HOTEL_ID, roomsCount: 0 });
+    });
+
+    it('AC4 — inserts all rows in ONE transaction and bumps hotels.roomsCount by created count', async () => {
+      countable = 2;
+      managerHotel.findOne.mockResolvedValue({ id: HOTEL_ID, roomsCount: 2 });
+
+      const result = await service.bulkCommit(makeActor(), {
+        rooms: makeRows(['301', '302', '303']),
+        source: 'range',
+        range: { from: 301, to: 303 },
+      } as BulkCommitDto);
+
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+      expect(manager.save).toHaveBeenCalledWith(
+        Room,
+        expect.arrayContaining([
+          expect.objectContaining({ roomNumber: '301' }),
+          expect.objectContaining({ roomNumber: '302' }),
+          expect.objectContaining({ roomNumber: '303' }),
+        ]),
+      );
+      expect(managerHotel.save).toHaveBeenCalledWith(
+        expect.objectContaining({ roomsCount: 5 }),
+      );
+      expect(result).toEqual({ created: 3, skipped: 0 });
+    });
+
+    it('AC4 — a mid-flight duplicate with skipDuplicates=true is silently skipped (deterministic re-resolve)', async () => {
+      countable = 1;
+      managerRooms.find.mockResolvedValue([{ roomNumber: '302' }]);
+      managerHotel.findOne.mockResolvedValue({ id: HOTEL_ID, roomsCount: 1 });
+
+      const result = await service.bulkCommit(makeActor(), {
+        rooms: makeRows(['301', '302', '303']),
+        source: 'range',
+        skipDuplicates: true,
+        range: { from: 301, to: 303 },
+      } as BulkCommitDto);
+
+      expect(result).toEqual({ created: 2, skipped: 1 });
+      expect(manager.save).toHaveBeenCalledWith(Room, [
+        expect.objectContaining({ roomNumber: '301' }),
+        expect.objectContaining({ roomNumber: '303' }),
+      ]);
+    });
+
+    it('AC4 — a mid-flight duplicate with skipDuplicates=false → 409 ROOM_NUMBER_TAKEN and NOTHING is created', async () => {
+      managerRooms.find.mockResolvedValue([{ roomNumber: '302' }]);
+
+      await expect(
+        service.bulkCommit(makeActor(), {
+          rooms: makeRows(['301', '302', '303']),
+          source: 'range',
+          range: { from: 301, to: 303 },
+        } as BulkCommitDto),
+      ).rejects.toMatchObject({
+        response: { code: 'ROOM_NUMBER_TAKEN' },
+      });
+
+      expect(manager.save).not.toHaveBeenCalled();
+      expect(managerHotel.save).not.toHaveBeenCalled();
+    });
+
+    it('rows with other validation issues → 400 BULK_ROWS_INVALID { issues } and nothing created', async () => {
+      const rows = makeRows(['301', '302']);
+      rows[1] = { ...rows[1], roomTypeId: 'rt-ghost' } as RoomRowDto;
+
+      await expect(
+        service.bulkCommit(makeActor(), {
+          rooms: rows,
+          source: 'range',
+        } as BulkCommitDto),
+      ).rejects.toMatchObject({
+        response: {
+          code: 'BULK_ROWS_INVALID',
+          issues: [{ row: 2, field: 'roomTypeId', code: 'UNKNOWN_TYPE' }],
+        },
+      });
+
+      expect(manager.save).not.toHaveBeenCalled();
+      expect(managerHotel.save).not.toHaveBeenCalled();
+    });
+
+    it('AC3 — final count over plan limit → 409 ROOM_LIMIT_REACHED { remaining } (bulk shows seats left)', async () => {
+      countable = 4;
+      subscriptions.getForHotel.mockResolvedValue({
+        current: { plan: { maxRooms: 5 } },
+      });
+
+      await expect(
+        service.bulkCommit(makeActor(), {
+          rooms: makeRows(['301', '302']),
+          source: 'range',
+        } as BulkCommitDto),
+      ).rejects.toMatchObject({
+        response: { code: 'ROOM_LIMIT_REACHED', remaining: 1 },
+      });
+
+      expect(manager.save).not.toHaveBeenCalled();
+    });
+
+    it('AC5 — audits rooms.bulk_created with { count, range } for source range', async () => {
+      const result = await service.bulkCommit(makeActor(), {
+        rooms: makeRows(['301', '302']),
+        source: 'range',
+        range: { from: 301, to: 302 },
+      } as BulkCommitDto);
+
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'rooms.bulk_created',
+          entityType: 'room',
+          entityId: HOTEL_ID,
+          actorId: 'actor-1',
+          metadata: expect.objectContaining({
+            actorType: 'tenant_user',
+            hotelId: HOTEL_ID,
+            count: 2,
+            skipped: 0,
+            range: { from: 301, to: 302 },
+            source: 'range',
+          }),
+        }),
+      );
+      expect(result).toEqual({ created: 2, skipped: 0 });
+    });
+
+    it('AC6(11.7) — audits rooms.imported with { created, skipped } for source import', async () => {
+      await service.bulkCommit(makeActor(), {
+        rooms: makeRows(['301', '302']),
+        source: 'import',
+      } as BulkCommitDto);
+
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'rooms.imported',
+          metadata: expect.objectContaining({
+            count: 2,
+            skipped: 0,
+            range: null,
+            source: 'import',
+          }),
+        }),
+      );
+    });
+
+    it('audits only after the transaction commits, never inside it', async () => {
+      const callOrder: string[] = [];
+      dataSource.transaction.mockImplementation(
+        async (cb: (m: unknown) => unknown) => {
+          const result = await cb(manager);
+          callOrder.push('commit');
+          return result;
+        },
+      );
+      auditLogs.log.mockImplementation(async () => {
+        callOrder.push('audit');
+      });
+
+      await service.bulkCommit(makeActor(), {
+        rooms: makeRows(['301']),
+        source: 'range',
+      } as BulkCommitDto);
+
+      expect(callOrder).toEqual(['commit', 'audit']);
     });
   });
 });
