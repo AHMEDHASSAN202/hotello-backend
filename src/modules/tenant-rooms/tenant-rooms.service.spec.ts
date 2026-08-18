@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
+import { TenantUrlsService } from '../hotels/tenant-urls.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { BulkCommitDto, RoomRowDto } from './dto/bulk-commit.dto';
@@ -10,6 +11,7 @@ import { BulkPreviewDto } from './dto/bulk-preview.dto';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { ListRoomsQueryDto } from './dto/list-rooms-query.dto';
 import { UpdateRoomDto } from './dto/update-room.dto';
+import { RoomQrService } from './room-qr.service';
 import { Room } from './room.entity';
 import { RoomType } from './room-type.entity';
 import { NATURAL_ROOM_ORDER, TenantRoomsService } from './tenant-rooms.service';
@@ -36,6 +38,8 @@ describe('TenantRoomsService', () => {
   let hotelsRepo: { findOne: jest.Mock };
   let subscriptions: { getForHotel: jest.Mock };
   let auditLogs: { log: jest.Mock };
+  let tenantUrls: { buildGuestUrl: jest.Mock };
+  let roomQr: { generate: jest.Mock };
   let qb: Record<string, jest.Mock>;
 
   // Transaction manager wiring for createRoom (11.3) — configurable countable
@@ -84,6 +88,20 @@ describe('TenantRoomsService', () => {
     hotelsRepo = { findOne: jest.fn() };
     subscriptions = { getForHotel: jest.fn() };
     auditLogs = { log: jest.fn() };
+    tenantUrls = {
+      buildGuestUrl: jest.fn(
+        (slug: string, params?: Record<string, string>) =>
+          params
+            ? `https://guest.gxp.example/${slug}?${new URLSearchParams(params).toString()}`
+            : `https://guest.gxp.example/${slug}`,
+      ),
+    };
+    roomQr = {
+      generate: jest.fn(async () => ({
+        body: Buffer.from('fake'),
+        contentType: 'image/png',
+      })),
+    };
 
     countable = 0;
     managerHotel = {
@@ -129,6 +147,8 @@ describe('TenantRoomsService', () => {
         { provide: SubscriptionsService, useValue: subscriptions },
         { provide: DataSource, useValue: dataSource },
         { provide: AuditLogsService, useValue: auditLogs },
+        { provide: TenantUrlsService, useValue: tenantUrls },
+        { provide: RoomQrService, useValue: roomQr },
       ],
     }).compile();
     service = moduleRef.get(TenantRoomsService);
@@ -256,9 +276,10 @@ describe('TenantRoomsService', () => {
     });
   });
 
-  describe('detail (11.2)', () => {
+  describe('detail (11.2/11.5)', () => {
     it('maps the room + roomType relation to a RoomView', async () => {
       roomsRepo.findOne.mockResolvedValue(makeRoom());
+      hotelsRepo.findOne.mockResolvedValue({ id: HOTEL_ID, slug: 'sunrise' });
       const result = await service.detail(HOTEL_ID, 'room-1');
       expect(result).toEqual({
         id: 'room-1',
@@ -266,7 +287,70 @@ describe('TenantRoomsService', () => {
         floor: 1,
         status: 'active',
         roomType: { id: 'rt-1', nameEn: 'Standard', nameAr: 'قياسية' },
+        guestUrl: 'https://guest.gxp.example/sunrise?room=101',
       });
+    });
+
+    it('AC4 — builds guestUrl from the hotel slug + room number, never client input', async () => {
+      roomsRepo.findOne.mockResolvedValue(makeRoom());
+      hotelsRepo.findOne.mockResolvedValue({ id: HOTEL_ID, slug: 'sunrise' });
+      await service.detail(HOTEL_ID, 'room-1');
+      expect(tenantUrls.buildGuestUrl).toHaveBeenCalledWith('sunrise', {
+        room: '101',
+      });
+    });
+
+    it('other hotel’s room id → 404 ROOM_NOT_FOUND', async () => {
+      roomsRepo.findOne.mockResolvedValue(null);
+      await expect(service.detail(HOTEL_ID, 'room-x')).rejects.toMatchObject({
+        response: { code: 'ROOM_NOT_FOUND', message: 'Room not found' },
+      });
+    });
+  });
+
+  describe('generalQr (11.5)', () => {
+    it('AC3/AC4 — builds the general guest URL and delegates to RoomQrService', async () => {
+      hotelsRepo.findOne.mockResolvedValue({ id: HOTEL_ID, slug: 'sunrise' });
+      const result = await service.generalQr(HOTEL_ID, 'png');
+      expect(tenantUrls.buildGuestUrl).toHaveBeenCalledWith('sunrise');
+      expect(roomQr.generate).toHaveBeenCalledWith(
+        'https://guest.gxp.example/sunrise',
+        'png',
+      );
+      expect(result.contentType).toBe('image/png');
+    });
+
+    it('unknown hotel → 404 HOTEL_NOT_FOUND', async () => {
+      hotelsRepo.findOne.mockResolvedValue(null);
+      await expect(service.generalQr(HOTEL_ID, 'png')).rejects.toMatchObject({
+        response: { code: 'HOTEL_NOT_FOUND' },
+      });
+    });
+  });
+
+  describe('roomQr (11.5)', () => {
+    it('AC3/AC4 — builds the room guest URL (?room=) and delegates to RoomQrService', async () => {
+      roomsRepo.findOne.mockResolvedValue(makeRoom());
+      hotelsRepo.findOne.mockResolvedValue({ id: HOTEL_ID, slug: 'sunrise' });
+      const result = await service.roomQr(HOTEL_ID, 'room-1', 'svg');
+      expect(tenantUrls.buildGuestUrl).toHaveBeenCalledWith('sunrise', {
+        room: '101',
+      });
+      expect(roomQr.generate).toHaveBeenCalledWith(
+        'https://guest.gxp.example/sunrise?room=101',
+        'svg',
+      );
+      expect(result.filename).toBe('room-101.svg');
+    });
+
+    it('cross-tenant room id → 404 ROOM_NOT_FOUND (QR never confirms other tenants)', async () => {
+      roomsRepo.findOne.mockResolvedValue(null);
+      await expect(
+        service.roomQr(HOTEL_ID, 'room-x', 'png'),
+      ).rejects.toMatchObject({
+        response: { code: 'ROOM_NOT_FOUND', message: 'Room not found' },
+      });
+      expect(roomQr.generate).not.toHaveBeenCalled();
     });
   });
 

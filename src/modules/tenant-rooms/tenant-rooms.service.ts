@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
+import { TenantUrlsService } from '../hotels/tenant-urls.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { BulkCommitDto } from './dto/bulk-commit.dto';
@@ -22,6 +23,7 @@ import {
   validateRoomRows,
   ValidatedRow,
 } from './room-rows';
+import { QrFormat, QrResult, RoomQrService } from './room-qr.service';
 import { COUNTABLE_ROOM_STATUSES, Room, RoomStatus } from './room.entity';
 import { RoomType } from './room-type.entity';
 
@@ -41,6 +43,16 @@ export interface RoomView {
   floor: number | null;
   status: Room['status'];
   roomType: { id: string; nameEn: string; nameAr: string };
+}
+
+/** Detail response (Story 11.5 AC4) — `RoomView` plus the derived guest URL. */
+export interface RoomDetailView extends RoomView {
+  guestUrl: string;
+}
+
+/** A generated QR's bytes plus the filename the download should carry (Story 11.5 AC3). */
+export interface RoomQrDownload extends QrResult {
+  filename: string;
 }
 
 /** One row of a bulk-range preview (Story 11.3 AC2). */
@@ -73,6 +85,8 @@ export class TenantRoomsService {
     private readonly subscriptions: SubscriptionsService,
     private readonly dataSource: DataSource,
     private readonly auditLogs: AuditLogsService,
+    private readonly tenantUrls: TenantUrlsService,
+    private readonly roomQrService: RoomQrService,
   ) {}
 
   /**
@@ -159,10 +173,63 @@ export class TenantRoomsService {
     return room;
   }
 
-  /** Story 11.2 — the room detail view (roomType relation; guestUrl lands in Task 8). */
-  async detail(hotelId: string, id: string): Promise<RoomView> {
-    const room = await this.findRoomInHotel(hotelId, id);
-    return this.toRoomView(room);
+  /**
+   * Story 11.2/11.5 AC4 — the room detail view (roomType relation) plus the
+   * derived guest URL. The slug always comes from the actor's own hotel
+   * (loaded server-side by `hotelId`) — never from client input.
+   */
+  async detail(hotelId: string, id: string): Promise<RoomDetailView> {
+    const [room, hotel] = await Promise.all([
+      this.findRoomInHotel(hotelId, id),
+      this.loadHotel(hotelId),
+    ]);
+    return {
+      ...this.toRoomView(room),
+      guestUrl: this.tenantUrls.buildGuestUrl(hotel.slug, {
+        room: room.roomNumber,
+      }),
+    };
+  }
+
+  /** Story 11.5 AC3/AC4 — `GET /tenant/rooms/qr/general`: the hotel-wide guest URL as a QR. */
+  async generalQr(hotelId: string, format: QrFormat): Promise<RoomQrDownload> {
+    const hotel = await this.loadHotel(hotelId);
+    const url = this.tenantUrls.buildGuestUrl(hotel.slug);
+    const { body, contentType } = await this.roomQrService.generate(url, format);
+    return { body, contentType, filename: `general-qr.${format}` };
+  }
+
+  /**
+   * Story 11.5 AC3/AC4 — `GET /tenant/rooms/:id/qr`: the room-scoped guest
+   * URL as a QR. Reuses `findRoomInHotel`, so a cross-tenant id 404s before
+   * any QR is generated (never confirms another hotel's room exists).
+   */
+  async roomQr(
+    hotelId: string,
+    id: string,
+    format: QrFormat,
+  ): Promise<RoomQrDownload> {
+    const [room, hotel] = await Promise.all([
+      this.findRoomInHotel(hotelId, id),
+      this.loadHotel(hotelId),
+    ]);
+    const url = this.tenantUrls.buildGuestUrl(hotel.slug, {
+      room: room.roomNumber,
+    });
+    const { body, contentType } = await this.roomQrService.generate(url, format);
+    return { body, contentType, filename: `room-${room.roomNumber}.${format}` };
+  }
+
+  /** Story 11.5 — loads the actor's own hotel (for its slug); 404s if somehow missing. */
+  private async loadHotel(hotelId: string): Promise<Hotel> {
+    const hotel = await this.hotelsRepo.findOne({ where: { id: hotelId } });
+    if (!hotel) {
+      throw new NotFoundException({
+        code: 'HOTEL_NOT_FOUND',
+        message: 'Hotel not found',
+      });
+    }
+    return hotel;
   }
 
   /** Story 11.2 AC3 — the current plan's `maxRooms` (`null` = unlimited). */

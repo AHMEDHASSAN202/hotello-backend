@@ -12,7 +12,7 @@ import { HotelOnboardingService } from './hotel-onboarding.service';
 import { Hotel } from './hotel.entity';
 import { HotelsController } from './hotels.controller';
 import { HotelsService } from './hotels.service';
-import { TenantUrlsService } from './tenant-urls.service';
+import { TenantUrlsModule } from './tenant-urls.module';
 
 @Module({
   imports: [
@@ -22,9 +22,10 @@ import { TenantUrlsService } from './tenant-urls.service';
     TenantRolesModule,
     TenantRoomsModule,
     AuditLogsModule,
+    TenantUrlsModule,
   ],
   controllers: [HotelsController],
-  providers: [HotelsService, HotelOnboardingService, TenantUrlsService],
-  exports: [TypeOrmModule],
+  providers: [HotelsService, HotelOnboardingService],
+  exports: [TypeOrmModule, TenantUrlsModule],
 })
 export class HotelsModule {}
