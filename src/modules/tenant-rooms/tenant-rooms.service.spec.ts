@@ -9,6 +9,7 @@ import { BulkCommitDto, RoomRowDto } from './dto/bulk-commit.dto';
 import { BulkPreviewDto } from './dto/bulk-preview.dto';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { ListRoomsQueryDto } from './dto/list-rooms-query.dto';
+import { UpdateRoomDto } from './dto/update-room.dto';
 import { Room } from './room.entity';
 import { RoomType } from './room-type.entity';
 import { NATURAL_ROOM_ORDER, TenantRoomsService } from './tenant-rooms.service';
@@ -787,6 +788,254 @@ describe('TenantRoomsService', () => {
         rooms: makeRows(['301']),
         source: 'range',
       } as BulkCommitDto);
+
+      expect(callOrder).toEqual(['commit', 'audit']);
+    });
+  });
+
+  describe('updateRoom (11.4)', () => {
+    const baseRoom = (o: Record<string, unknown> = {}) => ({
+      id: 'room-1',
+      hotelId: HOTEL_ID,
+      roomNumber: '101',
+      floor: 1,
+      roomTypeId: 'rt-1',
+      status: 'active',
+      roomType: { id: 'rt-1', nameEn: 'Standard', nameAr: 'قياسية' },
+      ...o,
+    });
+
+    beforeEach(() => {
+      subscriptions.getForHotel.mockResolvedValue({
+        current: { plan: { maxRooms: 50 } },
+      });
+      managerHotel.findOne.mockResolvedValue({ id: HOTEL_ID, roomsCount: 3 });
+      managerRoomTypes.findOne.mockResolvedValue({
+        id: 'rt-2',
+        hotelId: HOTEL_ID,
+        nameEn: 'Deluxe',
+        nameAr: 'ديلوكس',
+      });
+      // findOne on the manager's Room repo serves two purposes here: loading
+      // the room-under-edit (queried by id) and the roomNumber dupe check
+      // (queried by roomNumber, no id) — branch on which shape was asked for.
+      managerRooms.findOne.mockImplementation(
+        async ({ where }: { where: Record<string, unknown> }) => {
+          if (where.id) return baseRoom();
+          return null;
+        },
+      );
+    });
+
+    it('AC1 — edits floor/type/status; audits room.updated with field-level diff', async () => {
+      countable = 3; // active -> out_of_service: still countable either way
+
+      const result = await service.updateRoom(makeActor(), 'room-1', {
+        floor: 4,
+        roomTypeId: 'rt-2',
+        status: 'out_of_service',
+      } as UpdateRoomDto);
+
+      expect(result).toMatchObject({
+        floor: 4,
+        status: 'out_of_service',
+        roomType: { id: 'rt-2', nameEn: 'Deluxe' },
+      });
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'room.updated',
+          entityType: 'room',
+          entityId: 'room-1',
+          actorId: 'actor-1',
+          metadata: {
+            actorType: 'tenant_user',
+            hotelId: HOTEL_ID,
+            diff: {
+              floor: { from: 1, to: 4 },
+              roomTypeId: { from: 'rt-1', to: 'rt-2' },
+              status: { from: 'active', to: 'out_of_service' },
+            },
+          },
+        }),
+      );
+    });
+
+    it('AC1 — renumber allowed while hasStayHistory() is false; normalized + uniqueness-checked (409 ROOM_NUMBER_TAKEN)', async () => {
+      countable = 3;
+
+      const result = await service.updateRoom(makeActor(), 'room-1', {
+        roomNumber: ' 202b ',
+      } as UpdateRoomDto);
+
+      expect(result.roomNumber).toBe('202B');
+      expect(managerRooms.save).toHaveBeenCalledWith(
+        expect.objectContaining({ roomNumber: '202B' }),
+      );
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            diff: { roomNumber: { from: '101', to: '202B' } },
+          }),
+        }),
+      );
+
+      // Now the target number is already taken by another room in the hotel.
+      managerRooms.findOne.mockImplementation(
+        async ({ where }: { where: Record<string, unknown> }) => {
+          if (where.id) return baseRoom();
+          return { id: 'other-room', roomNumber: '303' };
+        },
+      );
+
+      await expect(
+        service.updateRoom(makeActor(), 'room-1', {
+          roomNumber: '303',
+        } as UpdateRoomDto),
+      ).rejects.toMatchObject({
+        response: { code: 'ROOM_NUMBER_TAKEN', roomNumber: '303' },
+      });
+    });
+
+    it('AC2 — active → inactive frees a seat: hotels.roomsCount recomputed inside the tx', async () => {
+      countable = 2; // after saving, this room no longer counts
+
+      await service.updateRoom(makeActor(), 'room-1', {
+        status: 'inactive',
+      } as UpdateRoomDto);
+
+      expect(managerHotel.save).toHaveBeenCalledWith(
+        expect.objectContaining({ roomsCount: 2 }),
+      );
+    });
+
+    it('AC2 — inactive → active re-checks the plan limit in-tx and can 409 ROOM_LIMIT_REACHED (re-enable discipline)', async () => {
+      managerRooms.findOne.mockImplementation(
+        async ({ where }: { where: Record<string, unknown> }) => {
+          if (where.id) return baseRoom({ status: 'inactive' });
+          return null;
+        },
+      );
+      countable = 5;
+      subscriptions.getForHotel.mockResolvedValue({
+        current: { plan: { maxRooms: 5 } },
+      });
+
+      await expect(
+        service.updateRoom(makeActor(), 'room-1', {
+          status: 'active',
+        } as UpdateRoomDto),
+      ).rejects.toMatchObject({
+        response: {
+          code: 'ROOM_LIMIT_REACHED',
+          limit: 5,
+          used: 5,
+          remaining: 0,
+        },
+      });
+
+      expect(managerRooms.save).not.toHaveBeenCalled();
+      expect(managerHotel.save).not.toHaveBeenCalled();
+    });
+
+    it('AC2 — locks the hotel BEFORE counting countable rooms when reactivating (race guard)', async () => {
+      managerRooms.findOne.mockImplementation(
+        async ({ where }: { where: Record<string, unknown> }) => {
+          if (where.id) return baseRoom({ status: 'inactive' });
+          return null;
+        },
+      );
+      const callOrder: string[] = [];
+      managerHotel.findOne.mockImplementation(
+        async (opts: Record<string, unknown>) => {
+          if (opts?.lock) callOrder.push('lock');
+          return { id: HOTEL_ID, roomsCount: 3 };
+        },
+      );
+      const spyQb = countQb();
+      const rawGetCount = spyQb.getCount;
+      spyQb.getCount = jest.fn(async () => {
+        callOrder.push('count');
+        return rawGetCount();
+      });
+      managerRooms.createQueryBuilder.mockReturnValue(spyQb);
+      countable = 2;
+
+      await service.updateRoom(makeActor(), 'room-1', {
+        status: 'active',
+      } as UpdateRoomDto);
+
+      expect(callOrder[0]).toEqual('lock');
+      expect(callOrder).toContain('count');
+    });
+
+    it('AC2 — active → out_of_service does NOT change the countable total (no limit re-check needed)', async () => {
+      subscriptions.getForHotel.mockResolvedValue({
+        current: { plan: { maxRooms: 4 } },
+      });
+      managerHotel.findOne.mockResolvedValue({ id: HOTEL_ID, roomsCount: 4 });
+      countable = 4; // at the limit already — a lateral transition must not trip it
+
+      await expect(
+        service.updateRoom(makeActor(), 'room-1', {
+          status: 'out_of_service',
+        } as UpdateRoomDto),
+      ).resolves.toBeDefined();
+
+      expect(managerHotel.save).toHaveBeenCalledWith(
+        expect.objectContaining({ roomsCount: 4 }),
+      );
+    });
+
+    it('cross-tenant id → 404 ROOM_NOT_FOUND', async () => {
+      managerRooms.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.updateRoom(makeActor(), 'room-x', {
+          floor: 2,
+        } as UpdateRoomDto),
+      ).rejects.toMatchObject({ response: { code: 'ROOM_NOT_FOUND' } });
+    });
+
+    it('unknown target type → 404 ROOM_TYPE_NOT_FOUND', async () => {
+      managerRoomTypes.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.updateRoom(makeActor(), 'room-1', {
+          roomTypeId: 'rt-ghost',
+        } as UpdateRoomDto),
+      ).rejects.toMatchObject({ response: { code: 'ROOM_TYPE_NOT_FOUND' } });
+    });
+
+    it('no actual changes → no audit log written', async () => {
+      countable = 3;
+
+      await service.updateRoom(makeActor(), 'room-1', {
+        floor: 1,
+        status: 'active',
+      } as UpdateRoomDto);
+
+      expect(auditLogs.log).not.toHaveBeenCalled();
+      expect(managerRooms.save).not.toHaveBeenCalled();
+      expect(managerHotel.save).not.toHaveBeenCalled();
+    });
+
+    it('audits room.updated only after the transaction commits, never inside it', async () => {
+      const callOrder: string[] = [];
+      dataSource.transaction.mockImplementation(
+        async (cb: (m: unknown) => unknown) => {
+          const result = await cb(manager);
+          callOrder.push('commit');
+          return result;
+        },
+      );
+      auditLogs.log.mockImplementation(async () => {
+        callOrder.push('audit');
+      });
+      countable = 3;
+
+      await service.updateRoom(makeActor(), 'room-1', {
+        floor: 9,
+      } as UpdateRoomDto);
 
       expect(callOrder).toEqual(['commit', 'audit']);
     });

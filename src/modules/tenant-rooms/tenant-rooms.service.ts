@@ -14,6 +14,7 @@ import { BulkCommitDto } from './dto/bulk-commit.dto';
 import { BulkPreviewDto } from './dto/bulk-preview.dto';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { ListRoomsQueryDto } from './dto/list-rooms-query.dto';
+import { UpdateRoomDto } from './dto/update-room.dto';
 import {
   expandRange,
   RoomRowInput,
@@ -21,7 +22,7 @@ import {
   validateRoomRows,
   ValidatedRow,
 } from './room-rows';
-import { COUNTABLE_ROOM_STATUSES, Room } from './room.entity';
+import { COUNTABLE_ROOM_STATUSES, Room, RoomStatus } from './room.entity';
 import { RoomType } from './room-type.entity';
 
 /**
@@ -249,6 +250,143 @@ export class TenantRoomsService {
     });
 
     return room;
+  }
+
+  /**
+   * Story 11.4 — edit a room and/or transition its status. Runs entirely in
+   * one transaction: the hotel row is locked FIRST (same discipline as every
+   * other room-mutating path — see `lockHotel`'s doc comment), so a
+   * concurrent create/bulk-commit/update can't race the seat count or a
+   * room-number dupe check against a stale snapshot.
+   *
+   * AC1 — floor/type/status are always editable; the room number is only
+   * editable while `hasStayHistory()` is false (currently always — see that
+   * method's doc). AC2 — a status change that moves the room INTO the
+   * countable set (`inactive` → `active`/`out_of_service`) re-checks the
+   * plan limit BEFORE the room is saved, using the count of its current
+   * (still non-countable) state so it isn't double-counted against itself;
+   * a change between the two countable statuses needs no limit check at all.
+   * Every status change recomputes `hotel.roomsCount` from the just-saved
+   * row AFTER saving (the staff `disable()`/`enable()` discipline).
+   */
+  async updateRoom(
+    actor: TenantUser,
+    id: string,
+    dto: UpdateRoomDto,
+  ): Promise<RoomView> {
+    const { room, diff } = await this.dataSource.transaction(async (manager) => {
+      const hotel = await this.lockHotel(manager, actor.hotelId);
+      const roomsRepo = manager.getRepository(Room);
+
+      const room = await roomsRepo.findOne({
+        where: { id, hotelId: actor.hotelId },
+        relations: ['roomType'],
+      });
+      if (!room) {
+        throw new NotFoundException({
+          code: 'ROOM_NOT_FOUND',
+          message: 'Room not found',
+        });
+      }
+
+      const diff: Record<string, { from: unknown; to: unknown }> = {};
+
+      if (dto.roomTypeId !== undefined && dto.roomTypeId !== room.roomTypeId) {
+        const roomType = await this.assertTypeInHotel(
+          manager,
+          actor.hotelId,
+          dto.roomTypeId,
+        );
+        diff.roomTypeId = { from: room.roomTypeId, to: dto.roomTypeId };
+        room.roomTypeId = dto.roomTypeId;
+        room.roomType = roomType;
+      }
+
+      if (dto.floor !== undefined && dto.floor !== room.floor) {
+        diff.floor = { from: room.floor, to: dto.floor };
+        room.floor = dto.floor;
+      }
+
+      if (dto.roomNumber !== undefined) {
+        // Epic 12: check stays table — once stays exist, a true result here
+        // throws instead of falling through to the renumber below. The stub
+        // always returns false today, so every renumber is currently allowed.
+        const hasHistory = await this.hasStayHistory(room.id);
+        if (!hasHistory) {
+          const normalized = dto.roomNumber.trim().toUpperCase();
+          if (normalized !== room.roomNumber) {
+            const dupe = await roomsRepo.findOne({
+              where: { hotelId: actor.hotelId, roomNumber: normalized },
+            });
+            if (dupe && dupe.id !== room.id) {
+              throw new ConflictException({
+                code: 'ROOM_NUMBER_TAKEN',
+                message: `Room ${normalized} already exists`,
+                roomNumber: normalized,
+              });
+            }
+            diff.roomNumber = { from: room.roomNumber, to: normalized };
+            room.roomNumber = normalized;
+          }
+        }
+      }
+
+      const statusChanged =
+        dto.status !== undefined && dto.status !== room.status;
+      if (statusChanged) {
+        const wasCountable = COUNTABLE_ROOM_STATUSES.includes(room.status);
+        const willBeCountable = COUNTABLE_ROOM_STATUSES.includes(
+          dto.status as RoomStatus,
+        );
+        if (!wasCountable && willBeCountable) {
+          // AC2 re-enable discipline — count BEFORE this room's status
+          // flips, so it isn't counted against its own reactivation.
+          const used = await this.countCountable(manager, actor.hotelId);
+          await this.assertWithinLimit(actor.hotelId, used, 1);
+        }
+        diff.status = { from: room.status, to: dto.status };
+        room.status = dto.status as RoomStatus;
+      }
+
+      const hasChanges = Object.keys(diff).length > 0;
+      const saved = hasChanges ? await roomsRepo.save(room) : room;
+
+      if (statusChanged) {
+        // Recompute from the just-saved row, not an arithmetic +/-1 — a
+        // lateral active<->out_of_service move must report the same total.
+        hotel.roomsCount = await this.countCountable(manager, actor.hotelId);
+        await manager.getRepository(Hotel).save(hotel);
+      }
+
+      return { room: saved, diff };
+    });
+
+    if (Object.keys(diff).length > 0) {
+      await this.auditLogs.log({
+        action: 'room.updated',
+        entityType: 'room',
+        entityId: room.id,
+        actorId: actor.id,
+        metadata: {
+          actorType: 'tenant_user',
+          hotelId: actor.hotelId,
+          diff,
+        },
+      });
+    }
+
+    return this.toRoomView(room);
+  }
+
+  /**
+   * Story 11.4 AC1 — whether this room has ever hosted a guest stay. Once
+   * true, renumbering is blocked (the number is printed on QR cards tied to
+   * that stay's history). No stays table exists yet, so this always returns
+   * false — Epic 12 wires the real check.
+   */
+  async hasStayHistory(roomId: string): Promise<boolean> {
+    // Epic 12: check stays table
+    return false;
   }
 
   /**

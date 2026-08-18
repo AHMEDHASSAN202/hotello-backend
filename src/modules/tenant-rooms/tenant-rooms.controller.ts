@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
@@ -17,6 +18,7 @@ import { BulkCommitDto } from './dto/bulk-commit.dto';
 import { BulkPreviewDto } from './dto/bulk-preview.dto';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { ListRoomsQueryDto } from './dto/list-rooms-query.dto';
+import { UpdateRoomDto } from './dto/update-room.dto';
 import { TenantRoomsService } from './tenant-rooms.service';
 
 /**
@@ -78,5 +80,15 @@ export class TenantRoomsController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.roomsService.detail(user.hotelId, id);
+  }
+
+  @Patch(':id')
+  @RequirePermissions('rooms.update')
+  update(
+    @CurrentTenantUser() user: TenantUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateRoomDto,
+  ) {
+    return this.roomsService.updateRoom(user, id, dto);
   }
 }
