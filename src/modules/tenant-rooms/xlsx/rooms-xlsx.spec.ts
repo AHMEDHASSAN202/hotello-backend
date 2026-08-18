@@ -5,9 +5,11 @@ import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { Hotel } from '../../hotels/hotel.entity';
 import { TenantUser } from '../../tenant-users/tenant-user.entity';
 import { ListRoomsQueryDto } from '../dto/list-rooms-query.dto';
+import { validateRoomRows } from '../room-rows';
 import { Room } from '../room.entity';
 import { RoomType } from '../room-type.entity';
 import { TenantRoomsService } from '../tenant-rooms.service';
+import { parseImport } from './parse-import';
 import { EXAMPLE_PREFIX, XLSX_STRINGS } from './rooms-xlsx.constants';
 import { RoomsXlsxService } from './rooms-xlsx.service';
 
@@ -352,6 +354,13 @@ describe('buildTemplate (11.7)', () => {
 });
 
 describe('parseImport (11.7)', () => {
+  // Story 11.7 fix round — `parseImport` moved out of RoomsXlsxService into a
+  // standalone pure function (xlsx/parse-import.ts) to avoid a circular
+  // dependency (TenantRoomsService.importPreview needed it, and
+  // RoomsXlsxService.exportForHotel already depends on TenantRoomsService).
+  // `service` here is only ever used for `buildTemplate`/`buildExport` — the
+  // fixtures for the round-trip tests — `parseImport` itself is called as a
+  // plain imported function, real exceljs, no mocking.
   let service: RoomsXlsxService;
   let hotelsRepo: { findOne: jest.Mock };
   let roomTypesRepo: { find: jest.Mock };
@@ -413,7 +422,7 @@ describe('parseImport (11.7)', () => {
 
     const filledBuffer = (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
 
-    const { rows, skippedExampleRows } = await service.parseImport(filledBuffer, types);
+    const { rows, skippedExampleRows } = await parseImport(filledBuffer, types);
 
     expect(skippedExampleRows).toBe(3);
     expect(rows).toEqual([
@@ -430,7 +439,7 @@ describe('parseImport (11.7)', () => {
       [null, null, null, null],
     ]);
 
-    const { rows, skippedExampleRows } = await service.parseImport(buffer, types);
+    const { rows, skippedExampleRows } = await parseImport(buffer, types);
 
     expect(skippedExampleRows).toBe(1);
     expect(rows).toEqual([
@@ -441,7 +450,7 @@ describe('parseImport (11.7)', () => {
   it('AC5 — leading-zero numbers survive as text ("007")', async () => {
     const buffer = await workbookWithRows([['007', 1, 'Standard', 'active']]);
 
-    const { rows } = await service.parseImport(buffer, types);
+    const { rows } = await parseImport(buffer, types);
 
     expect(rows[0].roomNumber).toBe('007');
   });
@@ -455,7 +464,7 @@ describe('parseImport (11.7)', () => {
     ]);
     const buffer = await workbookWithRows(extra);
 
-    await expect(service.parseImport(buffer, types)).rejects.toMatchObject({
+    await expect(parseImport(buffer, types)).rejects.toMatchObject({
       response: { code: 'IMPORT_TOO_MANY_ROWS', max: 1000 },
     });
   });
@@ -467,7 +476,7 @@ describe('parseImport (11.7)', () => {
       ['303', 1, 'Nonexistent Type', 'active'], // unknown → null
     ]);
 
-    const { rows } = await service.parseImport(buffer, types);
+    const { rows } = await parseImport(buffer, types);
 
     expect(rows[0].roomTypeId).toBe('rt-2');
     expect(rows[1].roomTypeId).toBe('rt-1');
@@ -480,7 +489,7 @@ describe('parseImport (11.7)', () => {
       ['302', '', 'Standard', 'active'],
     ]);
 
-    const { rows } = await service.parseImport(buffer, types);
+    const { rows } = await parseImport(buffer, types);
 
     expect(Number.isNaN(rows[0].floor)).toBe(true);
     expect(rows[1].floor).toBeNull();
@@ -493,7 +502,7 @@ describe('parseImport (11.7)', () => {
       ['303', 1, 'Standard', 'retired'],
     ]);
 
-    const { rows } = await service.parseImport(buffer, types);
+    const { rows } = await parseImport(buffer, types);
 
     expect(rows[0].status).toBe('active');
     expect(rows[1].status).toBe('out_of_service');
@@ -503,8 +512,103 @@ describe('parseImport (11.7)', () => {
   it('a corrupt / non-xlsx buffer that fails to load → 400 IMPORT_FILE_INVALID', async () => {
     const buffer = Buffer.from('not a real xlsx file');
 
-    await expect(service.parseImport(buffer, types)).rejects.toMatchObject({
+    await expect(parseImport(buffer, types)).rejects.toMatchObject({
       response: { code: 'IMPORT_FILE_INVALID' },
     });
+  });
+
+  it('a workbook with zero worksheets (loads fine, no sheet to read) → 400 IMPORT_FILE_INVALID', async () => {
+    const emptyWorkbook = new ExcelJS.Workbook(); // never call addWorksheet
+    const buffer = (await emptyWorkbook.xlsx.writeBuffer()) as unknown as Buffer;
+
+    await expect(parseImport(buffer, types)).rejects.toMatchObject({
+      response: { code: 'IMPORT_FILE_INVALID' },
+    });
+  });
+});
+
+describe('export → import round-trip (11.7 AC4/AC5)', () => {
+  let service: RoomsXlsxService;
+  let hotelsRepo: { findOne: jest.Mock };
+  let roomTypesRepo: { find: jest.Mock };
+  let tenantRoomsService: { listAllForExport: jest.Mock };
+  let auditLogs: { log: jest.Mock };
+
+  beforeEach(async () => {
+    hotelsRepo = { findOne: jest.fn() };
+    roomTypesRepo = { find: jest.fn() };
+    tenantRoomsService = { listAllForExport: jest.fn() };
+    auditLogs = { log: jest.fn() };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        RoomsXlsxService,
+        { provide: getRepositoryToken(Hotel), useValue: hotelsRepo },
+        { provide: getRepositoryToken(RoomType), useValue: roomTypesRepo },
+        { provide: TenantRoomsService, useValue: tenantRoomsService },
+        { provide: AuditLogsService, useValue: auditLogs },
+      ],
+    }).compile();
+    service = moduleRef.get(RoomsXlsxService);
+  });
+
+  it("AC4/AC5 — buildExport()'s own output, re-imported via parseImport(), round-trips with zero diffs and every row flags DUPLICATE_IN_HOTEL against the same fixtures", async () => {
+    const typeStandard = makeRoomType({ id: 'rt-1', nameEn: 'Standard', nameAr: 'قياسية' });
+    const typeDeluxe = makeRoomType({ id: 'rt-2', nameEn: 'Deluxe', nameAr: 'ديلوكس' });
+    const types = [typeStandard, typeDeluxe];
+
+    const rooms = [
+      makeRoom({
+        id: 'room-1',
+        roomNumber: '101',
+        floor: 1,
+        status: 'active',
+        roomTypeId: 'rt-1',
+        roomType: typeStandard,
+      }),
+      makeRoom({
+        id: 'room-2',
+        roomNumber: '102A',
+        floor: 1,
+        status: 'out_of_service',
+        roomTypeId: 'rt-2',
+        roomType: typeDeluxe,
+      }),
+      makeRoom({
+        id: 'room-3',
+        roomNumber: '007',
+        floor: null,
+        status: 'active',
+        roomTypeId: 'rt-1',
+        roomType: typeStandard,
+      }),
+    ];
+
+    // Real buildExport() output, real parseImport() re-parse — no mocking
+    // anywhere in this chain.
+    const exportBuffer = await service.buildExport(rooms, 'en');
+    const { rows, skippedExampleRows } = await parseImport(exportBuffer, types);
+
+    // Zero diffs: every exported room comes back with the exact same
+    // roomNumber/floor/roomTypeId/status it was exported with.
+    expect(skippedExampleRows).toBe(0);
+    expect(rows).toEqual([
+      { row: 2, roomNumber: '101', floor: 1, roomTypeId: 'rt-1', status: 'active' },
+      { row: 3, roomNumber: '102A', floor: 1, roomTypeId: 'rt-2', status: 'out_of_service' },
+      { row: 4, roomNumber: '007', floor: null, roomTypeId: 'rt-1', status: 'active' },
+    ]);
+
+    // Re-importing a hotel's own export (nothing changed) must flag every
+    // row as an existing-in-hotel duplicate, never anything else.
+    const existingNumbers = new Set(rooms.map((r) => r.roomNumber));
+    const typeIds = new Set(types.map((t) => t.id));
+    const { rows: validated } = validateRoomRows(rows, { existingNumbers, typeIds });
+
+    expect(validated).toHaveLength(3);
+    for (const row of validated) {
+      expect(row.issues).toEqual([
+        { row: row.row, field: 'roomNumber', code: 'DUPLICATE_IN_HOTEL' },
+      ]);
+    }
   });
 });

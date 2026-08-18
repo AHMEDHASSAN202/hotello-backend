@@ -1,8 +1,6 @@
 import {
   BadRequestException,
   ConflictException,
-  forwardRef,
-  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -34,8 +32,8 @@ import {
 import { QrFormat, QrResult, RoomQrService } from './room-qr.service';
 import { COUNTABLE_ROOM_STATUSES, Room, RoomStatus } from './room.entity';
 import { RoomType } from './room-type.entity';
+import { parseImport } from './xlsx/parse-import';
 import { IMPORT_XLSX_MIME_TYPES } from './xlsx/rooms-xlsx.constants';
-import { RoomsXlsxService } from './xlsx/rooms-xlsx.service';
 
 /**
  * Story 11.2 — the natural-sort expression for room numbers: numeric prefix
@@ -99,12 +97,6 @@ export class TenantRoomsService {
     private readonly auditLogs: AuditLogsService,
     private readonly tenantUrls: TenantUrlsService,
     private readonly roomQrService: RoomQrService,
-    // Story 11.7 — RoomsXlsxService.parseImport (xlsx -> RoomRowInput[]).
-    // forwardRef both directions: RoomsXlsxService already depends on this
-    // service (exportForHotel calls listAllForExport), so the two are
-    // mutually dependent within the same module.
-    @Inject(forwardRef(() => RoomsXlsxService))
-    private readonly roomsXlsxService: RoomsXlsxService,
   ) {}
 
   /**
@@ -577,12 +569,17 @@ export class TenantRoomsService {
 
   /**
    * Story 11.7 AC4/AC5 — the Excel-import counterpart of `bulkPreview`:
-   * validates the uploaded file, parses it via `RoomsXlsxService.parseImport`
-   * (type names resolved to ids against the hotel's ACTIVE types), then
-   * reuses `assemblePreview` so the range and import preview surfaces can
-   * never drift apart. Read-only — nothing is written; `bulkCommit` with
-   * `source: 'import'` is the only path that persists rows, and it
-   * re-validates everything itself under the hotel lock.
+   * validates the uploaded file, parses it via the standalone `parseImport`
+   * (xlsx/parse-import.ts — a plain pure function, not a service method, so
+   * this stays a one-directional dependency: `RoomsXlsxService` already
+   * depends on this service via `exportForHotel` -> `listAllForExport`, and
+   * `parseImport` touches none of `RoomsXlsxService`'s injected repos, so
+   * routing it through that service here would only create an avoidable
+   * circular dependency), then reuses `assemblePreview` so the range and
+   * import preview surfaces can never drift apart. Read-only — nothing is
+   * written; `bulkCommit` with `source: 'import'` is the only path that
+   * persists rows, and it re-validates everything itself under the hotel
+   * lock.
    */
   async importPreview(
     actor: TenantUser,
@@ -595,7 +592,7 @@ export class TenantRoomsService {
       where: { hotelId, isActive: true },
     });
 
-    const { rows } = await this.roomsXlsxService.parseImport(file.buffer, types);
+    const { rows } = await parseImport(file.buffer, types);
     return this.assemblePreview(hotelId, rows);
   }
 

@@ -12,10 +12,18 @@ import { CreateRoomDto } from './dto/create-room.dto';
 import { ListRoomsQueryDto } from './dto/list-rooms-query.dto';
 import { UpdateRoomDto } from './dto/update-room.dto';
 import { RoomQrService } from './room-qr.service';
+import { RoomRowInput } from './room-rows';
 import { Room } from './room.entity';
 import { RoomType } from './room-type.entity';
 import { NATURAL_ROOM_ORDER, TenantRoomsService } from './tenant-rooms.service';
-import { RoomsXlsxService } from './xlsx/rooms-xlsx.service';
+import { parseImport } from './xlsx/parse-import';
+
+// Story 11.7 — `parseImport` is a standalone pure function (xlsx/parse-import.ts,
+// not a RoomsXlsxService method — keeps TenantRoomsService -> RoomsXlsxService
+// a one-directional, non-circular dependency), so it's mocked at the module
+// level rather than via a DI provider.
+jest.mock('./xlsx/parse-import');
+const mockedParseImport = parseImport as jest.MockedFunction<typeof parseImport>;
 
 const HOTEL_ID = 'hotel-1';
 
@@ -42,7 +50,6 @@ describe('TenantRoomsService', () => {
   let auditLogs: { log: jest.Mock };
   let tenantUrls: { buildGuestUrl: jest.Mock };
   let roomQr: { generate: jest.Mock };
-  let roomsXlsxService: { parseImport: jest.Mock };
   let qb: Record<string, jest.Mock>;
 
   // Transaction manager wiring for createRoom (11.3) — configurable countable
@@ -99,7 +106,7 @@ describe('TenantRoomsService', () => {
         contentType: 'image/png',
       })),
     };
-    roomsXlsxService = { parseImport: jest.fn() };
+    mockedParseImport.mockReset();
 
     countable = 0;
     managerHotel = {
@@ -148,7 +155,6 @@ describe('TenantRoomsService', () => {
         { provide: AuditLogsService, useValue: auditLogs },
         { provide: TenantUrlsService, useValue: tenantUrls },
         { provide: RoomQrService, useValue: roomQr },
-        { provide: RoomsXlsxService, useValue: roomsXlsxService },
       ],
     }).compile();
     service = moduleRef.get(TenantRoomsService);
@@ -806,21 +812,24 @@ describe('TenantRoomsService', () => {
     });
 
     it('AC4 — per-row issues carry the spreadsheet row number and field (duplicate/unknown type/bad status/empty required)', async () => {
-      roomsXlsxService.parseImport.mockResolvedValue({
+      mockedParseImport.mockResolvedValue({
         rows: [
           { row: 2, roomNumber: '301', floor: 1, roomTypeId: 'rt-1', status: 'active' },
           { row: 3, roomNumber: '301', floor: 1, roomTypeId: 'rt-1', status: 'active' },
           { row: 4, roomNumber: '', floor: null, roomTypeId: 'rt-1', status: 'active' },
           { row: 5, roomNumber: '303', floor: null, roomTypeId: 'rt-ghost', status: 'active' },
+          // 'weird' is intentionally not a valid status — exercises the
+          // INVALID_STATUS branch; parseImport itself would pass unmatched
+          // status text through as-is (see parse-import.ts), hence the cast.
           { row: 6, roomNumber: '304', floor: null, roomTypeId: 'rt-1', status: 'weird' },
-        ],
+        ] as unknown as RoomRowInput[],
         skippedExampleRows: 3,
       });
 
       const file = makeFile();
       const result = await service.importPreview(makeActor(), file);
 
-      expect(roomsXlsxService.parseImport).toHaveBeenCalledWith(file.buffer, [
+      expect(mockedParseImport).toHaveBeenCalledWith(file.buffer, [
         { id: 'rt-1', nameEn: 'Standard', nameAr: 'قياسية' },
       ]);
       expect(result.rows).toEqual([
@@ -847,7 +856,7 @@ describe('TenantRoomsService', () => {
 
     it('AC4 — returns remaining plan seats like the range preview', async () => {
       countable = 10;
-      roomsXlsxService.parseImport.mockResolvedValue({
+      mockedParseImport.mockResolvedValue({
         rows: [{ row: 2, roomNumber: '301', floor: null, roomTypeId: 'rt-1', status: 'active' }],
         skippedExampleRows: 0,
       });
@@ -866,7 +875,7 @@ describe('TenantRoomsService', () => {
       ).rejects.toMatchObject({
         response: { code: 'IMPORT_FILE_INVALID', message: expect.any(String) },
       });
-      expect(roomsXlsxService.parseImport).not.toHaveBeenCalled();
+      expect(mockedParseImport).not.toHaveBeenCalled();
     });
 
     it('AC5 — no file uploaded → 400 IMPORT_FILE_INVALID', async () => {
@@ -875,11 +884,11 @@ describe('TenantRoomsService', () => {
       ).rejects.toMatchObject({
         response: { code: 'IMPORT_FILE_INVALID' },
       });
-      expect(roomsXlsxService.parseImport).not.toHaveBeenCalled();
+      expect(mockedParseImport).not.toHaveBeenCalled();
     });
 
     it('IMPORT_TOO_MANY_ROWS from parseImport propagates unchanged', async () => {
-      roomsXlsxService.parseImport.mockRejectedValue({
+      mockedParseImport.mockRejectedValue({
         response: { code: 'IMPORT_TOO_MANY_ROWS' },
       });
 
