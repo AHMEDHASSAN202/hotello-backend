@@ -340,6 +340,29 @@ describe('HotelsService', () => {
       await service.update('hotel-1', { city: 'Cairo' }, regularAdmin);
       expect(auditLogs.log).not.toHaveBeenCalled();
     });
+
+    it('stores address coordinates and audits them as ordinary profile fields', async () => {
+      await service.update(
+        'hotel-1',
+        { latitude: 30.0444, longitude: 31.2357 },
+        regularAdmin,
+      );
+
+      expect(hotelsRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ latitude: 30.0444, longitude: 31.2357 }),
+      );
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'hotel.updated',
+          metadata: {
+            diff: {
+              latitude: { from: undefined, to: 30.0444 },
+              longitude: { from: undefined, to: 31.2357 },
+            },
+          },
+        }),
+      );
+    });
   });
 
   describe('slug change (SA-HTL-3 AC3)', () => {

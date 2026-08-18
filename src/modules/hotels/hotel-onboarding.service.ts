@@ -65,6 +65,8 @@ export class HotelOnboardingService {
           ...(dto.profile.currency ? { currency: dto.profile.currency } : {}),
           starRating: dto.profile.starRating ?? null,
           address: dto.profile.address ?? null,
+          latitude: dto.profile.latitude ?? null,
+          longitude: dto.profile.longitude ?? null,
           roomsCount: dto.profile.roomsCount ?? 0,
           onboardedById: actor.id,
         }),

@@ -1,0 +1,12 @@
+./dev.sh                # Postgres + backend + both frontends
+./dev.sh backend admin  # only the named services
+./dev.sh --no-db        # DB already running elsewhere
+./dev.sh --no-migrate   # skip migration:run on boot
+./dev.sh --install      # npm install wherever node_modules is missing
+
+http://localhost:3000/login                  Super Admin login
+http://localhost:3001/t/sunrise/login        Tenant login
+http://localhost:3001/t/sunrise/staff        Staff (Epic 09)
+http://localhost:3001/t/sunrise/roles        Roles (Epic 10)
+http://localhost:3001/t/sunrise/profile      My Profile
+http://localhost:4000/api/v1/tenant/public/context/sunrise   public tenant bootstrap

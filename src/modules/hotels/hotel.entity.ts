@@ -48,6 +48,14 @@ export class Hotel {
   @Column({ type: 'text', nullable: true })
   address: string | null;
 
+  // Coordinates captured with the address (Google Places selection in the
+  // dashboards) — the address text and the pair travel together.
+  @Column({ type: 'double precision', nullable: true })
+  latitude: number | null;
+
+  @Column({ type: 'double precision', nullable: true })
+  longitude: number | null;
+
   @Column()
   city: string;
 

@@ -175,6 +175,25 @@ describe('HotelOnboardingService', () => {
       );
     });
 
+    it('persists address coordinates from the Places selection (SA-HTL-3)', async () => {
+      await service.onboard(
+        makeDto({
+          profile: {
+            ...makeDto().profile,
+            address: '1 Corniche El Nil, Cairo',
+            latitude: 30.0444,
+            longitude: 31.2357,
+          },
+        }),
+        actor,
+      );
+
+      const hotelRepo = [...managerRepos.values()][0];
+      expect(hotelRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ latitude: 30.0444, longitude: 31.2357 }),
+      );
+    });
+
     it('applies profile defaults through the entity (only provided fields set)', async () => {
       await service.onboard(makeDto(), actor);
       const hotelRepo = [...managerRepos.values()][0];
