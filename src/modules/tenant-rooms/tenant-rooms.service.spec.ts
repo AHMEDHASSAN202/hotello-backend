@@ -1,13 +1,20 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { EntityManager } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import { TenantUser } from '../tenant-users/tenant-user.entity';
+import { CreateRoomDto } from './dto/create-room.dto';
 import { ListRoomsQueryDto } from './dto/list-rooms-query.dto';
 import { Room } from './room.entity';
+import { RoomType } from './room-type.entity';
 import { NATURAL_ROOM_ORDER, TenantRoomsService } from './tenant-rooms.service';
 
 const HOTEL_ID = 'hotel-1';
+
+const makeActor = (o: Record<string, unknown> = {}): TenantUser =>
+  ({ id: 'actor-1', hotelId: HOTEL_ID, name: 'Boss', ...o }) as unknown as TenantUser;
 
 const makeRoom = (o: Record<string, unknown> = {}) => ({
   id: 'room-1',
@@ -25,7 +32,31 @@ describe('TenantRoomsService', () => {
   let roomsRepo: { createQueryBuilder: jest.Mock; findOne: jest.Mock };
   let hotelsRepo: { findOne: jest.Mock };
   let subscriptions: { getForHotel: jest.Mock };
+  let auditLogs: { log: jest.Mock };
   let qb: Record<string, jest.Mock>;
+
+  // Transaction manager wiring for createRoom (11.3) — configurable countable
+  // room count per test.
+  let countable: number;
+  let manager: { getRepository: jest.Mock };
+  let managerHotel: { findOne: jest.Mock; save: jest.Mock };
+  let managerRoomTypes: { findOne: jest.Mock };
+  let managerRooms: {
+    findOne: jest.Mock;
+    create: jest.Mock;
+    save: jest.Mock;
+    createQueryBuilder: jest.Mock;
+  };
+  let dataSource: { transaction: jest.Mock };
+
+  const countQb = () => {
+    const qb: Record<string, jest.Mock> = {};
+    for (const m of ['where', 'andWhere']) {
+      qb[m] = jest.fn(() => qb);
+    }
+    qb.getCount = jest.fn(async () => countable);
+    return qb;
+  };
 
   beforeEach(async () => {
     qb = {};
@@ -48,6 +79,37 @@ describe('TenantRoomsService', () => {
     };
     hotelsRepo = { findOne: jest.fn() };
     subscriptions = { getForHotel: jest.fn() };
+    auditLogs = { log: jest.fn() };
+
+    countable = 0;
+    managerHotel = {
+      findOne: jest.fn().mockResolvedValue({ id: HOTEL_ID, roomsCount: 0 }),
+      save: jest.fn(async (h) => h),
+    };
+    managerRoomTypes = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'rt-1',
+        hotelId: HOTEL_ID,
+        nameEn: 'Standard',
+        nameAr: 'قياسية',
+      }),
+    };
+    managerRooms = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((d) => ({ id: 'room-new', createdAt: new Date(), ...d })),
+      save: jest.fn(async (r) => r),
+      createQueryBuilder: jest.fn(() => countQb()),
+    };
+    manager = {
+      getRepository: jest.fn((entity) => {
+        if (entity === Hotel) return managerHotel;
+        if (entity === RoomType) return managerRoomTypes;
+        return managerRooms;
+      }),
+    };
+    dataSource = {
+      transaction: jest.fn(async (cb: (m: unknown) => unknown) => cb(manager)),
+    };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -55,6 +117,8 @@ describe('TenantRoomsService', () => {
         { provide: getRepositoryToken(Room), useValue: roomsRepo },
         { provide: getRepositoryToken(Hotel), useValue: hotelsRepo },
         { provide: SubscriptionsService, useValue: subscriptions },
+        { provide: DataSource, useValue: dataSource },
+        { provide: AuditLogsService, useValue: auditLogs },
       ],
     }).compile();
     service = moduleRef.get(TenantRoomsService);
@@ -228,6 +292,192 @@ describe('TenantRoomsService', () => {
         { statuses: ['active', 'out_of_service'] },
       );
       expect(result).toBe(7);
+    });
+  });
+
+  describe('createRoom (11.3)', () => {
+    beforeEach(() => {
+      subscriptions.getForHotel.mockResolvedValue({
+        current: { plan: { maxRooms: 50 } },
+      });
+    });
+
+    it('AC1 — creates with normalized roomNumber (" 101a " → "101A"), default status active', async () => {
+      const result = await service.createRoom(makeActor(), {
+        roomNumber: ' 101a ',
+        floor: 2,
+        roomTypeId: 'rt-1',
+      } as CreateRoomDto);
+
+      expect(managerRooms.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hotelId: HOTEL_ID,
+          roomNumber: '101A',
+          floor: 2,
+          roomTypeId: 'rt-1',
+          status: 'active',
+        }),
+      );
+      expect(result).toMatchObject({
+        hotelId: HOTEL_ID,
+        roomNumber: '101A',
+        floor: 2,
+        status: 'active',
+        roomTypeId: 'rt-1',
+        roomType: { id: 'rt-1', nameEn: 'Standard' },
+      });
+    });
+
+    it('AC1 — duplicate number in the same hotel → 409 ROOM_NUMBER_TAKEN', async () => {
+      managerRooms.findOne.mockResolvedValue({ id: 'existing', roomNumber: '101A' });
+
+      await expect(
+        service.createRoom(makeActor(), {
+          roomNumber: '101a',
+          roomTypeId: 'rt-1',
+        } as CreateRoomDto),
+      ).rejects.toMatchObject({
+        response: { code: 'ROOM_NUMBER_TAKEN', roomNumber: '101A' },
+      });
+    });
+
+    it('AC1 — same number in another hotel is fine (isolation)', async () => {
+      await service.createRoom(makeActor(), {
+        roomNumber: '101a',
+        roomTypeId: 'rt-1',
+      } as CreateRoomDto);
+
+      // The dupe check is scoped to the actor's hotel — a matching number in
+      // another hotel would never be looked up, let alone block creation.
+      expect(managerRooms.findOne).toHaveBeenCalledWith({
+        where: { hotelId: HOTEL_ID, roomNumber: '101A' },
+      });
+    });
+
+    it('AC3 — at the limit (countable == maxRooms) → 409 ROOM_LIMIT_REACHED { limit, used }', async () => {
+      countable = 5;
+      subscriptions.getForHotel.mockResolvedValue({
+        current: { plan: { maxRooms: 5 } },
+      });
+
+      await expect(
+        service.createRoom(makeActor(), {
+          roomNumber: '999',
+          roomTypeId: 'rt-1',
+        } as CreateRoomDto),
+      ).rejects.toMatchObject({
+        response: {
+          code: 'ROOM_LIMIT_REACHED',
+          limit: 5,
+          used: 5,
+          remaining: 0,
+        },
+      });
+    });
+
+    it('AC3 — inactive rooms do not count toward the limit', async () => {
+      const spyQb = countQb();
+      managerRooms.createQueryBuilder.mockReturnValue(spyQb);
+      countable = 2; // countable rooms only — inactive rooms are excluded upstream
+      subscriptions.getForHotel.mockResolvedValue({
+        current: { plan: { maxRooms: 3 } },
+      });
+
+      await service.createRoom(makeActor(), {
+        roomNumber: '5',
+        roomTypeId: 'rt-1',
+      } as CreateRoomDto);
+
+      expect(spyQb.andWhere).toHaveBeenCalledWith('r.status IN (:...statuses)', {
+        statuses: ['active', 'out_of_service'],
+      });
+    });
+
+    it('AC3 — null maxRooms = unlimited, always passes', async () => {
+      countable = 9999;
+      subscriptions.getForHotel.mockResolvedValue({
+        current: { plan: { maxRooms: null } },
+      });
+
+      await expect(
+        service.createRoom(makeActor(), {
+          roomNumber: '5',
+          roomTypeId: 'rt-1',
+        } as CreateRoomDto),
+      ).resolves.toBeDefined();
+    });
+
+    it('AC3 — count runs inside the transaction with a pessimistic hotel lock (race guard)', async () => {
+      await service.createRoom(makeActor(), {
+        roomNumber: '5',
+        roomTypeId: 'rt-1',
+      } as CreateRoomDto);
+
+      expect(dataSource.transaction).toHaveBeenCalled();
+      expect(managerHotel.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: HOTEL_ID },
+          lock: { mode: 'pessimistic_write' },
+        }),
+      );
+    });
+
+    it('keeps hotels.roomsCount in sync (used + 1) inside the tx', async () => {
+      countable = 3;
+
+      await service.createRoom(makeActor(), {
+        roomNumber: '5',
+        roomTypeId: 'rt-1',
+      } as CreateRoomDto);
+
+      expect(managerHotel.save).toHaveBeenCalledWith(
+        expect.objectContaining({ roomsCount: 4 }),
+      );
+    });
+
+    it('unknown roomTypeId in this hotel → 404 ROOM_TYPE_NOT_FOUND', async () => {
+      managerRoomTypes.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.createRoom(makeActor(), {
+          roomNumber: '5',
+          roomTypeId: 'rt-ghost',
+        } as CreateRoomDto),
+      ).rejects.toMatchObject({ response: { code: 'ROOM_TYPE_NOT_FOUND' } });
+    });
+
+    it('AC5 — audits room.created after commit', async () => {
+      const callOrder: string[] = [];
+      dataSource.transaction.mockImplementation(
+        async (cb: (m: unknown) => unknown) => {
+          const result = await cb(manager);
+          callOrder.push('commit');
+          return result;
+        },
+      );
+      auditLogs.log.mockImplementation(async () => {
+        callOrder.push('audit');
+      });
+
+      const result = await service.createRoom(makeActor(), {
+        roomNumber: '5',
+        roomTypeId: 'rt-1',
+      } as CreateRoomDto);
+
+      expect(callOrder).toEqual(['commit', 'audit']);
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'room.created',
+          entityType: 'room',
+          entityId: result.id,
+          actorId: 'actor-1',
+          metadata: expect.objectContaining({
+            actorType: 'tenant_user',
+            hotelId: HOTEL_ID,
+            roomNumber: '5',
+          }),
+        }),
+      );
     });
   });
 });

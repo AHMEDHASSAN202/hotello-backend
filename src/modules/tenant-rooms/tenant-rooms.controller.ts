@@ -1,8 +1,19 @@
-import { Controller, Get, Param, ParseUUIDPipe, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { CurrentTenantUser } from '../../common/decorators/current-tenant-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { TenantScope } from '../../common/decorators/tenant-scope.decorator';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
+import { CreateRoomDto } from './dto/create-room.dto';
 import { ListRoomsQueryDto } from './dto/list-rooms-query.dto';
 import { TenantRoomsService } from './tenant-rooms.service';
 
@@ -24,6 +35,17 @@ export class TenantRoomsController {
     @Query() query: ListRoomsQueryDto,
   ) {
     return this.roomsService.list(user.hotelId, query);
+  }
+
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  @RequirePermissions('rooms.create')
+  async create(
+    @CurrentTenantUser() user: TenantUser,
+    @Body() dto: CreateRoomDto,
+  ) {
+    const room = await this.roomsService.createRoom(user, dto);
+    return this.roomsService.toRoomView(room);
   }
 
   // NOTE: later tasks add static routes here (bulk/*, qr/general, pdf/*,

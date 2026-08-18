@@ -1,10 +1,18 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import { TenantUser } from '../tenant-users/tenant-user.entity';
+import { CreateRoomDto } from './dto/create-room.dto';
 import { ListRoomsQueryDto } from './dto/list-rooms-query.dto';
 import { COUNTABLE_ROOM_STATUSES, Room } from './room.entity';
+import { RoomType } from './room-type.entity';
 
 /**
  * Story 11.2 — the natural-sort expression for room numbers: numeric prefix
@@ -32,6 +40,8 @@ export class TenantRoomsService {
     @InjectRepository(Hotel)
     private readonly hotelsRepo: Repository<Hotel>,
     private readonly subscriptions: SubscriptionsService,
+    private readonly dataSource: DataSource,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   /**
@@ -147,7 +157,129 @@ export class TenantRoomsService {
       .getCount();
   }
 
-  private toRoomView(room: Room): RoomView {
+  /**
+   * Story 11.3 AC1/AC3/AC5 — create a single room. Runs the seat-limit check,
+   * room-type validation and dupe check inside one transaction (pessimistic
+   * hotel lock, so two concurrent creates for the last seat can't both pass),
+   * then audits after commit.
+   */
+  async createRoom(actor: TenantUser, dto: CreateRoomDto): Promise<Room> {
+    const room = await this.dataSource.transaction(async (manager) => {
+      const { hotel, used } = await this.assertRoomSeatAvailable(
+        manager,
+        actor.hotelId,
+        1,
+      );
+      const roomType = await this.assertTypeInHotel(
+        manager,
+        actor.hotelId,
+        dto.roomTypeId,
+      );
+
+      const roomNumber = dto.roomNumber.trim().toUpperCase();
+      const dupe = await manager
+        .getRepository(Room)
+        .findOne({ where: { hotelId: actor.hotelId, roomNumber } });
+      if (dupe) {
+        throw new ConflictException({
+          code: 'ROOM_NUMBER_TAKEN',
+          message: `Room ${roomNumber} already exists`,
+          roomNumber,
+        });
+      }
+
+      const roomsRepo = manager.getRepository(Room);
+      const saved = await roomsRepo.save(
+        roomsRepo.create({
+          hotelId: actor.hotelId,
+          roomNumber,
+          floor: dto.floor ?? null,
+          roomTypeId: dto.roomTypeId,
+          status: dto.status ?? 'active',
+        }),
+      );
+
+      hotel.roomsCount = used + 1;
+      await manager.getRepository(Hotel).save(hotel);
+
+      saved.roomType = roomType;
+      return saved;
+    });
+
+    await this.auditLogs.log({
+      action: 'room.created',
+      entityType: 'room',
+      entityId: room.id,
+      actorId: actor.id,
+      metadata: {
+        actorType: 'tenant_user',
+        hotelId: actor.hotelId,
+        roomNumber: room.roomNumber,
+      },
+    });
+
+    return room;
+  }
+
+  /**
+   * Story 11.3 AC3 — THE chokepoint for the plan room-limit guard, reused by
+   * bulk create and status-change tasks. Locks the hotel row
+   * (`pessimistic_write`) so the count and the limit check happen atomically
+   * within the caller's transaction, then hands back `{ hotel, used }` so the
+   * caller updates `hotel.roomsCount` itself (the exact seats it is adding
+   * may differ per caller).
+   */
+  private async assertRoomSeatAvailable(
+    manager: EntityManager,
+    hotelId: string,
+    adding: number,
+  ): Promise<{ hotel: Hotel; used: number }> {
+    const hotel = await manager.getRepository(Hotel).findOne({
+      where: { id: hotelId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!hotel) {
+      throw new NotFoundException({
+        code: 'HOTEL_NOT_FOUND',
+        message: 'Hotel not found',
+      });
+    }
+
+    const used = await this.countCountable(manager, hotelId);
+    const limit = await this.roomsLimit(hotelId);
+    if (limit !== null && used + adding > limit) {
+      throw new ConflictException({
+        code: 'ROOM_LIMIT_REACHED',
+        message: `Your plan allows up to ${limit} room(s)`,
+        limit,
+        used,
+        remaining: Math.max(0, limit - used),
+      });
+    }
+
+    return { hotel, used };
+  }
+
+  /** Story 11.3 — resolve a room type within the hotel inside a transaction. */
+  private async assertTypeInHotel(
+    manager: EntityManager,
+    hotelId: string,
+    roomTypeId: string,
+  ): Promise<RoomType> {
+    const type = await manager
+      .getRepository(RoomType)
+      .findOne({ where: { id: roomTypeId, hotelId } });
+    if (!type) {
+      throw new NotFoundException({
+        code: 'ROOM_TYPE_NOT_FOUND',
+        message: 'Room type not found',
+      });
+    }
+    return type;
+  }
+
+  /** Public: the controller maps `createRoom`'s `Room` result through this. */
+  toRoomView(room: Room): RoomView {
     return {
       id: room.id,
       roomNumber: room.roomNumber,
