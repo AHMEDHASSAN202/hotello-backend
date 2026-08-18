@@ -10,7 +10,10 @@ import {
   Post,
   Query,
   Res,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
 import { CurrentTenantUser } from '../../common/decorators/current-tenant-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
@@ -26,6 +29,7 @@ import { QrFormatQueryDto } from './dto/qr-format-query.dto';
 import { UpdateRoomDto } from './dto/update-room.dto';
 import { RoomsPdfService } from './pdf/rooms-pdf.service';
 import { TenantRoomsService } from './tenant-rooms.service';
+import { IMPORT_MAX_BYTES } from './xlsx/rooms-xlsx.constants';
 import { RoomsXlsxService } from './xlsx/rooms-xlsx.service';
 
 /**
@@ -184,6 +188,25 @@ export class TenantRoomsController {
       'attachment; filename="rooms-import-template.xlsx"',
     );
     res.send(buffer);
+  }
+
+  /**
+   * Story 11.7 AC4/AC5 — parses + previews an uploaded xlsx (same
+   * `BulkPreview` shape as `bulk/preview`, rows carrying the original
+   * spreadsheet row number). No separate commit endpoint: import commits go
+   * through `POST /tenant/rooms/bulk` with `source: 'import'`. `import/*`
+   * stays declared above `:id` (same static-above-dynamic discipline as
+   * `bulk/*`/`pdf/*`/`export`).
+   */
+  @Post('import/preview')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('rooms.create')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: IMPORT_MAX_BYTES } }))
+  importPreview(
+    @CurrentTenantUser() user: TenantUser,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.roomsService.importPreview(user, file);
   }
 
   @Get(':id')

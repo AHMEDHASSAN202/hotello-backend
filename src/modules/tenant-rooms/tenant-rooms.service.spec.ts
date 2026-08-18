@@ -15,6 +15,7 @@ import { RoomQrService } from './room-qr.service';
 import { Room } from './room.entity';
 import { RoomType } from './room-type.entity';
 import { NATURAL_ROOM_ORDER, TenantRoomsService } from './tenant-rooms.service';
+import { RoomsXlsxService } from './xlsx/rooms-xlsx.service';
 
 const HOTEL_ID = 'hotel-1';
 
@@ -41,6 +42,7 @@ describe('TenantRoomsService', () => {
   let auditLogs: { log: jest.Mock };
   let tenantUrls: { buildGuestUrl: jest.Mock };
   let roomQr: { generate: jest.Mock };
+  let roomsXlsxService: { parseImport: jest.Mock };
   let qb: Record<string, jest.Mock>;
 
   // Transaction manager wiring for createRoom (11.3) — configurable countable
@@ -97,6 +99,7 @@ describe('TenantRoomsService', () => {
         contentType: 'image/png',
       })),
     };
+    roomsXlsxService = { parseImport: jest.fn() };
 
     countable = 0;
     managerHotel = {
@@ -145,6 +148,7 @@ describe('TenantRoomsService', () => {
         { provide: AuditLogsService, useValue: auditLogs },
         { provide: TenantUrlsService, useValue: tenantUrls },
         { provide: RoomQrService, useValue: roomQr },
+        { provide: RoomsXlsxService, useValue: roomsXlsxService },
       ],
     }).compile();
     service = moduleRef.get(TenantRoomsService);
@@ -775,6 +779,113 @@ describe('TenantRoomsService', () => {
       } as BulkPreviewDto);
 
       expect(result.remaining).toBeNull();
+    });
+  });
+
+  describe('importPreview (11.7)', () => {
+    const makeFile = (o: Partial<Express.Multer.File> = {}): Express.Multer.File =>
+      ({
+        originalname: 'rooms-import.xlsx',
+        mimetype:
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        buffer: Buffer.from('fake-xlsx-bytes'),
+        size: 1024,
+        ...o,
+      }) as Express.Multer.File;
+
+    beforeEach(() => {
+      subscriptions.getForHotel.mockResolvedValue({
+        current: { plan: { maxRooms: 50 } },
+      });
+      roomTypesRepo.find.mockResolvedValue([
+        { id: 'rt-1', nameEn: 'Standard', nameAr: 'قياسية' },
+      ]);
+      managerRoomTypes.find.mockResolvedValue([{ id: 'rt-1' }]);
+      managerRooms.find.mockResolvedValue([]);
+      countable = 0;
+    });
+
+    it('AC4 — per-row issues carry the spreadsheet row number and field (duplicate/unknown type/bad status/empty required)', async () => {
+      roomsXlsxService.parseImport.mockResolvedValue({
+        rows: [
+          { row: 2, roomNumber: '301', floor: 1, roomTypeId: 'rt-1', status: 'active' },
+          { row: 3, roomNumber: '301', floor: 1, roomTypeId: 'rt-1', status: 'active' },
+          { row: 4, roomNumber: '', floor: null, roomTypeId: 'rt-1', status: 'active' },
+          { row: 5, roomNumber: '303', floor: null, roomTypeId: 'rt-ghost', status: 'active' },
+          { row: 6, roomNumber: '304', floor: null, roomTypeId: 'rt-1', status: 'weird' },
+        ],
+        skippedExampleRows: 3,
+      });
+
+      const file = makeFile();
+      const result = await service.importPreview(makeActor(), file);
+
+      expect(roomsXlsxService.parseImport).toHaveBeenCalledWith(file.buffer, [
+        { id: 'rt-1', nameEn: 'Standard', nameAr: 'قياسية' },
+      ]);
+      expect(result.rows).toEqual([
+        expect.objectContaining({ row: 2, issues: [] }),
+        expect.objectContaining({
+          row: 3,
+          duplicate: true,
+          issues: [{ row: 3, field: 'roomNumber', code: 'DUPLICATE_IN_FILE' }],
+        }),
+        expect.objectContaining({
+          row: 4,
+          issues: [{ row: 4, field: 'roomNumber', code: 'REQUIRED' }],
+        }),
+        expect.objectContaining({
+          row: 5,
+          issues: [{ row: 5, field: 'roomTypeId', code: 'UNKNOWN_TYPE' }],
+        }),
+        expect.objectContaining({
+          row: 6,
+          issues: [{ row: 6, field: 'status', code: 'INVALID_STATUS' }],
+        }),
+      ]);
+    });
+
+    it('AC4 — returns remaining plan seats like the range preview', async () => {
+      countable = 10;
+      roomsXlsxService.parseImport.mockResolvedValue({
+        rows: [{ row: 2, roomNumber: '301', floor: null, roomTypeId: 'rt-1', status: 'active' }],
+        skippedExampleRows: 0,
+      });
+
+      const result = await service.importPreview(makeActor(), makeFile());
+
+      expect(result.validCount).toBe(1);
+      expect(result.remaining).toBe(40);
+    });
+
+    it('AC5 — non-xlsx upload (wrong magic/extension) → 400 IMPORT_FILE_INVALID with a clear message', async () => {
+      const badFile = makeFile({ originalname: 'rooms.csv', mimetype: 'text/csv' });
+
+      await expect(
+        service.importPreview(makeActor(), badFile),
+      ).rejects.toMatchObject({
+        response: { code: 'IMPORT_FILE_INVALID', message: expect.any(String) },
+      });
+      expect(roomsXlsxService.parseImport).not.toHaveBeenCalled();
+    });
+
+    it('AC5 — no file uploaded → 400 IMPORT_FILE_INVALID', async () => {
+      await expect(
+        service.importPreview(makeActor(), undefined as unknown as Express.Multer.File),
+      ).rejects.toMatchObject({
+        response: { code: 'IMPORT_FILE_INVALID' },
+      });
+      expect(roomsXlsxService.parseImport).not.toHaveBeenCalled();
+    });
+
+    it('IMPORT_TOO_MANY_ROWS from parseImport propagates unchanged', async () => {
+      roomsXlsxService.parseImport.mockRejectedValue({
+        response: { code: 'IMPORT_TOO_MANY_ROWS' },
+      });
+
+      await expect(
+        service.importPreview(makeActor(), makeFile()),
+      ).rejects.toMatchObject({ response: { code: 'IMPORT_TOO_MANY_ROWS' } });
     });
   });
 

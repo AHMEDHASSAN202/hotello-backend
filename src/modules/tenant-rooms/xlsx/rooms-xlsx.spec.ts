@@ -350,3 +350,161 @@ describe('buildTemplate (11.7)', () => {
     });
   });
 });
+
+describe('parseImport (11.7)', () => {
+  let service: RoomsXlsxService;
+  let hotelsRepo: { findOne: jest.Mock };
+  let roomTypesRepo: { find: jest.Mock };
+  let tenantRoomsService: { listAllForExport: jest.Mock };
+  let auditLogs: { log: jest.Mock };
+
+  beforeEach(async () => {
+    hotelsRepo = { findOne: jest.fn() };
+    roomTypesRepo = { find: jest.fn() };
+    tenantRoomsService = { listAllForExport: jest.fn() };
+    auditLogs = { log: jest.fn() };
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        RoomsXlsxService,
+        { provide: getRepositoryToken(Hotel), useValue: hotelsRepo },
+        { provide: getRepositoryToken(RoomType), useValue: roomTypesRepo },
+        { provide: TenantRoomsService, useValue: tenantRoomsService },
+        { provide: AuditLogsService, useValue: auditLogs },
+      ],
+    }).compile();
+    service = moduleRef.get(RoomsXlsxService);
+  });
+
+  const types = [
+    makeRoomType({ id: 'rt-1', nameEn: 'Standard', nameAr: 'قياسية' }),
+    makeRoomType({ id: 'rt-2', nameEn: 'Deluxe', nameAr: 'ديلوكس' }),
+    makeRoomType({ id: 'rt-3', nameEn: 'Suite', nameAr: 'جناح' }),
+  ];
+
+  /** A minimal 4-column workbook built by hand (independent of buildTemplate/buildExport). */
+  const workbookWithRows = async (rows: unknown[][]): Promise<Buffer> => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Rooms');
+    sheet.addRow(['Room Number', 'Floor', 'Type', 'Status']);
+    for (const r of rows) {
+      const row = sheet.addRow(r);
+      if (typeof r[0] === 'string') {
+        row.getCell(1).value = r[0];
+        row.getCell(1).numFmt = '@';
+      }
+    }
+    return workbook.xlsx.writeBuffer() as unknown as Buffer;
+  };
+
+  it('AC5 — round-trip: buildTemplate → fill rows → parseImport yields exactly those rows (zero diffs)', async () => {
+    const templateBuffer = await service.buildTemplate(types, 'en');
+    const workbook = await reload(templateBuffer);
+    const sheet = workbook.getWorksheet(XLSX_STRINGS.en.templateSheetName)!;
+
+    // The template already has 3 greyed `#`-prefixed example rows (2-4);
+    // append two real data rows after them.
+    const row5 = sheet.addRow(['301', 1, 'Standard', 'active']);
+    row5.getCell(1).value = '301';
+    row5.getCell(1).numFmt = '@';
+    const row6 = sheet.addRow(['302', 2, 'Deluxe', 'out_of_service']);
+    row6.getCell(1).value = '302';
+    row6.getCell(1).numFmt = '@';
+
+    const filledBuffer = (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
+
+    const { rows, skippedExampleRows } = await service.parseImport(filledBuffer, types);
+
+    expect(skippedExampleRows).toBe(3);
+    expect(rows).toEqual([
+      { row: 5, roomNumber: '301', floor: 1, roomTypeId: 'rt-1', status: 'active' },
+      { row: 6, roomNumber: '302', floor: 2, roomTypeId: 'rt-2', status: 'out_of_service' },
+    ]);
+  });
+
+  it('AC5 — example rows (# prefix) and trailing empty rows are ignored; whitespace trimmed', async () => {
+    const buffer = await workbookWithRows([
+      ['#101', 1, 'Standard', 'active'],
+      [' 301 ', ' 2 ', ' Standard ', ' active '],
+      [],
+      [null, null, null, null],
+    ]);
+
+    const { rows, skippedExampleRows } = await service.parseImport(buffer, types);
+
+    expect(skippedExampleRows).toBe(1);
+    expect(rows).toEqual([
+      { row: 3, roomNumber: '301', floor: 2, roomTypeId: 'rt-1', status: 'active' },
+    ]);
+  });
+
+  it('AC5 — leading-zero numbers survive as text ("007")', async () => {
+    const buffer = await workbookWithRows([['007', 1, 'Standard', 'active']]);
+
+    const { rows } = await service.parseImport(buffer, types);
+
+    expect(rows[0].roomNumber).toBe('007');
+  });
+
+  it('AC5 — more than 1,000 data rows → 400 IMPORT_TOO_MANY_ROWS', async () => {
+    const extra = Array.from({ length: 1001 }, (_, i) => [
+      `R${i}`,
+      1,
+      'Standard',
+      'active',
+    ]);
+    const buffer = await workbookWithRows(extra);
+
+    await expect(service.parseImport(buffer, types)).rejects.toMatchObject({
+      response: { code: 'IMPORT_TOO_MANY_ROWS', max: 1000 },
+    });
+  });
+
+  it('type name matches nameAr too, case-insensitive; unknown name → roomTypeId null', async () => {
+    const buffer = await workbookWithRows([
+      ['301', 1, 'ديلوكس', 'active'], // exact Arabic name → rt-2
+      ['302', 1, 'STANDARD', 'active'], // case-insensitive English → rt-1
+      ['303', 1, 'Nonexistent Type', 'active'], // unknown → null
+    ]);
+
+    const { rows } = await service.parseImport(buffer, types);
+
+    expect(rows[0].roomTypeId).toBe('rt-2');
+    expect(rows[1].roomTypeId).toBe('rt-1');
+    expect(rows[2].roomTypeId).toBeNull();
+  });
+
+  it('non-numeric floor text → floor NaN (validateRoomRows later flags INVALID_FORMAT); blank floor → null', async () => {
+    const buffer = await workbookWithRows([
+      ['301', 'ground', 'Standard', 'active'],
+      ['302', '', 'Standard', 'active'],
+    ]);
+
+    const { rows } = await service.parseImport(buffer, types);
+
+    expect(Number.isNaN(rows[0].floor)).toBe(true);
+    expect(rows[1].floor).toBeNull();
+  });
+
+  it('status matched case-insensitively; unmatched status text is passed through for validateRoomRows to flag INVALID_STATUS', async () => {
+    const buffer = await workbookWithRows([
+      ['301', 1, 'Standard', 'ACTIVE'],
+      ['302', 1, 'Standard', 'Out_Of_Service'],
+      ['303', 1, 'Standard', 'retired'],
+    ]);
+
+    const { rows } = await service.parseImport(buffer, types);
+
+    expect(rows[0].status).toBe('active');
+    expect(rows[1].status).toBe('out_of_service');
+    expect(rows[2].status).toBe('retired');
+  });
+
+  it('a corrupt / non-xlsx buffer that fails to load → 400 IMPORT_FILE_INVALID', async () => {
+    const buffer = Buffer.from('not a real xlsx file');
+
+    await expect(service.parseImport(buffer, types)).rejects.toMatchObject({
+      response: { code: 'IMPORT_FILE_INVALID' },
+    });
+  });
+});

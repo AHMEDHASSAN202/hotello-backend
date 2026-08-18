@@ -122,6 +122,13 @@ export function validateRoomRows(
       issues.push({ row: row.row, field: 'roomTypeId', code: 'UNKNOWN_TYPE' });
     }
 
+    // Story 11.7 AC5 — the Excel parser passes NaN as the sentinel for "the
+    // cell had text but it wasn't a whole number" (an empty cell is `null`,
+    // which is valid/optional and never flagged here).
+    if (row.floor !== null && Number.isNaN(row.floor)) {
+      issues.push({ row: row.row, field: 'floor', code: 'INVALID_FORMAT' });
+    }
+
     if (row.status !== 'active' && row.status !== 'out_of_service') {
       issues.push({ row: row.row, field: 'status', code: 'INVALID_STATUS' });
     }

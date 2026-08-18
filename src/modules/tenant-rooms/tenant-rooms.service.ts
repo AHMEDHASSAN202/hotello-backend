@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   ConflictException,
+  forwardRef,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -32,6 +34,8 @@ import {
 import { QrFormat, QrResult, RoomQrService } from './room-qr.service';
 import { COUNTABLE_ROOM_STATUSES, Room, RoomStatus } from './room.entity';
 import { RoomType } from './room-type.entity';
+import { IMPORT_XLSX_MIME_TYPES } from './xlsx/rooms-xlsx.constants';
+import { RoomsXlsxService } from './xlsx/rooms-xlsx.service';
 
 /**
  * Story 11.2 — the natural-sort expression for room numbers: numeric prefix
@@ -95,6 +99,12 @@ export class TenantRoomsService {
     private readonly auditLogs: AuditLogsService,
     private readonly tenantUrls: TenantUrlsService,
     private readonly roomQrService: RoomQrService,
+    // Story 11.7 — RoomsXlsxService.parseImport (xlsx -> RoomRowInput[]).
+    // forwardRef both directions: RoomsXlsxService already depends on this
+    // service (exportForHotel calls listAllForExport), so the two are
+    // mutually dependent within the same module.
+    @Inject(forwardRef(() => RoomsXlsxService))
+    private readonly roomsXlsxService: RoomsXlsxService,
   ) {}
 
   /**
@@ -549,9 +559,6 @@ export class TenantRoomsService {
    * so a stale preview just gets re-resolved by `bulkCommit`.
    */
   async bulkPreview(actor: TenantUser, dto: BulkPreviewDto): Promise<BulkPreview> {
-    const hotelId = actor.hotelId;
-    const manager = this.dataSource.manager;
-
     const numbers = expandRange({
       from: dto.from,
       to: dto.to,
@@ -564,6 +571,66 @@ export class TenantRoomsService {
       roomTypeId: dto.roomTypeId,
       status: 'active',
     }));
+
+    return this.assemblePreview(actor.hotelId, rowInputs);
+  }
+
+  /**
+   * Story 11.7 AC4/AC5 — the Excel-import counterpart of `bulkPreview`:
+   * validates the uploaded file, parses it via `RoomsXlsxService.parseImport`
+   * (type names resolved to ids against the hotel's ACTIVE types), then
+   * reuses `assemblePreview` so the range and import preview surfaces can
+   * never drift apart. Read-only — nothing is written; `bulkCommit` with
+   * `source: 'import'` is the only path that persists rows, and it
+   * re-validates everything itself under the hotel lock.
+   */
+  async importPreview(
+    actor: TenantUser,
+    file: Express.Multer.File,
+  ): Promise<BulkPreview> {
+    this.assertImportFile(file);
+
+    const hotelId = actor.hotelId;
+    const types = await this.roomTypesRepo.find({
+      where: { hotelId, isActive: true },
+    });
+
+    const { rows } = await this.roomsXlsxService.parseImport(file.buffer, types);
+    return this.assemblePreview(hotelId, rows);
+  }
+
+  /**
+   * Story 11.7 AC5 — `.xlsx` extension + mime-type check, mirroring the
+   * `LOGO_MIME_TYPES` upload-validation pattern (`hotels.service.ts`
+   * `uploadLogo`). File-size is already capped by `FileInterceptor`
+   * (`IMPORT_MAX_BYTES`) before this runs.
+   */
+  private assertImportFile(
+    file?: Express.Multer.File,
+  ): asserts file is Express.Multer.File {
+    const nameOk = !!file?.originalname?.toLowerCase().endsWith('.xlsx');
+    const mimeOk = !!file && IMPORT_XLSX_MIME_TYPES.includes(file.mimetype);
+    if (!file || !nameOk || !mimeOk) {
+      throw new BadRequestException({
+        code: 'IMPORT_FILE_INVALID',
+        message: 'Please upload a valid .xlsx file',
+      });
+    }
+  }
+
+  /**
+   * Story 11.3/11.7 — the preview-assembly logic shared by the range
+   * (`bulkPreview`) and Excel-import (`importPreview`) surfaces: loads a
+   * fresh (non-transactional) read of the hotel's existing numbers, active
+   * room-type ids and seat usage, runs `validateRoomRows` (the single
+   * validation source), and reports remaining plan seats. Read-only: nothing
+   * is written, so a stale preview just gets re-resolved by `bulkCommit`.
+   */
+  private async assemblePreview(
+    hotelId: string,
+    rowInputs: RoomRowInput[],
+  ): Promise<BulkPreview> {
+    const manager = this.dataSource.manager;
 
     const [existingNumbers, typeIds, used, limit] = await Promise.all([
       this.loadExistingNumbers(manager, hotelId),

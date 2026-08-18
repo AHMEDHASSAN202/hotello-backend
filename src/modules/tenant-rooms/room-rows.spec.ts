@@ -124,6 +124,21 @@ describe('validateRoomRows (11.3/11.7)', () => {
     expect(rows[1].issues).toEqual([]);
   });
 
+  it('AC5(11.7) — non-numeric floor (NaN sentinel from Excel parsing) → INVALID_FORMAT on floor; null floor is fine', () => {
+    const ctx = { existingNumbers: new Set<string>(), typeIds: new Set(['rt-1']) };
+
+    const badFloor = validateRoomRows([row({ floor: NaN })], ctx);
+    expect(badFloor.rows[0].issues).toEqual([
+      { row: 1, field: 'floor', code: 'INVALID_FORMAT' },
+    ]);
+
+    const nullFloor = validateRoomRows([row({ floor: null })], ctx);
+    expect(nullFloor.rows[0].issues).toEqual([]);
+
+    const numericFloor = validateRoomRows([row({ floor: 3 })], ctx);
+    expect(numericFloor.rows[0].issues).toEqual([]);
+  });
+
   it('missing roomTypeId (null) → REQUIRED on roomTypeId', () => {
     const { rows } = validateRoomRows([row({ roomTypeId: null })], {
       existingNumbers: new Set(),

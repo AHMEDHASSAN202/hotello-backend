@@ -20,6 +20,23 @@ export const XLSX_STATUS_VALUES = ['active', 'out_of_service'] as const;
 /** Room numbers starting with this prefix are template examples, ignored on import. */
 export const EXAMPLE_PREFIX = '#';
 
+/**
+ * Story 11.7 AC5 — import upload constraints. Mirrors the
+ * `LOGO_MAX_BYTES`/`LOGO_MIME_TYPES` pattern in `hotels.constants.ts`: a size
+ * cap enforced by `FileInterceptor`, and the accepted mime types for the
+ * `.xlsx` extension check (`application/octet-stream` is included because
+ * some OS/browser combinations mislabel `.xlsx` uploads with the generic
+ * binary type instead of the OOXML spreadsheet type).
+ */
+export const IMPORT_MAX_BYTES = 2 * 1024 * 1024;
+export const IMPORT_XLSX_MIME_TYPES: string[] = [
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/octet-stream',
+];
+
+/** Story 11.7 AC5 — hard cap on parsed data rows (`IMPORT_TOO_MANY_ROWS`). */
+export const MAX_IMPORT_ROWS = 1000;
+
 /** Header note (AC2/AC3) — labels + explanation text for one column. */
 export interface XlsxColumnStrings {
   number: string;
