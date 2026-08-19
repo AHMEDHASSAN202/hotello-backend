@@ -139,6 +139,26 @@ describe('validateRoomRows (11.3/11.7)', () => {
     expect(numericFloor.rows[0].issues).toEqual([]);
   });
 
+  it('floor outside -10..200 (mirrors RoomRowDto/CreateRoomDto @Min(-10)/@Max(200)) → INVALID_FORMAT on floor', () => {
+    const ctx = { existingNumbers: new Set<string>(), typeIds: new Set(['rt-1']) };
+
+    const tooHigh = validateRoomRows([row({ floor: 999 })], ctx);
+    expect(tooHigh.rows[0].issues).toEqual([
+      { row: 1, field: 'floor', code: 'INVALID_FORMAT' },
+    ]);
+
+    const tooLow = validateRoomRows([row({ floor: -11 })], ctx);
+    expect(tooLow.rows[0].issues).toEqual([
+      { row: 1, field: 'floor', code: 'INVALID_FORMAT' },
+    ]);
+
+    const lowerBoundary = validateRoomRows([row({ floor: -10 })], ctx);
+    expect(lowerBoundary.rows[0].issues).toEqual([]);
+
+    const upperBoundary = validateRoomRows([row({ floor: 200 })], ctx);
+    expect(upperBoundary.rows[0].issues).toEqual([]);
+  });
+
   it('missing roomTypeId (null) → REQUIRED on roomTypeId', () => {
     const { rows } = validateRoomRows([row({ roomTypeId: null })], {
       existingNumbers: new Set(),

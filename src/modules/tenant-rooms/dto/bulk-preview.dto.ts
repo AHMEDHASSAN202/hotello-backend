@@ -1,4 +1,4 @@
-import { IsInt, IsOptional, IsUUID, Min } from 'class-validator';
+import { IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
 
 /**
  * Story 11.3 AC2 — `POST /tenant/rooms/bulk/preview` body. `from`/`to` are
@@ -19,6 +19,8 @@ export class BulkPreviewDto {
 
   @IsOptional()
   @IsInt()
+  @Min(-10)
+  @Max(200)
   floor?: number;
 
   @IsUUID()

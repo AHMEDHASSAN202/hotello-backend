@@ -314,6 +314,30 @@ describe('buildTemplate (11.7)', () => {
     expect(workbook.getWorksheet('_RoomTypes')).toBeUndefined();
   });
 
+  it('a type name containing a comma routes through the hidden-sheet fallback (a literal join would split it into spurious dropdown entries)', async () => {
+    const commaTypes = [
+      makeRoomType({ id: 'rt-1', nameEn: 'Deluxe, Sea View', nameAr: 'ديلوكس، إطلالة بحرية' }),
+      makeRoomType({ id: 'rt-2', nameEn: 'Standard', nameAr: 'قياسية' }),
+    ];
+    const joinedLength = commaTypes.map((t) => t.nameEn).join(',').length;
+    expect(joinedLength).toBeLessThanOrEqual(255); // sanity check: comma alone triggers the fallback, not length
+
+    const buffer = await service.buildTemplate(commaTypes, 'en');
+    const workbook = await reload(buffer);
+    const sheet = workbook.getWorksheet(XLSX_STRINGS.en.templateSheetName)!;
+
+    const validation = sheet.getCell('C2').dataValidation;
+    expect(validation?.type).toBe('list');
+    expect(validation?.formulae?.[0]).toMatch(/^'?_RoomTypes'?!\$A\$1:\$A\$2$/);
+
+    const hiddenSheet = workbook.getWorksheet('_RoomTypes');
+    expect(hiddenSheet).toBeDefined();
+    expect(hiddenSheet!.state).toBe('veryHidden');
+    // Values survive intact — NOT split on the embedded comma.
+    expect(hiddenSheet!.getCell('A1').value).toBe('Deluxe, Sea View');
+    expect(hiddenSheet!.getCell('A2').value).toBe('Standard');
+  });
+
   it('header row is styled the same navy/white/frozen/autofilter as the export', async () => {
     const buffer = await service.buildTemplate(types, 'en');
     const workbook = await reload(buffer);

@@ -225,7 +225,11 @@ export class RoomsXlsxService {
    * AC3 — list dropdown for `range`. Excel caps a literal `"a,b,c"` formula
    * at 255 chars; once the joined values exceed that, fall back to a hidden
    * sheet holding one value per row and a range-reference formula instead
-   * (exceljs specifics note — both paths are exercised by the tests).
+   * (exceljs specifics note — both paths are exercised by the tests). A
+   * value containing a comma (e.g. a room-type name like "Deluxe, Sea View")
+   * must ALSO route through the hidden-sheet fallback: Excel's literal list
+   * formula has no escape for an embedded comma, so joining with `,` would
+   * silently split that one value into spurious extra dropdown entries.
    */
   private applyListValidation(
     workbook: ExcelJS.Workbook,
@@ -235,9 +239,10 @@ export class RoomsXlsxService {
     hiddenSheetName: string,
   ): void {
     const dataValidations = (sheet as WorksheetWithDataValidations).dataValidations;
+    const hasComma = values.some((value) => value.includes(','));
     const literalFormula = `"${values.join(',')}"`;
 
-    if (literalFormula.length <= LITERAL_LIST_FORMULA_MAX_LENGTH) {
+    if (!hasComma && literalFormula.length <= LITERAL_LIST_FORMULA_MAX_LENGTH) {
       dataValidations.add(range, {
         type: 'list',
         allowBlank: false,

@@ -37,12 +37,16 @@ import { IMPORT_XLSX_MIME_TYPES } from './xlsx/rooms-xlsx.constants';
 
 /**
  * Story 11.2 — the natural-sort expression for room numbers: numeric prefix
- * cast to bigint (so "2" sorts before "10"), `NULLIF` turns a non-numeric
- * prefix (or none at all) into SQL NULL so those rows fall through to the
- * `NULLS LAST` tiebreak on the plain `roomNumber` string. Exported so tests
- * can assert the exact expression reaches the query builder.
+ * cast to `numeric` (arbitrary precision — NOT `bigint`, which overflows on a
+ * fully-numeric room number of 20 digits, a value the `roomNumber` DTO regex
+ * allows, causing a permanent 500 on list/export/cards for that hotel), so
+ * "2" sorts before "10" regardless of digit count. `NULLIF` turns a
+ * non-numeric prefix (or none at all) into SQL NULL so those rows fall
+ * through to the `NULLS LAST` tiebreak on the plain `roomNumber` string.
+ * Exported so tests can assert the exact expression reaches the query
+ * builder.
  */
-export const NATURAL_ROOM_ORDER = `NULLIF(regexp_replace(r."roomNumber", '\\D.*$', ''), '')::bigint`;
+export const NATURAL_ROOM_ORDER = `NULLIF(regexp_replace(r."roomNumber", '\\D.*$', ''), '')::numeric`;
 
 /** `RoomView` shape returned by list + detail (Story 11.2). */
 export interface RoomView {
@@ -695,16 +699,23 @@ export class TenantRoomsService {
         r.issues.some(
           (i) => i.code === 'DUPLICATE_IN_HOTEL' || i.code === 'DUPLICATE_IN_FILE',
         );
-      const otherIssues = validated.filter((r) =>
-        r.issues.some(
-          (i) => i.code !== 'DUPLICATE_IN_HOTEL' && i.code !== 'DUPLICATE_IN_FILE',
-        ),
+      // Preview/commit parity — a row can carry BOTH a duplicate issue AND
+      // another issue (e.g. DUPLICATE_IN_HOTEL + UNKNOWN_TYPE). Preview
+      // classifies that row as a duplicate (not invalid), so the UI offers
+      // "skip duplicates and create the rest". `otherIssues` must therefore
+      // only look at NON-duplicate rows — a duplicate row's other issue is
+      // moot because that row never reaches insertion: it's either skipped
+      // (skipDuplicates=true, handled below) or the whole commit 409s on the
+      // duplicate itself (skipDuplicates=false, also below) — either way it
+      // must never also trip a 400 here.
+      const otherIssues = validated.filter(
+        (r) => !isDuplicate(r) && r.issues.length > 0,
       );
       if (otherIssues.length > 0) {
         throw new BadRequestException({
           code: 'BULK_ROWS_INVALID',
           message: 'Some rows failed validation',
-          issues: validated.flatMap((r) => r.issues),
+          issues: otherIssues.flatMap((r) => r.issues),
         });
       }
 

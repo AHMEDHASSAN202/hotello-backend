@@ -160,6 +160,13 @@ describe('TenantRoomsService', () => {
     service = moduleRef.get(TenantRoomsService);
   });
 
+  describe('NATURAL_ROOM_ORDER (11.2 — data-triggered 500 regression)', () => {
+    it('casts the numeric prefix to ::numeric, not ::bigint (a 20-digit all-numeric room number — allowed by the roomNumber regex — overflows bigint and 500s)', () => {
+      expect(NATURAL_ROOM_ORDER).toContain('::numeric');
+      expect(NATURAL_ROOM_ORDER).not.toContain('::bigint');
+    });
+  });
+
   describe('list (11.2)', () => {
     beforeEach(() => {
       hotelsRepo.findOne.mockResolvedValue({ id: HOTEL_ID, roomsCount: 12 });
@@ -1022,6 +1029,45 @@ describe('TenantRoomsService', () => {
           code: 'BULK_ROWS_INVALID',
           issues: [{ row: 2, field: 'roomTypeId', code: 'UNKNOWN_TYPE' }],
         },
+      });
+
+      expect(manager.save).not.toHaveBeenCalled();
+      expect(managerHotel.save).not.toHaveBeenCalled();
+    });
+
+    it('preview/commit parity — a row that is BOTH a duplicate AND has another issue (e.g. UNKNOWN_TYPE), skipDuplicates=true → commit succeeds, the dual-issue row is silently skipped as a duplicate, nothing 400s', async () => {
+      countable = 1;
+      managerRooms.find.mockResolvedValue([{ roomNumber: '302' }]);
+      managerHotel.findOne.mockResolvedValue({ id: HOTEL_ID, roomsCount: 1 });
+
+      const rows = makeRows(['301', '302']);
+      rows[1] = { ...rows[1], roomTypeId: 'rt-ghost' } as RoomRowDto;
+
+      const result = await service.bulkCommit(makeActor(), {
+        rooms: rows,
+        source: 'range',
+        skipDuplicates: true,
+      } as BulkCommitDto);
+
+      expect(result).toEqual({ created: 1, skipped: 1 });
+      expect(manager.save).toHaveBeenCalledWith(Room, [
+        expect.objectContaining({ roomNumber: '301' }),
+      ]);
+    });
+
+    it('preview/commit parity — the SAME dual-issue duplicate row with skipDuplicates=false (or omitted) still 409s ROOM_NUMBER_TAKEN, not 400 BULK_ROWS_INVALID', async () => {
+      managerRooms.find.mockResolvedValue([{ roomNumber: '302' }]);
+
+      const rows = makeRows(['301', '302']);
+      rows[1] = { ...rows[1], roomTypeId: 'rt-ghost' } as RoomRowDto;
+
+      await expect(
+        service.bulkCommit(makeActor(), {
+          rooms: rows,
+          source: 'range',
+        } as BulkCommitDto),
+      ).rejects.toMatchObject({
+        response: { code: 'ROOM_NUMBER_TAKEN' },
       });
 
       expect(manager.save).not.toHaveBeenCalled();

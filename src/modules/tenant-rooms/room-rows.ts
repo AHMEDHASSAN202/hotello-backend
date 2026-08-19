@@ -14,6 +14,10 @@ export const MAX_BULK_RANGE = 500;
 /** Room-number format, mirrored from `CreateRoomDto` (global constraint). */
 export const ROOM_NUMBER_REGEX = /^[A-Za-z0-9-]{1,20}$/;
 
+/** Floor bounds, mirrored from `CreateRoomDto`/`RoomRowDto`'s `@Min(-10)`/`@Max(200)`. */
+export const MIN_FLOOR = -10;
+export const MAX_FLOOR = 200;
+
 export interface ExpandRangeInput {
   from: number;
   to: number;
@@ -124,8 +128,14 @@ export function validateRoomRows(
 
     // Story 11.7 AC5 — the Excel parser passes NaN as the sentinel for "the
     // cell had text but it wasn't a whole number" (an empty cell is `null`,
-    // which is valid/optional and never flagged here).
-    if (row.floor !== null && Number.isNaN(row.floor)) {
+    // which is valid/optional and never flagged here). Bounds mirror
+    // `CreateRoomDto`/`RoomRowDto`'s `@Min(-10)`/`@Max(200)` so the import
+    // and range preview paths reject the same out-of-range floors the
+    // single-room create/edit endpoints would 400 on.
+    if (
+      row.floor !== null &&
+      (Number.isNaN(row.floor) || row.floor < MIN_FLOOR || row.floor > MAX_FLOOR)
+    ) {
       issues.push({ row: row.row, field: 'floor', code: 'INVALID_FORMAT' });
     }
 
