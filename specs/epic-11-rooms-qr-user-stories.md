@@ -144,3 +144,18 @@ Follow existing conventions (NestJS clean architecture; tenant guards + isolatio
 - **Depends on:** Epics 08–10 (auth/guards, permissions, roles), Epic 04 (`max_rooms` limit), Epic 05 (slug + URL scheme, `declared_rooms_count` migration).
 - **Blocks:** Epic 12 (Stays attach to rooms), Epic 13 (requests originate from rooms), future F&B (location QRs reuse the generator).
 - **Deferred:** location entities + location QRs (F&B epic), room occupancy views (Epic 12), housekeeping room-status board (housekeeping epic), connected-room/villa groupings.
+
+---
+
+## Decisions made during implementation (Epic 11, recorded per repo law)
+
+- **Cards PDF endpoint is `GET /tenant/rooms/pdf/cards?scope=&floors=&roomIds=`** (not POST): PDF generation is a read and must work for expired-trial (read-only) hotels; a POST would be blocked by `SUBSCRIPTION_READ_ONLY`. `roomIds` capped at 100/request.
+- **`hotels.roomsCount` remains the live derived counter** (synced transactionally by `TenantRoomsService`, staff-counter pattern); the old manual column was renamed `declaredRoomsCount` (camelCase, matching repo convention over the spec's snake_case wording) and is reference-only.
+- **`setup.complete` requires all four steps** (staffAdded, roleCreated, roomsAdded, qrGenerated); `hotels.qrGeneratedAt` is stamped on first poster/cards generation and drives the "print your QR codes" checklist step.
+- **`TenantUrlsService` moved to a leaf `TenantUrlsModule`** (HotelsModule ↔ TenantRoomsModule would otherwise cycle); `buildGuestUrl(slug, params?)` is the generic hook location QRs (`?location=`) will reuse.
+- **Bulk/import share one pipeline:** `room-rows.ts` pure validation + `POST /tenant/rooms/bulk` (`source: 'range' | 'import'`); commit re-validates under the hotel lock; duplicate 409s carry `roomNumbers: string[]` (plural) in bulk vs `roomNumber` in single-create. Extra stable codes added: `BULK_RANGE_INVALID`, `NO_ROOMS_IN_SCOPE`.
+- **Natural sort casts the numeric prefix to `::numeric`** (not bigint — 20-digit room numbers must not 500) and the list/export queries avoid TypeORM's join+skip/take two-pass pagination (raw `ORDER BY` breaks it); room types are batch-loaded.
+- **Xlsx template example rows use a `#` prefix** on the room number as the ignore-marker; dropdowns fall back to a hidden sheet when values contain commas or exceed Excel's 255-char literal limit.
+- **Tenant frontend reads `NEXT_PUBLIC_GUEST_APP_BASE_URL`** (default matches the backend's `GUEST_APP_BASE_URL` default) solely to display the hotel-wide guest URL as text; QR images themselves are always backend-derived.
+- **Migration note:** the role backfill grants rooms permissions by role NAME (Manager/Front Desk/Housekeeping, non-system) — custom roles sharing those names also gain the keys.
+- **Epic 12 carry-overs:** `hasStayHistory()` renumber guard must THROW (currently a silent-allow stub); the stays path must keep the lock-hotel-first transaction ordering; the room-cards scan-prompt line (~6.8pt) should get a real paper print test before production print runs.
