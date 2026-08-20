@@ -11,6 +11,7 @@ import { MustChangePasswordGuard } from './common/guards/must-change-password.gu
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { TenantAccessGuard } from './common/guards/tenant-access.guard';
 import { TenantJwtAuthGuard } from './common/guards/tenant-jwt-auth.guard';
+import { GuestJwtAuthGuard } from './common/guards/guest-jwt-auth.guard';
 import { AdminsModule } from './modules/admins/admins.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -27,6 +28,7 @@ import { TenantProfileModule } from './modules/tenant-profile/tenant-profile.mod
 import { TenantRolesModule } from './modules/tenant-roles/tenant-roles.module';
 import { TenantRoomsModule } from './modules/tenant-rooms/tenant-rooms.module';
 import { TenantStaysModule } from './modules/tenant-stays/tenant-stays.module';
+import { GuestModule } from './modules/guest/guest.module';
 import { TenantStaffModule } from './modules/tenant-staff/tenant-staff.module';
 import { TenantUsersModule } from './modules/tenant-users/tenant-users.module';
 
@@ -65,6 +67,7 @@ import { TenantUsersModule } from './modules/tenant-users/tenant-users.module';
     TenantRolesModule,
     TenantRoomsModule,
     TenantStaysModule,
+    GuestModule,
     TenantStaffModule,
     TenantUsersModule,
   ],
@@ -72,6 +75,7 @@ import { TenantUsersModule } from './modules/tenant-users/tenant-users.module';
     // Injected into JwtAuthGuard so tenant-scoped routes authenticate with the
     // tenant-jwt strategy; not an APP_GUARD itself.
     TenantJwtAuthGuard,
+    GuestJwtAuthGuard,
     // Order matters: authenticate, authorize, enforce access state, then the
     // forced-password-change gate (needs the loaded user; runs last).
     { provide: APP_GUARD, useClass: JwtAuthGuard },
