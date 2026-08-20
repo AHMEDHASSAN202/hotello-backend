@@ -85,6 +85,13 @@ export interface BulkPreview {
   duplicateCount: number;
   invalidCount: number;
   remaining: number | null;
+  /**
+   * Import previews only: rows skipped because their room number starts with
+   * the template's `#` example marker. Surfaced so the UI can explain a
+   * "0 valid rows" preview when the user filled in the example rows but kept
+   * the leading `#` (a real support case). Absent on range previews.
+   */
+  skippedExampleRows?: number;
 }
 
 @Injectable()
@@ -596,8 +603,9 @@ export class TenantRoomsService {
       where: { hotelId, isActive: true },
     });
 
-    const { rows } = await parseImport(file.buffer, types);
-    return this.assemblePreview(hotelId, rows);
+    const { rows, skippedExampleRows } = await parseImport(file.buffer, types);
+    const preview = await this.assemblePreview(hotelId, rows);
+    return { ...preview, skippedExampleRows };
   }
 
   /**

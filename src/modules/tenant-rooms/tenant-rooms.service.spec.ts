@@ -861,6 +861,18 @@ describe('TenantRoomsService', () => {
       ]);
     });
 
+    it('surfaces skippedExampleRows so the UI can explain a 0-valid preview when users keep the # marker on the example rows', async () => {
+      // Real support case: the user typed their rooms over the template's
+      // example rows but kept the leading '#', so every row was skipped.
+      mockedParseImport.mockResolvedValue({ rows: [], skippedExampleRows: 3 });
+
+      const result = await service.importPreview(makeActor(), makeFile());
+
+      expect(result.validCount).toBe(0);
+      expect(result.rows).toEqual([]);
+      expect(result.skippedExampleRows).toBe(3);
+    });
+
     it('AC4 — returns remaining plan seats like the range preview', async () => {
       countable = 10;
       mockedParseImport.mockResolvedValue({
