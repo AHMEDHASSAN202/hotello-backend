@@ -7,6 +7,7 @@ export const NOTIFICATION_TYPES = [
   'trial_expired',
   'hotel_suspended',
   'hotel_reactivated',
+  'stay_code',
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 

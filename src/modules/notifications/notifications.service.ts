@@ -86,6 +86,17 @@ export class NotificationsService {
   }
 
   /**
+   * Epic 13 (13.1 AC4) — guest-facing emails, resolved from the GUEST's
+   * language (one of the 7 guest languages), not the hotel/staff preference:
+   * `ar`/`en` render natively, everything else falls back to `en` for now.
+   * THE expansion point when the Guest App localization epic brings full
+   * 7-language templates — extend here, never add a second resolver.
+   */
+  resolveGuestEmailLanguage(guestLanguage: string): NotificationLanguage {
+    return guestLanguage === 'ar' ? 'ar' : 'en';
+  }
+
+  /**
    * Story 6.1 AC1 — persist-first. Renders at queue time (a render failure is
    * itself recorded as `failed`, Story 6.3 AC5) and inserts the outbox row.
    * Returns null when the dedupe key already exists (Story 6.1 AC4).

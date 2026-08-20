@@ -10,6 +10,7 @@ import { ownerSetupLinkTemplate } from './owner-setup-link.template';
 import { staffInviteTemplate } from './staff-invite.template';
 import { staffWelcomeTemplate } from './staff-welcome.template';
 import { tenantPasswordResetTemplate } from './tenant-password-reset.template';
+import { stayCodeTemplate } from './stay-code.template';
 import { NotificationTemplate } from './template.types';
 import { trialCountdownTemplate } from './trial-countdown.template';
 import { trialExpiredTemplate } from './trial-expired.template';
@@ -36,6 +37,7 @@ const REGISTRY: Record<NotificationType, NotificationTemplate<any>> = {
   trial_expired: trialExpiredTemplate,
   hotel_suspended: hotelSuspendedTemplate,
   hotel_reactivated: hotelReactivatedTemplate,
+  stay_code: stayCodeTemplate,
 };
 
 export interface RenderedNotification {
@@ -119,6 +121,30 @@ export function renderResetLinkEmail(
     resetLink: buildUrl(rawToken),
   });
   return { masked, real, redact: [rawToken] };
+}
+
+/**
+ * The stay-code twin (Epic 13, 13.1 AC4): the code itself is the secret —
+ * masked in the persisted render, real only in the caller's stack.
+ */
+export function renderStayCodeEmail(
+  language: NotificationLanguage,
+  vars: Record<string, unknown>,
+  rawCode: string,
+): {
+  masked: RenderedNotification;
+  real: RenderedNotification;
+  redact: string[];
+} {
+  const masked = renderNotification('stay_code', language, {
+    ...vars,
+    code: REDACTION_MASK,
+  });
+  const real = renderNotification('stay_code', language, {
+    ...vars,
+    code: rawCode,
+  });
+  return { masked, real, redact: [rawCode] };
 }
 
 /** Locale-aware display dates for template variables. */

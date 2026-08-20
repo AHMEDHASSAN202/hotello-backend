@@ -47,6 +47,14 @@ const FULL_VARS: Record<NotificationType, Record<string, unknown>> = {
     reason: 'non_payment',
   },
   hotel_reactivated: { hotelName: 'Nile Grand', ownerName: 'Owner One' },
+  stay_code: {
+    hotelName: 'Nile Grand',
+    guestName: 'Guest One',
+    roomNumber: '101A',
+    code: '123456',
+    guestAppUrl: 'https://guest.gxp.example/nile-grand',
+    checkOutDate: '25 Aug 2026',
+  },
 };
 
 describe('bilingual templates (6.3)', () => {

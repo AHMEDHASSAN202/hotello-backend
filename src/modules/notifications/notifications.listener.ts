@@ -13,6 +13,7 @@ import {
   OwnerSetupLinkRequestedEvent,
   StaffInviteRequestedEvent,
   StaffWelcomeRequestedEvent,
+  StayCodeIssuedEvent,
   TenantPasswordResetRequestedEvent,
   TrialCountdownEvent,
   TrialExpiredEvent,
@@ -25,6 +26,7 @@ import {
   renderResetLinkEmail,
   renderSetupLinkEmail,
   renderStaffInviteEmail,
+  renderStayCodeEmail,
 } from './templates/render';
 
 /**
@@ -212,6 +214,52 @@ export class NotificationsListener {
       }
     } catch (err) {
       this.logError(NOTIFICATION_EVENTS.TENANT_PASSWORD_RESET_REQUESTED, err);
+    }
+  }
+
+  @OnEvent(NOTIFICATION_EVENTS.STAY_CODE_ISSUED)
+  async onStayCodeIssued(event: StayCodeIssuedEvent) {
+    try {
+      // Guest emails resolve from the GUEST's language (13.1 AC4): ar/en
+      // natively, the other five guest languages fall back to en for now.
+      const language = this.notifications.resolveGuestEmailLanguage(
+        event.language,
+      );
+      const vars = {
+        hotelName: language === 'ar' ? event.hotelNameAr : event.hotelNameEn,
+        guestName: event.guestName,
+        roomNumber: event.roomNumber,
+        guestAppUrl: event.guestAppUrl,
+        checkOutDate: formatNotificationDate(
+          new Date(event.checkOutDate),
+          language,
+        ),
+      };
+      // The code is the secret — masked render persisted, real render sent.
+      const { masked, real, redact } = renderStayCodeEmail(
+        language,
+        vars,
+        event.rawCode,
+      );
+
+      const row = await this.notifications.enqueue({
+        type: 'stay_code',
+        recipientName: event.guestName,
+        recipientEmail: event.guestEmail,
+        hotelId: event.hotelId,
+        language,
+        variables: vars,
+        dedupeKey: dedupeKeys.stayCode(event.stayId, event.rawCode),
+        prerendered: masked,
+      });
+      if (row) {
+        this.dispatchSend(row, NOTIFICATION_EVENTS.STAY_CODE_ISSUED, {
+          html: real.html,
+          redact,
+        });
+      }
+    } catch (err) {
+      this.logError(NOTIFICATION_EVENTS.STAY_CODE_ISSUED, err);
     }
   }
 

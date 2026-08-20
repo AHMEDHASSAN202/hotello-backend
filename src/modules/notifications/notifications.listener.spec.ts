@@ -16,6 +16,7 @@ describe('NotificationsListener', () => {
     enqueue: jest.Mock;
     attemptSend: jest.Mock;
     resolveLanguage: jest.Mock;
+    resolveGuestEmailLanguage: jest.Mock;
   };
   let hotelsRepo: { findOne: jest.Mock };
   let tenantUsersRepo: { findOne: jest.Mock };
@@ -76,6 +77,9 @@ describe('NotificationsListener', () => {
       resolveLanguage: jest.fn(
         (h: Pick<Hotel, 'defaultLanguage'>) =>
           h.defaultLanguage === 'en' ? 'en' : 'ar',
+      ),
+      resolveGuestEmailLanguage: jest.fn((lang: string) =>
+        lang === 'ar' ? 'ar' : 'en',
       ),
     };
     hotelsRepo = { findOne: jest.fn().mockResolvedValue(hotel) };
@@ -204,6 +208,60 @@ describe('NotificationsListener', () => {
       await listener.onStaffInviteRequested(staffInviteEvent({ language: 'en' }));
       const input = notifications.enqueue.mock.calls[0][0];
       expect(input.variables.roleName).toBe('Manager');
+    });
+  });
+
+  describe('stay code email (13.1 AC4)', () => {
+    const stayCodeEvent = (overrides: Record<string, unknown> = {}) => ({
+      stayId: 'stay-1',
+      hotelId: 'hotel-1',
+      guestName: 'Guest One',
+      guestEmail: 'guest@example.com',
+      roomNumber: '101',
+      language: 'ar',
+      hotelNameEn: 'Nile Grand',
+      hotelNameAr: 'نايل جراند',
+      slug: 'nile-grand',
+      guestAppUrl: 'https://guest.gxp.example/nile-grand',
+      checkOutDate: '2026-08-25',
+      rawCode: '123456',
+      ...overrides,
+    });
+
+    it('persists a MASKED body — the code never reaches the outbox row', async () => {
+      await listener.onStayCodeIssued(stayCodeEvent() as never);
+
+      const input = notifications.enqueue.mock.calls[0][0];
+      expect(input.type).toEqual('stay_code');
+      expect(input.language).toEqual('ar');
+      expect(input.prerendered.html).not.toContain('123456');
+      expect(JSON.stringify(input.variables)).not.toContain('123456');
+      expect(input.dedupeKey).toMatch(/^stay_code:stay-1:/);
+    });
+
+    it('sends the REAL body to the driver with the code in the redaction list', async () => {
+      await listener.onStayCodeIssued(stayCodeEvent() as never);
+      // dispatchSend is fire-and-forget — flush the microtask queue.
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(notifications.attemptSend).toHaveBeenCalledTimes(1);
+      const [, inMemory] = notifications.attemptSend.mock.calls[0];
+      expect(inMemory.html).toContain('123456');
+      expect(inMemory.redact).toEqual(['123456']);
+    });
+
+    it('non-ar/en guest languages fall back to English (7-language expansion point)', async () => {
+      await listener.onStayCodeIssued(stayCodeEvent({ language: 'ru' }) as never);
+      const input = notifications.enqueue.mock.calls[0][0];
+      expect(input.language).toEqual('en');
+      expect(input.prerendered.html).toContain('Nile Grand');
+    });
+
+    it('a dedupe hit skips the send entirely', async () => {
+      notifications.enqueue.mockResolvedValue(null);
+      await listener.onStayCodeIssued(stayCodeEvent() as never);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(notifications.attemptSend).not.toHaveBeenCalled();
     });
   });
 

@@ -60,4 +60,12 @@ export const dedupeKeys = {
 
   hotelReactivated: (hotelId: string, occurredAt: Date): string =>
     `hotel_reactivated:${hotelId}:${occurredAt.toISOString()}`,
+
+  /**
+   * Epic 13 (13.1 AC4) — the code digest discriminates occurrences: a
+   * regenerated code counts as a new send, a double-emit of the same
+   * check-in collapses.
+   */
+  stayCode: (stayId: string, rawCode: string): string =>
+    `stay_code:${stayId}:${createHash('sha256').update(rawCode).digest('hex').slice(0, 12)}`,
 };
