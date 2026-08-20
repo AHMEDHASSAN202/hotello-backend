@@ -71,6 +71,11 @@ export class Hotel {
   @Column({ default: 'EGP' })
   currency: string;
 
+  // Hotel-local checkout hour 'HH:MM' (Epic 13, Story 13.4 AC2) — the daily
+  // auto-checkout job compares it against hotel-local time via `timezone`.
+  @Column({ length: 5, default: '12:00' })
+  checkoutTime: string;
+
   // Sales-declared count from onboarding — reference only, no guard reads it (11.6 AC2).
   @Column({ type: 'int', default: 0 })
   declaredRoomsCount: number;

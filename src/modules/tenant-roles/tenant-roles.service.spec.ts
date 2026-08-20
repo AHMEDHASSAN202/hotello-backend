@@ -84,6 +84,10 @@ describe('TenantRolesService', () => {
         'rooms.read',
         'rooms.create',
         'rooms.update',
+        'stays.read',
+        'stays.checkin',
+        'stays.update',
+        'stays.checkout',
       ]);
       expect(managerRole.isSystem).toBe(false);
       expect(saved.map((r) => r.nameEn)).toEqual([

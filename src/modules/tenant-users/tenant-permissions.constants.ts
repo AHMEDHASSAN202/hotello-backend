@@ -132,6 +132,43 @@ export const TENANT_PERMISSION_CATALOG: TenantPermissionGroup[] = [
       },
     ],
   },
+  {
+    group: 'stays',
+    labelEn: 'Stays',
+    labelAr: 'الإقامات',
+    permissions: [
+      {
+        key: 'stays.read',
+        labelEn: 'View stays',
+        labelAr: 'عرض الإقامات',
+        descriptionEn: 'See current and past stays and room occupancy.',
+        descriptionAr: 'عرض الإقامات الحالية والسابقة وإشغال الغرف.',
+      },
+      {
+        key: 'stays.checkin',
+        labelEn: 'Check in guests',
+        labelAr: 'تسجيل دخول النزلاء',
+        descriptionEn: 'Check a guest into a room and issue their stay code.',
+        descriptionAr: 'تسجيل دخول النزيل إلى غرفة وإصدار رمز الإقامة الخاص به.',
+      },
+      {
+        key: 'stays.update',
+        labelEn: 'Manage stays',
+        labelAr: 'إدارة الإقامات',
+        descriptionEn:
+          'Extend stays, change rooms, edit guest info, regenerate codes, and edit stay settings.',
+        descriptionAr:
+          'تمديد الإقامات وتغيير الغرف وتعديل بيانات النزلاء وإعادة إصدار الرموز وتعديل إعدادات الإقامة.',
+      },
+      {
+        key: 'stays.checkout',
+        labelEn: 'Check out guests',
+        labelAr: 'تسجيل خروج النزلاء',
+        descriptionEn: 'End a stay and sign the guest out of the app.',
+        descriptionAr: 'إنهاء الإقامة وتسجيل خروج النزيل من التطبيق.',
+      },
+    ],
+  },
 ];
 
 export const ALL_TENANT_PERMISSION_KEYS: string[] =
