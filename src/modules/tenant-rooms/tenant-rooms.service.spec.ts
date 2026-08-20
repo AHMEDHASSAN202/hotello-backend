@@ -15,6 +15,7 @@ import { RoomQrService } from './room-qr.service';
 import { RoomRowInput } from './room-rows';
 import { Room } from './room.entity';
 import { RoomType } from './room-type.entity';
+import { Stay } from '../tenant-stays/stay.entity';
 import { NATURAL_ROOM_ORDER, TenantRoomsService } from './tenant-rooms.service';
 import { parseImport } from './xlsx/parse-import';
 
@@ -46,6 +47,8 @@ describe('TenantRoomsService', () => {
   let roomsRepo: { createQueryBuilder: jest.Mock; findOne: jest.Mock };
   let roomTypesRepo: { find: jest.Mock };
   let hotelsRepo: { findOne: jest.Mock };
+  let staysRepo: { find: jest.Mock; findOne: jest.Mock; exists: jest.Mock };
+  let managerStays: { findOne: jest.Mock };
   let subscriptions: { getForHotel: jest.Mock };
   let auditLogs: { log: jest.Mock };
   let tenantUrls: { buildGuestUrl: jest.Mock };
@@ -90,6 +93,12 @@ describe('TenantRoomsService', () => {
     };
     roomTypesRepo = { find: jest.fn().mockResolvedValue([]) };
     hotelsRepo = { findOne: jest.fn() };
+    staysRepo = {
+      find: jest.fn().mockResolvedValue([]),
+      findOne: jest.fn().mockResolvedValue(null),
+      exists: jest.fn().mockResolvedValue(false),
+    };
+    managerStays = { findOne: jest.fn().mockResolvedValue(null) };
     subscriptions = { getForHotel: jest.fn() };
     auditLogs = { log: jest.fn() };
     tenantUrls = {
@@ -133,6 +142,7 @@ describe('TenantRoomsService', () => {
       getRepository: jest.fn((entity) => {
         if (entity === Hotel) return managerHotel;
         if (entity === RoomType) return managerRoomTypes;
+        if (entity === Stay) return managerStays;
         return managerRooms;
       }),
       save: jest.fn(async (_entity: unknown, rows: unknown[]) => rows),
@@ -150,6 +160,7 @@ describe('TenantRoomsService', () => {
         { provide: getRepositoryToken(Room), useValue: roomsRepo },
         { provide: getRepositoryToken(RoomType), useValue: roomTypesRepo },
         { provide: getRepositoryToken(Hotel), useValue: hotelsRepo },
+        { provide: getRepositoryToken(Stay), useValue: staysRepo },
         { provide: SubscriptionsService, useValue: subscriptions },
         { provide: DataSource, useValue: dataSource },
         { provide: AuditLogsService, useValue: auditLogs },
@@ -1416,6 +1427,148 @@ describe('TenantRoomsService', () => {
       } as UpdateRoomDto);
 
       expect(callOrder).toEqual(['commit', 'audit']);
+    });
+  });
+
+  describe('stays integration (Epic 13)', () => {
+    const baseRoom = (o: Record<string, unknown> = {}) => ({
+      id: 'room-1',
+      hotelId: HOTEL_ID,
+      roomNumber: '101',
+      floor: 1,
+      roomTypeId: 'rt-1',
+      status: 'active',
+      roomType: { id: 'rt-1', nameEn: 'Standard', nameAr: 'قياسية' },
+      ...o,
+    });
+
+    beforeEach(() => {
+      subscriptions.getForHotel.mockResolvedValue({
+        current: { plan: { maxRooms: 50 } },
+      });
+      managerHotel.findOne.mockResolvedValue({ id: HOTEL_ID, roomsCount: 3 });
+      managerRooms.findOne.mockImplementation(
+        async ({ where }: { where: Record<string, unknown> }) => {
+          if (where.id) return baseRoom();
+          return null;
+        },
+      );
+      managerRooms.save = jest.fn(async (r: unknown) => r);
+    });
+
+    it('hasStayHistory delegates to a stays existence query', async () => {
+      staysRepo.exists.mockResolvedValue(true);
+      await expect(service.hasStayHistory('room-1')).resolves.toBe(true);
+      expect(staysRepo.exists).toHaveBeenCalledWith({
+        where: { roomId: 'room-1' },
+      });
+    });
+
+    it('11.4 AC1 — renumbering a room with stay history THROWS (no silent skip)', async () => {
+      staysRepo.exists.mockResolvedValue(true);
+      await expect(
+        service.updateRoom(makeActor(), 'room-1', {
+          roomNumber: '999',
+        } as UpdateRoomDto),
+      ).rejects.toMatchObject({
+        response: { code: 'ROOM_HAS_STAY_HISTORY' },
+      });
+      expect(managerRooms.save).not.toHaveBeenCalled();
+    });
+
+    it('11.4 AC2 — an occupied room cannot leave active (409 ROOM_OCCUPIED)', async () => {
+      managerStays.findOne.mockResolvedValue({ id: 'stay-1' });
+      await expect(
+        service.updateRoom(makeActor(), 'room-1', {
+          status: 'out_of_service',
+        } as UpdateRoomDto),
+      ).rejects.toMatchObject({ response: { code: 'ROOM_OCCUPIED' } });
+      // The occupancy check ran inside the locked transaction.
+      expect(managerStays.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { roomId: 'room-1', status: 'active' },
+        }),
+      );
+    });
+
+    it('a vacant room still transitions normally', async () => {
+      managerStays.findOne.mockResolvedValue(null);
+      const result = await service.updateRoom(makeActor(), 'room-1', {
+        status: 'out_of_service',
+      } as UpdateRoomDto);
+      expect(result.status).toEqual('out_of_service');
+    });
+
+    describe('occupancy on the rooms list (13.2 AC3)', () => {
+      beforeEach(() => {
+        hotelsRepo.findOne.mockResolvedValue({ id: HOTEL_ID, roomsCount: 12 });
+        qb.getCount.mockResolvedValue(2);
+        qb.getMany.mockResolvedValue([
+          makeRoom(),
+          makeRoom({ id: 'room-2', roomNumber: '102' }),
+        ]);
+        roomTypesRepo.find.mockResolvedValue([
+          { id: 'rt-1', nameEn: 'Standard', nameAr: 'قياسية' },
+        ]);
+      });
+
+      it('batch-loads active stays in ONE query and maps occupied/vacant', async () => {
+        staysRepo.find.mockResolvedValue([
+          {
+            id: 'stay-1',
+            roomId: 'room-1',
+            guestName: 'Ahmed Ali',
+            checkOutDate: '2026-08-25',
+            status: 'active',
+          },
+        ]);
+
+        const result = await service.list(
+          HOTEL_ID,
+          {} as ListRoomsQueryDto,
+          true,
+        );
+
+        expect(staysRepo.find).toHaveBeenCalledTimes(1);
+        expect(result.data[0].currentStay).toEqual({
+          id: 'stay-1',
+          guestName: 'Ahmed Ali',
+          checkOutDate: '2026-08-25',
+        });
+        expect(result.data[1].currentStay).toBeNull();
+      });
+
+      it('without stays.read the field is absent and no stays query runs', async () => {
+        const result = await service.list(
+          HOTEL_ID,
+          {} as ListRoomsQueryDto,
+          false,
+        );
+        expect(staysRepo.find).not.toHaveBeenCalled();
+        expect('currentStay' in result.data[0]).toBe(false);
+      });
+    });
+
+    it('detail exposes the current stay only with occupancy access', async () => {
+      roomsRepo.findOne.mockResolvedValue(baseRoom());
+      hotelsRepo.findOne.mockResolvedValue({ id: HOTEL_ID, slug: 'sunrise' });
+      staysRepo.findOne.mockResolvedValue({
+        id: 'stay-1',
+        roomId: 'room-1',
+        guestName: 'Ahmed Ali',
+        checkOutDate: '2026-08-25',
+        status: 'active',
+      });
+
+      const withAccess = await service.detail(HOTEL_ID, 'room-1', true);
+      expect(withAccess.currentStay).toEqual({
+        id: 'stay-1',
+        guestName: 'Ahmed Ali',
+        checkOutDate: '2026-08-25',
+      });
+
+      const withoutAccess = await service.detail(HOTEL_ID, 'room-1', false);
+      expect('currentStay' in withoutAccess).toBe(false);
     });
   });
 });

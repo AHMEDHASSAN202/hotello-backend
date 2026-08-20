@@ -33,6 +33,16 @@ import { IMPORT_MAX_BYTES } from './xlsx/rooms-xlsx.constants';
 import { RoomsXlsxService } from './xlsx/rooms-xlsx.service';
 
 /**
+ * Epic 13 (13.2 AC3) — occupancy rides the rooms payload only for actors who
+ * could read it from the stays screens anyway. Permission-gating a FIELD is
+ * done here (the guard gates routes, not payload shapes).
+ */
+const canReadStays = (user: TenantUser): boolean => {
+  const permissions = user.role?.permissions ?? [];
+  return permissions.includes('*') || permissions.includes('stays.read');
+};
+
+/**
  * Rooms (Epic 11, Story 11.2+). `hotel_id` always comes from the
  * authenticated tenant user, never the client. Registered after
  * `RoomTypesController` in the module so `tenant/room-types` never falls
@@ -53,7 +63,11 @@ export class TenantRoomsController {
     @CurrentTenantUser() user: TenantUser,
     @Query() query: ListRoomsQueryDto,
   ) {
-    return this.roomsService.list(user.hotelId, query);
+    return this.roomsService.list(
+      user.hotelId,
+      query,
+      canReadStays(user),
+    );
   }
 
   @Post()
@@ -215,7 +229,7 @@ export class TenantRoomsController {
     @CurrentTenantUser() user: TenantUser,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    return this.roomsService.detail(user.hotelId, id);
+    return this.roomsService.detail(user.hotelId, id, canReadStays(user));
   }
 
   /** Story 11.5 AC3/AC4 — the per-room guest-app QR; derived on demand, never stored. */

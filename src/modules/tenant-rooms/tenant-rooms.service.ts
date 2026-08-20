@@ -32,6 +32,7 @@ import {
 import { QrFormat, QrResult, RoomQrService } from './room-qr.service';
 import { COUNTABLE_ROOM_STATUSES, Room, RoomStatus } from './room.entity';
 import { RoomType } from './room-type.entity';
+import { Stay } from '../tenant-stays/stay.entity';
 import { parseImport } from './xlsx/parse-import';
 import { IMPORT_XLSX_MIME_TYPES } from './xlsx/rooms-xlsx.constants';
 
@@ -55,6 +56,12 @@ export interface RoomView {
   floor: number | null;
   status: Room['status'];
   roomType: { id: string; nameEn: string; nameAr: string };
+  /**
+   * Epic 13 (13.2 AC3) — the room's active stay, present ONLY when the actor
+   * holds `stays.read` (undefined otherwise, so the payload leaks nothing to
+   * housekeeping-style roles).
+   */
+  currentStay?: { id: string; guestName: string; checkOutDate: string } | null;
 }
 
 /** Detail response (Story 11.5 AC4) — `RoomView` plus the derived guest URL. */
@@ -103,6 +110,8 @@ export class TenantRoomsService {
     private readonly roomTypesRepo: Repository<RoomType>,
     @InjectRepository(Hotel)
     private readonly hotelsRepo: Repository<Hotel>,
+    @InjectRepository(Stay)
+    private readonly staysRepo: Repository<Stay>,
     private readonly subscriptions: SubscriptionsService,
     private readonly dataSource: DataSource,
     private readonly auditLogs: AuditLogsService,
@@ -116,7 +125,11 @@ export class TenantRoomsService {
    * derived `roomsCount` (kept live by every mutation in this epic) rather
    * than a live COUNT, so the list path stays cheap.
    */
-  async list(hotelId: string, query: ListRoomsQueryDto) {
+  async list(
+    hotelId: string,
+    query: ListRoomsQueryDto,
+    includeOccupancy = false,
+  ) {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 50;
 
@@ -162,17 +175,26 @@ export class TenantRoomsService {
       });
     }
 
-    const roomTypes = await this.loadRoomTypesByIds(
-      rows.map((room) => room.roomTypeId),
-    );
+    // Same no-join discipline for occupancy (13.2 AC3 — no N+1): one
+    // batch query per page, only when the actor may see stays.
+    const [roomTypes, activeStays] = await Promise.all([
+      this.loadRoomTypesByIds(rows.map((room) => room.roomTypeId)),
+      includeOccupancy
+        ? this.loadActiveStaysByRoomIds(rows.map((room) => room.id))
+        : Promise.resolve(null),
+    ]);
 
     return {
-      data: rows.map((room) =>
-        this.toRoomView({
+      data: rows.map((room) => {
+        const view = this.toRoomView({
           ...room,
           roomType: roomTypes.get(room.roomTypeId) as RoomType,
-        }),
-      ),
+        });
+        if (activeStays) {
+          view.currentStay = this.toCurrentStay(activeStays.get(room.id));
+        }
+        return view;
+      }),
       total,
       page,
       pageSize,
@@ -180,6 +202,29 @@ export class TenantRoomsService {
         used: hotel.roomsCount,
         max,
       },
+    };
+  }
+
+  /** Epic 13 (13.2 AC3) — active stays for a page of rooms, one query. */
+  private async loadActiveStaysByRoomIds(
+    ids: string[],
+  ): Promise<Map<string, Stay>> {
+    const uniqueIds = [...new Set(ids)];
+    if (uniqueIds.length === 0) return new Map();
+    const stays = await this.staysRepo.find({
+      where: { roomId: In(uniqueIds), status: 'active' },
+    });
+    return new Map(stays.map((stay) => [stay.roomId, stay]));
+  }
+
+  private toCurrentStay(
+    stay: Stay | undefined,
+  ): { id: string; guestName: string; checkOutDate: string } | null {
+    if (!stay) return null;
+    return {
+      id: stay.id,
+      guestName: stay.guestName,
+      checkOutDate: stay.checkOutDate,
     };
   }
 
@@ -277,17 +322,29 @@ export class TenantRoomsService {
    * derived guest URL. The slug always comes from the actor's own hotel
    * (loaded server-side by `hotelId`) — never from client input.
    */
-  async detail(hotelId: string, id: string): Promise<RoomDetailView> {
+  async detail(
+    hotelId: string,
+    id: string,
+    includeOccupancy = false,
+  ): Promise<RoomDetailView> {
     const [room, hotel] = await Promise.all([
       this.findRoomInHotel(hotelId, id),
       this.loadHotel(hotelId),
     ]);
-    return {
+    const view: RoomDetailView = {
       ...this.toRoomView(room),
       guestUrl: this.tenantUrls.buildGuestUrl(hotel.slug, {
         room: room.roomNumber,
       }),
     };
+    if (includeOccupancy) {
+      // 13.2 AC3 / note 6 — the room detail shows its current stay.
+      const stay = await this.staysRepo.findOne({
+        where: { roomId: room.id, status: 'active' },
+      });
+      view.currentStay = this.toCurrentStay(stay ?? undefined);
+    }
+    return view;
   }
 
   /** Story 11.5 AC3/AC4 — `GET /tenant/rooms/qr/general`: the hotel-wide guest URL as a QR. */
@@ -474,32 +531,51 @@ export class TenantRoomsService {
       }
 
       if (dto.roomNumber !== undefined) {
-        // Epic 12: check stays table — once stays exist, a true result here
-        // throws instead of falling through to the renumber below. The stub
-        // always returns false today, so every renumber is currently allowed.
-        const hasHistory = await this.hasStayHistory(room.id);
-        if (!hasHistory) {
-          const normalized = dto.roomNumber.trim().toUpperCase();
-          if (normalized !== room.roomNumber) {
-            const dupe = await roomsRepo.findOne({
-              where: { hotelId: actor.hotelId, roomNumber: normalized },
+        const normalized = dto.roomNumber.trim().toUpperCase();
+        if (normalized !== room.roomNumber) {
+          // 11.4 AC1 (armed by Epic 13) — the number is printed on QR cards
+          // tied to stay history: once the room has hosted a stay, a
+          // renumber is a hard 409, never a silent skip.
+          if (await this.hasStayHistory(room.id)) {
+            throw new ConflictException({
+              code: 'ROOM_HAS_STAY_HISTORY',
+              message: `Room ${room.roomNumber} has stay history — its number can no longer be changed`,
+              roomNumber: room.roomNumber,
             });
-            if (dupe && dupe.id !== room.id) {
-              throw new ConflictException({
-                code: 'ROOM_NUMBER_TAKEN',
-                message: `Room ${normalized} already exists`,
-                roomNumber: normalized,
-              });
-            }
-            diff.roomNumber = { from: room.roomNumber, to: normalized };
-            room.roomNumber = normalized;
           }
+          const dupe = await roomsRepo.findOne({
+            where: { hotelId: actor.hotelId, roomNumber: normalized },
+          });
+          if (dupe && dupe.id !== room.id) {
+            throw new ConflictException({
+              code: 'ROOM_NUMBER_TAKEN',
+              message: `Room ${normalized} already exists`,
+              roomNumber: normalized,
+            });
+          }
+          diff.roomNumber = { from: room.roomNumber, to: normalized };
+          room.roomNumber = normalized;
         }
       }
 
       const statusChanged =
         dto.status !== undefined && dto.status !== room.status;
       if (statusChanged) {
+        // 11.4 AC2, armed by Epic 13 (note 4): a room with an active stay
+        // cannot leave `active` — checkout or move the guest first.
+        if (room.status === 'active') {
+          const occupied = await manager.getRepository(Stay).findOne({
+            where: { roomId: room.id, status: 'active' },
+            select: ['id'],
+          });
+          if (occupied) {
+            throw new ConflictException({
+              code: 'ROOM_OCCUPIED',
+              message: `Room ${room.roomNumber} has an active stay`,
+              roomNumber: room.roomNumber,
+            });
+          }
+        }
         const wasCountable = COUNTABLE_ROOM_STATUSES.includes(room.status);
         const willBeCountable = COUNTABLE_ROOM_STATUSES.includes(
           dto.status as RoomStatus,
@@ -545,14 +621,13 @@ export class TenantRoomsService {
   }
 
   /**
-   * Story 11.4 AC1 — whether this room has ever hosted a guest stay. Once
-   * true, renumbering is blocked (the number is printed on QR cards tied to
-   * that stay's history). No stays table exists yet, so this always returns
-   * false — Epic 12 wires the real check.
+   * Story 11.4 AC1 — whether this room has EVER hosted a guest stay (any
+   * status: stays are permanent records). Once true, renumbering is blocked
+   * — the number is printed on QR cards tied to that stay's history.
+   * Wired by Epic 13.
    */
   async hasStayHistory(roomId: string): Promise<boolean> {
-    // Epic 12: check stays table
-    return false;
+    return this.staysRepo.exists({ where: { roomId } });
   }
 
   /**

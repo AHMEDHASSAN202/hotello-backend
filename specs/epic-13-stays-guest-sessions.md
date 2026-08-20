@@ -109,3 +109,20 @@
 - **Depends on:** Epic 11 (rooms, URL contract), Epics 04–10 machinery. Guidance kit per Epic 12 DoD.
 - **Blocks:** Guest App epic (consumes 13.5 verbatim), Guest Requests epic (requests attach to stays), future analytics (occupancy data starts accumulating now).
 - **Deferred:** WhatsApp code delivery, multiple named guests per stay, reservations/future bookings (check-in is walk-up/on-arrival only — a booking module is a separate product decision), PMS sync, device management for guest sessions.
+
+---
+
+## Decisions made during implementation (Epic 13, recorded per repo law)
+
+- **API bodies are camelCase** (`roomNumber`, not the spec's pseudo `room_number`) — matches every other endpoint; the Guest App epic consumes `POST /guest/{slug}/session` with `{ roomNumber, code }`.
+- **Hash-only storage confirmed** (13.1 AC3's simpler option): `stays.codeHash` is HMAC-SHA256 with `STAY_CODE_HMAC_SECRET` (deterministic → DB-enforceable uniqueness via partial unique index `UQ_stays_hotel_code_active` + O(1) login lookup). 13.3 AC3's reveal flow does not exist; the UI shows a masked code with **Regenerate** (`stay.code_revealed` audit intentionally unused).
+- **Race safety:** `UQ_stays_room_active` (partial unique on `roomId` where active) backs the in-transaction availability check; the 23505 on that constraint maps to `409 ROOM_OCCUPIED`. Stays mutations keep the Epic 11 **lock-hotel-first** ordering, then lock the room row.
+- **Stays list shape:** active view is unpaginated (bounded by room count) in natural room order with app-side filtering; history is paginated `checkedOutAt DESC` with a subquery (not a join) for room-number search — the Epic 11 no-join pagination rule.
+- **Guest token TTL** = check-out date + 1-day buffer (computed as checkout date + 2 days UTC), capped by `GUEST_JWT_MAX_TTL_DAYS` (default 30), floored at 1h; audience `guest`, secret `GUEST_JWT_SECRET`. No guest refresh token — re-entry is by code, and the per-request stay check is the authority.
+- **Guest profile** returns both `hotelNameEn`/`hotelNameAr` (+ `slug`) rather than a single `hotelName` — bilingual convention; the app picks by `language`.
+- **Rate limits** (env-tunable): per IP+room 5/15min then escalating lockout (base 15min, ×2 per consecutive lockout, cap 24h); per IP+hotel 30/hour; plus a coarse @Throttle 30/min on the route. In-memory in `GuestRateLimitService` (Redis swap = that one service). Lockouts log warnings; codes never logged.
+- **Auto-checkout runs hourly** (not daily): "noon" is hotel-local, so each tick closes stays whose hotel-local clock passed `hotels.checkoutTime` (Intl-based, no tz library added). Audits `stay.checked_out` with `actorId: null`.
+- **New stable error codes:** `ROOM_OCCUPIED`, `ROOM_NOT_AVAILABLE`, `STAY_NOT_FOUND`, `STAY_NOT_ACTIVE`, `INVALID_STAY_DATES`, `ROOM_HAS_STAY_HISTORY`, `INVALID_CODE`, `HOTEL_UNAVAILABLE`, `TOO_MANY_ATTEMPTS` (with `retryAfterSeconds`).
+- **Occupancy on rooms endpoints is permission-gated per FIELD:** `GET /tenant/rooms` and `/tenant/rooms/:id` include `currentStay` only when the actor holds `stays.read` (or `*`); it's batch-loaded by room ids (never joined — pagination rule). The Epic 11 `hasStayHistory()` silent-allow stub now throws `409 ROOM_HAS_STAY_HISTORY` on renumber, and leaving `active` status on an occupied room 409s `ROOM_OCCUPIED`.
+- **Checkout-time setting** lives at `GET/PATCH /tenant/stays/settings` (`stays.read`/`stays.update`), audited as `hotel.updated` with a diff.
+- **`stay_code` email dedupe key** derives from sha256(code) — a regenerated code is a new occurrence; `resolveGuestEmailLanguage()` (in `NotificationsService`, beside `resolveLanguage`) is the single 7-language expansion point.
