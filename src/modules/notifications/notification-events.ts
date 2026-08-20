@@ -17,7 +17,27 @@ export const NOTIFICATION_EVENTS = {
   TRIAL_EXPIRED: 'subscription.trial_expired',
   HOTEL_SUSPENDED: 'hotel.suspended',
   HOTEL_REACTIVATED: 'hotel.reactivated',
+  STAY_CODE_ISSUED: 'stay.code_issued',
 } as const;
+
+export interface StayCodeIssuedEvent {
+  stayId: string;
+  hotelId: string;
+  guestName: string;
+  guestEmail: string;
+  roomNumber: string;
+  /** One of GUEST_LANGUAGES — resolveGuestEmailLanguage maps it to ar/en. */
+  language: string;
+  hotelNameEn: string;
+  hotelNameAr: string;
+  slug: string;
+  /** Guest App entry link for this hotel (Epic 11 URL contract, `/{slug}`). */
+  guestAppUrl: string;
+  /** 'YYYY-MM-DD' in the hotel's timezone. */
+  checkOutDate: string;
+  /** In-memory only — never persisted; the outbox stores a masked body. */
+  rawCode: string;
+}
 
 export interface TenantPasswordResetRequestedEvent {
   hotelId: string;

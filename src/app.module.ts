@@ -26,6 +26,7 @@ import { TenantAuthModule } from './modules/tenant-auth/tenant-auth.module';
 import { TenantProfileModule } from './modules/tenant-profile/tenant-profile.module';
 import { TenantRolesModule } from './modules/tenant-roles/tenant-roles.module';
 import { TenantRoomsModule } from './modules/tenant-rooms/tenant-rooms.module';
+import { TenantStaysModule } from './modules/tenant-stays/tenant-stays.module';
 import { TenantStaffModule } from './modules/tenant-staff/tenant-staff.module';
 import { TenantUsersModule } from './modules/tenant-users/tenant-users.module';
 
@@ -63,6 +64,7 @@ import { TenantUsersModule } from './modules/tenant-users/tenant-users.module';
     TenantProfileModule,
     TenantRolesModule,
     TenantRoomsModule,
+    TenantStaysModule,
     TenantStaffModule,
     TenantUsersModule,
   ],
