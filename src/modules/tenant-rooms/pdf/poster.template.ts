@@ -25,6 +25,13 @@ export interface PosterData {
 const POSTER_DIMENSIONS: Record<
   PosterData['size'],
   {
+    /**
+     * Hard cap on the body height — 1mm under the physical sheet so mm→px
+     * rounding can never spill a fraction of the layout onto a second page.
+     * Paired with `overflow: hidden`, this guarantees a one-page poster even
+     * if a font renders taller than the tuned spacing assumes.
+     */
+    pageHeight: string;
     headerPadding: string;
     logoMaxHeight: string;
     lockupFontSize: string;
@@ -42,22 +49,27 @@ const POSTER_DIMENSIONS: Record<
   }
 > = {
   A4: {
-    headerPadding: '20mm 12mm',
+    pageHeight: '296mm',
+    // 20mm top/bottom + a 32mm logo previously stacked past 297mm — the
+    // with-logo A4 poster spilled onto a second page (with the shorter
+    // no-logo lockup it fit, which is why the original print check missed it).
+    headerPadding: '16mm 12mm',
     logoMaxHeight: '32mm',
     lockupFontSize: '9mm',
     lockupGap: '4mm',
     qrSize: '90mm',
     qrWrapPadding: '8mm',
-    qrWrapMarginTop: '16mm',
+    qrWrapMarginTop: '10mm',
     captionMarginTop: '8mm',
     captionFontSize: '5.5mm',
-    scanLinesMarginTop: '12mm',
+    scanLinesMarginTop: '8mm',
     scanLineFontSize: '5mm',
     scanLinesGap: '3mm',
-    footerPadding: '10mm',
+    footerPadding: '6mm',
     footerFontSize: '3.5mm',
   },
   A5: {
+    pageHeight: '209mm',
     headerPadding: '10mm 8mm',
     logoMaxHeight: '18mm',
     lockupFontSize: '6mm',
@@ -105,8 +117,11 @@ export function posterTemplate(data: PosterData): string {
   @page { size: ${data.size}; margin: 0; }
   ${fontFaceCss()}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { width: 100%; height: 100%; }
+  html { width: 100%; }
   body {
+    width: 100%;
+    height: ${dims.pageHeight};
+    overflow: hidden;
     font-family: 'Noto Sans', 'Noto Kufi Arabic', sans-serif;
     color: ${BRAND_NAVY};
     display: flex;

@@ -86,6 +86,16 @@ describe('posterTemplate (11.5)', () => {
     const a5Qr = Number(a5Html.match(/\.qr-wrap img \{ width: (\d+(?:\.\d+)?)mm/)![1]);
     expect(a5Qr).toBeLessThan(a4Qr);
   });
+
+  it('caps the body below the sheet height with overflow hidden — a with-logo A4 poster spilled onto page 2 without the cap', () => {
+    const a4Html = posterTemplate({ ...base, logoDataUri: 'data:image/png;base64,LOGO' });
+    const a5Html = posterTemplate({ ...base, size: 'A5' });
+    expect(a4Html).toContain('height: 296mm');
+    expect(a5Html).toContain('height: 209mm');
+    for (const html of [a4Html, a5Html]) {
+      expect(html).toMatch(/body\s*\{[^}]*overflow:\s*hidden/);
+    }
+  });
 });
 
 describe('cardsTemplate (11.5)', () => {
@@ -123,6 +133,11 @@ describe('cardsTemplate (11.5)', () => {
     expect(html.match(/class="card"/g)?.length).toBe(8);
     // 8 cards / 4 per sheet = 2 sheets, one page-break between them.
     expect(html.match(/page-break-before: always/g)?.length).toBe(1);
+  });
+
+  it('centers the card content vertically — top-aligned content left the bottom third of the cut card blank', () => {
+    const html = cardsTemplate(base);
+    expect(html).toMatch(/\.card\s*\{[^}]*justify-content:\s*center/);
   });
 
   it('AC2 — card QR block is >= 34mm wide (>=2mm/module headroom for a v3 QR — note 9)', () => {

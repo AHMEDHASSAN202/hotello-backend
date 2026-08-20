@@ -102,6 +102,9 @@ export function cardsTemplate(data: CardsData): string {
     display: flex;
     flex-direction: column;
     align-items: center;
+    /* Content is ~116mm tall on a 148.5mm card — center it so the cut-out
+       card reads balanced instead of top-heavy with a blank bottom third. */
+    justify-content: center;
     padding: 6mm;
     text-align: center;
     page-break-inside: avoid;
