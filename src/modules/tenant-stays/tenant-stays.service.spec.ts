@@ -374,6 +374,315 @@ describe('TenantStaysService', () => {
     });
   });
 
+  describe('update (13.3 AC1/AC5)', () => {
+    const activeStay = (o: Record<string, unknown> = {}) =>
+      ({
+        id: 'stay-1',
+        hotelId: HOTEL_ID,
+        roomId: 'room-1',
+        guestName: 'Ahmed Ali',
+        email: null,
+        phone: null,
+        language: 'ar',
+        guestsCount: null,
+        note: null,
+        status: 'active',
+        checkInDate: futureDate(-2),
+        checkOutDate: futureDate(3),
+        checkoutType: null,
+        checkedOutAt: null,
+        createdAt: new Date(),
+        room: { ...ROOM },
+        ...o,
+      }) as unknown as Stay;
+
+    beforeEach(() => {
+      staysRepo.save = jest.fn(async (s) => s);
+    });
+
+    it('AC1 — extends the stay and audits old/new dates', async () => {
+      staysRepo.findOne.mockResolvedValue(activeStay());
+      const res = await service.update(makeActor(), 'stay-1', {
+        checkOutDate: futureDate(6),
+      } as any);
+
+      expect(res.checkOutDate).toEqual(futureDate(6));
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'stay.dates_changed',
+          metadata: expect.objectContaining({
+            checkOutDate: { from: futureDate(3), to: futureDate(6) },
+          }),
+        }),
+      );
+    });
+
+    it('AC1 — rejects a check-out date in the past (hotel-local today rule)', async () => {
+      staysRepo.findOne.mockResolvedValue(activeStay());
+      await expect(
+        service.update(makeActor(), 'stay-1', {
+          checkOutDate: futureDate(-1),
+        } as any),
+      ).rejects.toMatchObject({ response: { code: 'INVALID_STAY_DATES' } });
+      expect(staysRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('AC1 — rejects a check-out date not after check-in', async () => {
+      staysRepo.findOne.mockResolvedValue(activeStay({ checkInDate: futureDate(4), checkOutDate: futureDate(5) }));
+      await expect(
+        service.update(makeActor(), 'stay-1', { checkOutDate: futureDate(4) } as any),
+      ).rejects.toMatchObject({ response: { code: 'INVALID_STAY_DATES' } });
+    });
+
+    it('AC5 — audits a guest-info diff, clearing nullable fields with null', async () => {
+      staysRepo.findOne.mockResolvedValue(
+        activeStay({ email: 'old@example.com', note: 'old note' }),
+      );
+      await service.update(makeActor(), 'stay-1', {
+        guestName: 'Ahmed A. Ali',
+        email: null,
+        guestsCount: 3,
+      } as any);
+
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'stay.updated',
+          metadata: expect.objectContaining({
+            diff: {
+              guestName: { from: 'Ahmed Ali', to: 'Ahmed A. Ali' },
+              email: { from: 'old@example.com', to: null },
+              guestsCount: { from: null, to: 3 },
+            },
+          }),
+        }),
+      );
+    });
+
+    it('is a no-op without changes — no save, no audit', async () => {
+      staysRepo.findOne.mockResolvedValue(activeStay());
+      await service.update(makeActor(), 'stay-1', {
+        guestName: 'Ahmed Ali',
+      } as any);
+      expect(staysRepo.save).not.toHaveBeenCalled();
+      expect(auditLogs.log).not.toHaveBeenCalled();
+    });
+
+    it('13.4 AC4 — a checked-out stay can no longer be edited', async () => {
+      staysRepo.findOne.mockResolvedValue(activeStay({ status: 'checked_out' }));
+      await expect(
+        service.update(makeActor(), 'stay-1', { guestName: 'X' } as any),
+      ).rejects.toMatchObject({ response: { code: 'STAY_NOT_ACTIVE' } });
+    });
+  });
+
+  describe('changeRoom (13.3 AC2)', () => {
+    const stayRow = () =>
+      ({
+        id: 'stay-1',
+        hotelId: HOTEL_ID,
+        roomId: 'room-1',
+        guestName: 'Ahmed Ali',
+        status: 'active',
+        checkInDate: futureDate(-1),
+        checkOutDate: futureDate(2),
+      }) as unknown as Stay;
+
+    it('moves to an available room with the hotel lock first, audits from/to', async () => {
+      const callOrder: string[] = [];
+      managerHotel.findOne.mockImplementation(async (opts: any) => {
+        if (opts?.lock) callOrder.push('lockHotel');
+        return { ...HOTEL };
+      });
+      managerStays.findOne
+        .mockResolvedValueOnce(stayRow()) // the stay itself
+        .mockResolvedValueOnce(null); // target-room occupancy check
+      managerRooms.findOne
+        .mockResolvedValueOnce({ ...ROOM }) // current room (audit "from")
+        .mockImplementationOnce(async (opts: any) => {
+          if (opts?.lock) callOrder.push('lockRoom');
+          return { id: 'room-2', hotelId: HOTEL_ID, roomNumber: '202', floor: 2, status: 'active' };
+        });
+      managerStays.save = jest.fn(async (s) => s);
+
+      const res = await service.changeRoom(makeActor(), 'stay-1', {
+        roomId: 'room-2',
+      } as any);
+
+      expect(callOrder[0]).toEqual('lockHotel');
+      expect(res.roomNumber).toEqual('202');
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'stay.room_changed',
+          metadata: expect.objectContaining({ from: '101', to: '202' }),
+        }),
+      );
+    });
+
+    it('409s when the target room is occupied', async () => {
+      managerStays.findOne
+        .mockResolvedValueOnce(stayRow())
+        .mockResolvedValueOnce({ id: 'other-stay' });
+      managerRooms.findOne
+        .mockResolvedValueOnce({ ...ROOM })
+        .mockResolvedValueOnce({ id: 'room-2', hotelId: HOTEL_ID, roomNumber: '202', status: 'active' });
+
+      await expect(
+        service.changeRoom(makeActor(), 'stay-1', { roomId: 'room-2' } as any),
+      ).rejects.toMatchObject({ response: { code: 'ROOM_OCCUPIED' } });
+      expect(auditLogs.log).not.toHaveBeenCalled();
+    });
+
+    it('maps the unique-index race to ROOM_OCCUPIED (same as check-in)', async () => {
+      managerStays.findOne
+        .mockResolvedValueOnce(stayRow())
+        .mockResolvedValueOnce(null);
+      managerRooms.findOne
+        .mockResolvedValueOnce({ ...ROOM })
+        .mockResolvedValueOnce({ id: 'room-2', hotelId: HOTEL_ID, roomNumber: '202', status: 'active' });
+      const driverError = Object.assign(new Error('dup'), {
+        code: '23505',
+        constraint: 'UQ_stays_room_active',
+      });
+      managerStays.save = jest
+        .fn()
+        .mockRejectedValue(new QueryFailedError('UPDATE', [], driverError));
+
+      await expect(
+        service.changeRoom(makeActor(), 'stay-1', { roomId: 'room-2' } as any),
+      ).rejects.toMatchObject({ response: { code: 'ROOM_OCCUPIED' } });
+    });
+
+    it('moving to the same room is a no-op (no audit)', async () => {
+      managerStays.findOne.mockResolvedValueOnce(stayRow());
+      managerRooms.findOne.mockResolvedValueOnce({ ...ROOM });
+      const res = await service.changeRoom(makeActor(), 'stay-1', {
+        roomId: 'room-1',
+      } as any);
+      expect(res.roomNumber).toEqual('101');
+      expect(auditLogs.log).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('regenerateCode (13.3 AC4)', () => {
+    it('replaces the hash, returns the new code once, audits without it', async () => {
+      stayCodes.issueUniqueCode.mockResolvedValue({
+        code: '654321',
+        codeHash: 'hmac-new',
+      });
+      managerStays.findOne.mockResolvedValue({
+        id: 'stay-1',
+        hotelId: HOTEL_ID,
+        roomId: 'room-1',
+        guestName: 'Ahmed Ali',
+        status: 'active',
+        codeHash: 'hmac-old',
+        checkInDate: futureDate(-1),
+        checkOutDate: futureDate(2),
+        room: { ...ROOM },
+      });
+      managerStays.save = jest.fn(async (s) => s);
+
+      const res = await service.regenerateCode(makeActor(), 'stay-1');
+
+      expect(res.code).toEqual('654321');
+      expect(managerStays.save.mock.calls[0][0].codeHash).toEqual('hmac-new');
+      // Sessions ride the stay — status/id untouched by regeneration.
+      expect(managerStays.save.mock.calls[0][0]).toMatchObject({
+        id: 'stay-1',
+        status: 'active',
+      });
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'stay.code_regenerated' }),
+      );
+      expect(JSON.stringify(auditLogs.log.mock.calls)).not.toContain('654321');
+    });
+
+    it('refuses on a checked-out stay', async () => {
+      managerStays.findOne.mockResolvedValue({
+        id: 'stay-1',
+        hotelId: HOTEL_ID,
+        status: 'checked_out',
+      });
+      await expect(
+        service.regenerateCode(makeActor(), 'stay-1'),
+      ).rejects.toMatchObject({ response: { code: 'STAY_NOT_ACTIVE' } });
+    });
+  });
+
+  describe('checkout (13.4 AC1/AC4)', () => {
+    it('AC1 — flips to checked_out/manual with actor + timestamp and audits', async () => {
+      staysRepo.findOne.mockResolvedValue({
+        id: 'stay-1',
+        hotelId: HOTEL_ID,
+        roomId: 'room-1',
+        guestName: 'Ahmed Ali',
+        status: 'active',
+        checkInDate: futureDate(-1),
+        checkOutDate: futureDate(2),
+        room: { ...ROOM },
+      });
+      staysRepo.save = jest.fn(async (s) => s);
+
+      const res = await service.checkout(makeActor(), 'stay-1');
+
+      expect(res).toMatchObject({ status: 'checked_out', checkoutType: 'manual' });
+      const saved = staysRepo.save.mock.calls[0][0];
+      expect(saved.checkedOutById).toEqual('actor-1');
+      expect(saved.checkedOutAt).toBeInstanceOf(Date);
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'stay.checked_out',
+          metadata: expect.objectContaining({ checkoutType: 'manual' }),
+        }),
+      );
+    });
+
+    it('AC4 — no resurrection: checking out twice 409s', async () => {
+      staysRepo.findOne.mockResolvedValue({
+        id: 'stay-1',
+        hotelId: HOTEL_ID,
+        status: 'checked_out',
+        room: { ...ROOM },
+      });
+      await expect(service.checkout(makeActor(), 'stay-1')).rejects.toMatchObject(
+        { response: { code: 'STAY_NOT_ACTIVE' } },
+      );
+    });
+  });
+
+  describe('stay settings (13.4 AC2)', () => {
+    it('reads the hotel checkout time', async () => {
+      await expect(service.getSettings(HOTEL_ID)).resolves.toEqual({
+        checkoutTime: '12:00',
+      });
+    });
+
+    it('updates it with an audited diff', async () => {
+      hotelsRepo.findOne.mockResolvedValue({ ...HOTEL });
+      hotelsRepo.save = jest.fn(async (h) => h);
+      const res = await service.updateSettings(makeActor(), {
+        checkoutTime: '14:00',
+      } as any);
+      expect(res).toEqual({ checkoutTime: '14:00' });
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'hotel.updated',
+          metadata: expect.objectContaining({
+            diff: { checkoutTime: { from: '12:00', to: '14:00' } },
+          }),
+        }),
+      );
+    });
+
+    it('is a no-op when unchanged', async () => {
+      hotelsRepo.findOne.mockResolvedValue({ ...HOTEL });
+      hotelsRepo.save = jest.fn();
+      await service.updateSettings(makeActor(), { checkoutTime: '12:00' } as any);
+      expect(hotelsRepo.save).not.toHaveBeenCalled();
+      expect(auditLogs.log).not.toHaveBeenCalled();
+    });
+  });
+
   describe('naturalRoomCompare', () => {
     it('orders numerically inside a floor, letters after numbers', () => {
       const sorted = [

@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
@@ -13,8 +14,11 @@ import { CurrentTenantUser } from '../../common/decorators/current-tenant-user.d
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { TenantScope } from '../../common/decorators/tenant-scope.decorator';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
+import { ChangeRoomDto } from './dto/change-room.dto';
 import { CreateStayDto } from './dto/create-stay.dto';
 import { ListStaysQueryDto } from './dto/list-stays-query.dto';
+import { UpdateStayDto } from './dto/update-stay.dto';
+import { UpdateStaySettingsDto } from './dto/update-stay-settings.dto';
 import { TenantStaysService } from './tenant-stays.service';
 
 /**
@@ -48,6 +52,21 @@ export class TenantStaysController {
     return this.staysService.availableRooms(user);
   }
 
+  @Get('settings')
+  @RequirePermissions('stays.read')
+  getSettings(@CurrentTenantUser() user: TenantUser) {
+    return this.staysService.getSettings(user.hotelId);
+  }
+
+  @Patch('settings')
+  @RequirePermissions('stays.update')
+  updateSettings(
+    @CurrentTenantUser() user: TenantUser,
+    @Body() dto: UpdateStaySettingsDto,
+  ) {
+    return this.staysService.updateSettings(user, dto);
+  }
+
   @Get(':id')
   @RequirePermissions('stays.read')
   detail(
@@ -55,5 +74,46 @@ export class TenantStaysController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.staysService.detail(user, id);
+  }
+
+  @Patch(':id')
+  @RequirePermissions('stays.update')
+  update(
+    @CurrentTenantUser() user: TenantUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateStayDto,
+  ) {
+    return this.staysService.update(user, id, dto);
+  }
+
+  @Post(':id/change-room')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('stays.update')
+  changeRoom(
+    @CurrentTenantUser() user: TenantUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ChangeRoomDto,
+  ) {
+    return this.staysService.changeRoom(user, id, dto);
+  }
+
+  @Post(':id/regenerate-code')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('stays.update')
+  regenerateCode(
+    @CurrentTenantUser() user: TenantUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.staysService.regenerateCode(user, id);
+  }
+
+  @Post(':id/checkout')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('stays.checkout')
+  checkout(
+    @CurrentTenantUser() user: TenantUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.staysService.checkout(user, id);
   }
 }
