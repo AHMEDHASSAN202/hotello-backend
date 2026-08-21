@@ -20,6 +20,7 @@ export const MODULE_CATALOG: ModuleCatalogEntry[] = [
     labelAr: 'تخصيص هوية تطبيق الضيوف',
   },
   { key: 'analytics', labelEn: 'Analytics', labelAr: 'التحليلات' },
+  { key: 'requests', labelEn: 'Guest Requests', labelAr: 'طلبات النزلاء' },
 ];
 
 export const ALL_MODULE_KEYS: string[] = MODULE_CATALOG.map((m) => m.key);

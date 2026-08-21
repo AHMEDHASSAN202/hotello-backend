@@ -430,6 +430,7 @@ describe('PlansService', () => {
         'fnb',
         'guest_app_branding',
         'analytics',
+        'requests',
       ]);
     });
   });

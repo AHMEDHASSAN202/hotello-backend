@@ -76,6 +76,14 @@ export class Hotel {
   @Column({ length: 5, default: '12:00' })
   checkoutTime: string;
 
+  /**
+   * Guest App accent color '#RRGGBB' (Epic 14, Story 14.4 AC5). Applied only
+   * when the plan includes `guest_app_branding`; null = GXP default. Set by a
+   * future branding UI — this epic ships the column and the rendering path.
+   */
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  brandAccentColor: string | null;
+
   // Sales-declared count from onboarding — reference only, no guard reads it (11.6 AC2).
   @Column({ type: 'int', default: 0 })
   declaredRoomsCount: number;
