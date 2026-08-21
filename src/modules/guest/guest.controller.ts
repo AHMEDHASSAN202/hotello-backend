@@ -15,6 +15,7 @@ import { GuestScope } from '../../common/decorators/guest-scope.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { Stay } from '../tenant-stays/stay.entity';
 import { GuestSessionDto } from './dto/guest-session.dto';
+import { GuestProfileService } from './guest-profile.service';
 import { GuestSessionService } from './guest-session.service';
 
 /**
@@ -24,7 +25,22 @@ import { GuestSessionService } from './guest-session.service';
  */
 @Controller('guest')
 export class GuestController {
-  constructor(private readonly sessions: GuestSessionService) {}
+  constructor(
+    private readonly sessions: GuestSessionService,
+    private readonly profiles: GuestProfileService,
+  ) {}
+
+  /**
+   * 14.4 AC1 — public branding bootstrap for the Guest App shell. Cached per
+   * slug in the service; suspended/expired hotels resolve as 'unavailable'.
+   */
+  @Public()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Get(':slug/profile')
+  profile(@Param('slug') slug: string) {
+    return this.profiles.getProfile(slug);
+  }
 
   @Public()
   @UseGuards(ThrottlerGuard)
