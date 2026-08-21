@@ -128,3 +128,14 @@
 - **Depends on:** Epic 13 merged and deployed (session contract live), Epic 11 (QR URLs pointing at `/{slug}`), Epic 04 `enabled_modules` (tile gating).
 - **Blocks:** Epic 15 (Guest Requests — activates the first tile), all future guest modules (F&B, transport, info directory).
 - **Deferred:** push notifications, Capacitor build, hotel-customizable branding UI (rendering path ships now), guest feedback module, offline request queueing.
+
+---
+
+## Decisions made during implementation
+
+- **Profile endpoint shape** — `GET /guest/{slug}/profile` (public, 30/min throttle, 60s per-slug in-memory cache via `GUEST_PROFILE_CACHE_TTL_MS`) returns `{ slug, nameEn, nameAr, logoUrl, status, brandAccentColor, checkoutTime, timezone, defaultLanguage, enabledModules }`. `logoUrl` follows the platform convention: a relative `files/{key}` path joined to the API base by the client.
+- **`timezone` + `checkoutTime` ride on the profile** — the home screen's "checkout today" logic (14.4 AC4) and nights-remaining math need hotel-local time; the 13.5 session profile stays untouched.
+- **Availability is collapsed server-side** — suspended hotel OR read-only subscription (expired/canceled) → `status: 'unavailable'`; the causes are indistinguishable to guests (14.6 AC1). The endpoint RESOLVES unavailable hotels (branding renders on the locked screen) instead of throwing like the session endpoint; unknown/`inactive` slugs stay 404 `HOTEL_NOT_FOUND`.
+- **Accent gating is server-side** — `brandAccentColor` is nulled in the response unless the plan includes `guest_app_branding`; the app never sees a color it shouldn't render. Column is `hotels.brandAccentColor` varchar(7) nullable (migration `1786200000000-GuestAppFoundation`); no setter UI this epic.
+- **`requests` module key added** to `MODULE_CATALOG` (`Guest Requests` / `طلبات النزلاء`) so plan gating of the Requests tile works from day one; the "Hotel Info" tile is unconditional (no key). Dining maps to `fnb`, Transport to `transportation`.
+- **camelCase confirmed** — the app sends `{ roomNumber, code }` per the recorded 13.5 decision.
