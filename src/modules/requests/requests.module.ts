@@ -14,6 +14,8 @@ import { RequestCatalogViewService } from './request-catalog-view.service';
 import { RequestCategory } from './request-category.entity';
 import { RequestItem } from './request-item.entity';
 import { GuestRequest } from './request.entity';
+import { TenantRequestCatalogController } from './tenant-request-catalog.controller';
+import { TenantRequestCatalogService } from './tenant-request-catalog.service';
 import { TenantRequestsController } from './tenant-requests.controller';
 import { TenantRequestsService } from './tenant-requests.service';
 
@@ -37,11 +39,16 @@ import { TenantRequestsService } from './tenant-requests.service';
     TenantAccessModule,
     AuditLogsModule,
   ],
-  controllers: [GuestRequestsController, TenantRequestsController],
+  controllers: [
+    GuestRequestsController,
+    TenantRequestsController,
+    TenantRequestCatalogController,
+  ],
   providers: [
     RequestCatalogViewService,
     GuestRequestsService,
     TenantRequestsService,
+    TenantRequestCatalogService,
   ],
 })
 export class RequestsModule {}
