@@ -10,6 +10,9 @@ import { FnbMenuSection } from './fnb-menu-section.entity';
 import { FnbMenu } from './fnb-menu.entity';
 import { FnbOrderLine } from './fnb-order-line.entity';
 import { FnbOrder } from './fnb-order.entity';
+import { FnbPhotoService } from './fnb-photo.service';
+import { TenantFnbMenusController } from './tenant-fnb-menus.controller';
+import { TenantFnbMenusService } from './tenant-fnb-menus.service';
 
 /**
  * Epic 16 — F&B ordering: menus, delivery locations, settings, guest
@@ -31,8 +34,8 @@ import { FnbOrder } from './fnb-order.entity';
     TenantAccessModule,
     AuditLogsModule,
   ],
-  controllers: [],
-  providers: [],
+  controllers: [TenantFnbMenusController],
+  providers: [TenantFnbMenusService, FnbPhotoService],
   exports: [],
 })
 export class FnbModule {}

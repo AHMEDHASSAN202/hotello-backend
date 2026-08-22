@@ -43,7 +43,14 @@ export class FilesController {
       "default-src 'none'; style-src 'unsafe-inline'; sandbox",
     );
     res.setHeader('Content-Disposition', 'inline; filename="asset"');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
+    // F&B photo renditions live under uuid keys that are never overwritten
+    // (a new upload = new keys), so they cache immutably (Epic 16, note 6).
+    res.setHeader(
+      'Cache-Control',
+      key.startsWith('fnb/')
+        ? 'public, max-age=31536000, immutable'
+        : 'public, max-age=3600',
+    );
     res.send(data);
   }
 }
