@@ -16,6 +16,8 @@ import { FnbMenu } from './fnb-menu.entity';
 import { FnbOrderLine } from './fnb-order-line.entity';
 import { FnbOrder } from './fnb-order.entity';
 import { FnbPhotoService } from './fnb-photo.service';
+import { GuestFnbController } from './guest-fnb.controller';
+import { GuestFnbService } from './guest-fnb.service';
 import { TenantFnbMenusController } from './tenant-fnb-menus.controller';
 import { TenantFnbMenusService } from './tenant-fnb-menus.service';
 import { TenantFnbSettingsController } from './tenant-fnb-settings.controller';
@@ -46,6 +48,7 @@ import { TenantFnbSettingsService } from './tenant-fnb-settings.service';
     TenantUrlsModule,
   ],
   controllers: [
+    GuestFnbController,
     TenantFnbMenusController,
     TenantFnbLocationsController,
     TenantFnbSettingsController,
@@ -56,6 +59,7 @@ import { TenantFnbSettingsService } from './tenant-fnb-settings.service';
     TenantFnbLocationsService,
     FnbStickerPdfService,
     TenantFnbSettingsService,
+    GuestFnbService,
   ],
   exports: [],
 })

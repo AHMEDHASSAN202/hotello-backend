@@ -73,6 +73,23 @@ export function touchesDescriptions(dto: DescriptionFields): boolean {
   return DESCRIPTION_KEYS.some(([dtoKey]) => dto[dtoKey] !== undefined);
 }
 
+/**
+ * Order-line name snapshot (16.5 AC4, recorded decision): the guest's
+ * language + AR + EN subsets — enough for the guest app, the board (AR/EN)
+ * and history, without freezing all seven.
+ */
+export function pickSnapshotNames(
+  map: TranslationMap,
+  language: string,
+): TranslationMap {
+  const out: TranslationMap = {};
+  for (const lang of ['ar', 'en', language] as const) {
+    const value = map[lang as keyof TranslationMap];
+    if (value !== undefined) out[lang as keyof TranslationMap] = value;
+  }
+  return out;
+}
+
 /** Kebab slug of an EN label — location keys and variant option keys. */
 export function slugify(value: string): string {
   return value
