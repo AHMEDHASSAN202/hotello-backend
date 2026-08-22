@@ -4,6 +4,7 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { Hotel } from '../hotels/hotel.entity';
 import { TenantUrlsModule } from '../hotels/tenant-urls.module';
 import { TenantAccessModule } from '../tenant-access/tenant-access.module';
+import { TenantStaysModule } from '../tenant-stays/tenant-stays.module';
 import { TenantRoomsModule } from '../tenant-rooms/tenant-rooms.module';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { FnbStickerPdfService } from './fnb-sticker-pdf.service';
@@ -22,6 +23,8 @@ import { TenantFnbMenusController } from './tenant-fnb-menus.controller';
 import { TenantFnbMenusService } from './tenant-fnb-menus.service';
 import { TenantFnbSettingsController } from './tenant-fnb-settings.controller';
 import { TenantFnbSettingsService } from './tenant-fnb-settings.service';
+import { TenantFnbOrdersController } from './tenant-fnb-orders.controller';
+import { TenantFnbOrdersService } from './tenant-fnb-orders.service';
 
 /**
  * Epic 16 — F&B ordering: menus, delivery locations, settings, guest
@@ -46,12 +49,16 @@ import { TenantFnbSettingsService } from './tenant-fnb-settings.service';
     // (exported by TenantRoomsModule) and the guest-URL builder.
     TenantRoomsModule,
     TenantUrlsModule,
+    // Settlement + the stay drawer's orders list resolve stays through the
+    // cross-tenant 404 chokepoint (TenantStaysService.findStayInHotel).
+    TenantStaysModule,
   ],
   controllers: [
     GuestFnbController,
     TenantFnbMenusController,
     TenantFnbLocationsController,
     TenantFnbSettingsController,
+    TenantFnbOrdersController,
   ],
   providers: [
     TenantFnbMenusService,
@@ -60,6 +67,7 @@ import { TenantFnbSettingsService } from './tenant-fnb-settings.service';
     FnbStickerPdfService,
     TenantFnbSettingsService,
     GuestFnbService,
+    TenantFnbOrdersService,
   ],
   exports: [],
 })
