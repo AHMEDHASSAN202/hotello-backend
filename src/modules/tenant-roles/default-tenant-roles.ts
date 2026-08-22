@@ -46,6 +46,11 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
       'requests.update',
       'requests.assign',
       'request_catalog.manage',
+      'fnb_menus.manage',
+      'fnb_locations.manage',
+      'fnb_orders.read',
+      'fnb_orders.update',
+      'fnb_settings.manage',
     ],
     isSystem: false,
   },
@@ -63,6 +68,9 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
       'requests.read',
       'requests.update',
       'requests.assign',
+      // Epic 16 — room-charge visibility at checkout (16.8); settling rides
+      // on stays.checkout, not an fnb key.
+      'fnb_orders.read',
     ],
     isSystem: false,
   },
@@ -77,6 +85,15 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
       'requests.read',
       'requests.update',
     ],
+    isSystem: false,
+  },
+  {
+    // Epic 16 — the kitchen persona: works the board and owns the menus.
+    nameEn: 'F&B / Kitchen',
+    nameAr: 'الأغذية والمشروبات',
+    descriptionEn: 'Works the kitchen board and manages the menus.',
+    descriptionAr: 'يعمل على لوحة المطبخ ويدير قوائم الطعام.',
+    permissions: ['fnb_orders.read', 'fnb_orders.update', 'fnb_menus.manage'],
     isSystem: false,
   },
 ];

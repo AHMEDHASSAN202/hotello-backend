@@ -92,6 +92,11 @@ describe('TenantRolesService', () => {
         'requests.update',
         'requests.assign',
         'request_catalog.manage',
+        'fnb_menus.manage',
+        'fnb_locations.manage',
+        'fnb_orders.read',
+        'fnb_orders.update',
+        'fnb_settings.manage',
       ]);
       const frontDeskRole = saved.find((r) => r.nameEn === 'Front Desk');
       expect(frontDeskRole.permissions).toEqual(
@@ -110,11 +115,19 @@ describe('TenantRolesService', () => {
       );
       expect(housekeepingRole.permissions).not.toContain('requests.assign');
       expect(managerRole.isSystem).toBe(false);
+      // Epic 16 — the F&B / Kitchen persona joins the defaults.
+      const kitchenRole = saved.find((r) => r.nameEn === 'F&B / Kitchen');
+      expect(kitchenRole.permissions).toEqual([
+        'fnb_orders.read',
+        'fnb_orders.update',
+        'fnb_menus.manage',
+      ]);
       expect(saved.map((r) => r.nameEn)).toEqual([
         'Owner',
         'Manager',
         'Front Desk',
         'Housekeeping',
+        'F&B / Kitchen',
       ]);
     });
 

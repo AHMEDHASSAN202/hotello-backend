@@ -1,4 +1,8 @@
-import { TENANT_PERMISSION_CATALOG } from './tenant-permissions.constants';
+import { DEFAULT_TENANT_ROLES } from '../tenant-roles/default-tenant-roles';
+import {
+  ALL_TENANT_PERMISSION_KEYS,
+  TENANT_PERMISSION_CATALOG,
+} from './tenant-permissions.constants';
 
 describe('TENANT_PERMISSION_CATALOG', () => {
   it('AC (11.2 AC1) — catalog exposes rooms.read/create/update in a core (non-module) group', () => {
@@ -21,6 +25,71 @@ describe('TENANT_PERMISSION_CATALOG', () => {
       'requests.update',
       'requests.assign',
       'request_catalog.manage',
+    ]);
+  });
+
+  it('Epic 16 — fnb group is gated by the fnb module and exposes the five keys', () => {
+    const fnb = TENANT_PERMISSION_CATALOG.find((g) => g.group === 'fnb');
+    expect(fnb?.module).toBe('fnb');
+    expect(fnb?.permissions.map((p) => p.key)).toEqual([
+      'fnb_menus.manage',
+      'fnb_locations.manage',
+      'fnb_orders.read',
+      'fnb_orders.update',
+      'fnb_settings.manage',
+    ]);
+  });
+
+  it('permission keys are globally unique', () => {
+    expect(new Set(ALL_TENANT_PERMISSION_KEYS).size).toBe(
+      ALL_TENANT_PERMISSION_KEYS.length,
+    );
+  });
+});
+
+describe('DEFAULT_TENANT_ROLES (Epic 16 seeding)', () => {
+  const byName = (name: string) =>
+    DEFAULT_TENANT_ROLES.find((r) => r.nameEn === name);
+
+  it('every seeded permission key exists in the catalog', () => {
+    for (const role of DEFAULT_TENANT_ROLES) {
+      for (const key of role.permissions) {
+        if (key === '*') continue;
+        expect(ALL_TENANT_PERMISSION_KEYS).toContain(key);
+      }
+    }
+  });
+
+  it('Manager gains all five fnb keys', () => {
+    const manager = byName('Manager');
+    for (const key of [
+      'fnb_menus.manage',
+      'fnb_locations.manage',
+      'fnb_orders.read',
+      'fnb_orders.update',
+      'fnb_settings.manage',
+    ]) {
+      expect(manager?.permissions).toContain(key);
+    }
+  });
+
+  it('Front Desk gains fnb_orders.read only', () => {
+    const frontDesk = byName('Front Desk');
+    expect(frontDesk?.permissions).toContain('fnb_orders.read');
+    expect(frontDesk?.permissions).not.toContain('fnb_orders.update');
+    expect(frontDesk?.permissions).not.toContain('fnb_menus.manage');
+  });
+
+  it('seeds the F&B / Kitchen role (non-system) with board + menus access', () => {
+    const kitchen = byName('F&B / Kitchen');
+    expect(kitchen).toMatchObject({
+      nameAr: 'الأغذية والمشروبات',
+      isSystem: false,
+    });
+    expect(kitchen?.permissions).toEqual([
+      'fnb_orders.read',
+      'fnb_orders.update',
+      'fnb_menus.manage',
     ]);
   });
 });

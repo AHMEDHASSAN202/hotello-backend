@@ -209,6 +209,57 @@ export const TENANT_PERMISSION_CATALOG: TenantPermissionGroup[] = [
       },
     ],
   },
+  {
+    // Epic 16 — F&B ordering; dormant while the `fnb` module is outside the
+    // hotel's plan (Story 10.5 AC3).
+    group: 'fnb',
+    labelEn: 'Food & Beverage',
+    labelAr: 'الأغذية والمشروبات',
+    module: 'fnb',
+    permissions: [
+      {
+        key: 'fnb_menus.manage',
+        labelEn: 'Manage menus',
+        labelAr: 'إدارة قوائم الطعام',
+        descriptionEn:
+          'Create and edit menus, sections and items, photos, prices and availability windows.',
+        descriptionAr:
+          'إنشاء وتعديل قوائم الطعام والأقسام والأصناف والصور والأسعار وأوقات الإتاحة.',
+      },
+      {
+        key: 'fnb_locations.manage',
+        labelEn: 'Manage delivery locations',
+        labelAr: 'إدارة أماكن التوصيل',
+        descriptionEn:
+          'Define delivery locations (pool, beach…) and print their QR stickers.',
+        descriptionAr:
+          'تحديد أماكن التوصيل (المسبح، الشاطئ…) وطباعة ملصقات QR الخاصة بها.',
+      },
+      {
+        key: 'fnb_orders.read',
+        labelEn: 'View orders',
+        labelAr: 'عرض الطلبات',
+        descriptionEn: 'See the kitchen board, order history and details.',
+        descriptionAr: 'عرض لوحة المطبخ وسجل الطلبات وتفاصيلها.',
+      },
+      {
+        key: 'fnb_orders.update',
+        labelEn: 'Work orders',
+        labelAr: 'معالجة الطلبات',
+        descriptionEn:
+          'Start, deliver, cancel and assign food & beverage orders.',
+        descriptionAr:
+          'بدء طلبات الأغذية والمشروبات وتوصيلها وإلغاؤها وإسنادها.',
+      },
+      {
+        key: 'fnb_settings.manage',
+        labelEn: 'Manage F&B settings',
+        labelAr: 'إدارة إعدادات الأغذية والمشروبات',
+        descriptionEn: 'Configure guest payment methods for orders.',
+        descriptionAr: 'ضبط طرق دفع النزلاء للطلبات.',
+      },
+    ],
+  },
 ];
 
 export const ALL_TENANT_PERMISSION_KEYS: string[] =
