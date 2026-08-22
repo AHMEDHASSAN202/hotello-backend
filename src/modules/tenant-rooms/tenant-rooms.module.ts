@@ -44,6 +44,14 @@ import { RoomsXlsxService } from './xlsx/rooms-xlsx.service';
     // orchestration the controller calls.
     RoomsXlsxService,
   ],
-  exports: [RoomTypesService, TenantRoomsService, TypeOrmModule],
+  // PdfRendererService + RoomQrService are deliberately shared: Epic 16's
+  // location stickers reuse the same Chromium singleton and QR discipline.
+  exports: [
+    RoomTypesService,
+    TenantRoomsService,
+    TypeOrmModule,
+    PdfRendererService,
+    RoomQrService,
+  ],
 })
 export class TenantRoomsModule {}
