@@ -88,6 +88,8 @@ export class TenantProfileService {
         logoUrl: hotel?.logoPath ? `files/${hotel.logoPath}` : null,
         defaultLanguage: hotel?.defaultLanguage,
         status: state.hotelStatus,
+        // Epic 15 (15.5 AC3) — request timelines render in hotel time.
+        timezone: hotel?.timezone,
       },
       subscription: {
         status: state.subscriptionStatus,

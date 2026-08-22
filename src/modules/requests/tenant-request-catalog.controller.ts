@@ -35,8 +35,13 @@ export class SetCategoryEnabledDto {
 export class TenantRequestCatalogController {
   constructor(private readonly catalog: TenantRequestCatalogService) {}
 
+  /**
+   * Read gate is requests.read (not manage): the board's category filter
+   * needs category/item names for every board user; curation stays behind
+   * request_catalog.manage.
+   */
   @Get()
-  @RequirePermissions('request_catalog.manage')
+  @RequirePermissions('requests.read')
   getCatalog(@CurrentTenantUser() user: TenantUser) {
     return this.catalog.getCatalog(user);
   }
