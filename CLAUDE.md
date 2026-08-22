@@ -63,3 +63,13 @@ GXP (Guest Experience Platform): multi-tenant SaaS for hotels. This NestJS + Pos
 Feature specs live in this repo under `/specs`. Before planning or implementing any
 feature, read its epic file fully — it is the source of truth. Durable decisions made
 during Q&A go back into the epic file.
+
+## Workflow (pre-production convention — revisit at launch)
+
+- All work happens directly on `master`. No feature branches, no stacked epic
+  branches, no worktrees.
+- Small, clear commits per task; push to origin after each verified green
+  state — `origin/master` always holds the latest work.
+- Quality gates never relax: full test suite + `npm run build` +
+  `npm run migration:check` must be green before every push. Never push red.
+- Changes spanning repos land backend-first, then the frontends.
