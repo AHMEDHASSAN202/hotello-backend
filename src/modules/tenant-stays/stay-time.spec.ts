@@ -3,6 +3,7 @@ import {
   hotelLocalParts,
   isStayOverdue,
   minutesOf,
+  startOfHotelDay,
 } from './stay-time';
 
 /**
@@ -27,6 +28,26 @@ describe('stay-time (13.4 AC3 — timezone edges)', () => {
         new Date('2026-08-21T02:00:00Z'),
       );
       expect(parts).toEqual({ date: '2026-08-20', minutes: 22 * 60 });
+    });
+  });
+
+  describe('startOfHotelDay (Epic 15 — daily throttle bucket)', () => {
+    it('returns the UTC instant of Cairo local midnight', () => {
+      // 01:30 Cairo on Aug 21 → local midnight was 21:00 UTC on Aug 20.
+      const start = startOfHotelDay(
+        'Africa/Cairo',
+        new Date('2026-08-20T22:30:45.500Z'),
+      );
+      expect(start.toISOString()).toBe('2026-08-20T21:00:00.000Z');
+    });
+
+    it('handles western zones lagging UTC', () => {
+      // 22:00 New York on Aug 20 → local midnight was 04:00 UTC on Aug 20.
+      const start = startOfHotelDay(
+        'America/New_York',
+        new Date('2026-08-21T02:00:00.000Z'),
+      );
+      expect(start.toISOString()).toBe('2026-08-20T04:00:00.000Z');
     });
   });
 

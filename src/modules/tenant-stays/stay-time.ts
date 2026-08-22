@@ -35,6 +35,17 @@ export function hotelLocalParts(timezone: string, now: Date): HotelLocalParts {
   };
 }
 
+/**
+ * The UTC instant of the hotel's local midnight for the day containing `now`
+ * (Epic 15 — daily request throttle + "done today" board count). Minute
+ * precision (sub-minute drift is irrelevant for day-bucket counts).
+ */
+export function startOfHotelDay(timezone: string, now: Date): Date {
+  const { minutes } = hotelLocalParts(timezone, now);
+  const subMinute = now.getUTCSeconds() * 1000 + now.getUTCMilliseconds();
+  return new Date(now.getTime() - minutes * 60_000 - subMinute);
+}
+
 /** 'HH:MM' → minutes since midnight. */
 export function minutesOf(time: string): number {
   const [hours, minutes] = time.split(':').map((v) => parseInt(v, 10));
