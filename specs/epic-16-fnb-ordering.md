@@ -152,3 +152,24 @@
 - **Depends on:** Epics 13–15 merged (stays, guest app foundation, requests patterns), Epic 11 (PDF generator), Epic 04 module gating (`fnb`).
 - **Blocks / feeds:** analytics (revenue data starts now), Staff Task PWA (delivery runners), future billing/folio + PMS posting, AI menu-translation fast-follow.
 - **Deferred:** online payment, AI translation button, multi-group modifiers, scheduled orders, printers/KDS hardware integration, service charge/VAT breakdown, guest tipping.
+
+---
+
+## Implementation decisions (2026-08-22)
+
+Durable decisions made while implementing (backend landed on master):
+
+1. **Photo resize** — `sharp` added; two derived WebP renditions at upload (thumb 480×360 cover q80, detail ≤1200 inside q82) under immutable keys `fnb/{hotelId}/{itemId}/{uuid}-{thumb|detail}.webp`; the `files` controller serves `fnb/`-prefixed keys with `Cache-Control: public, max-age=31536000, immutable`. Originals are not kept.
+2. **Duplicate-tap protection** — client-side in-flight disable only (matches the Epic 15 recorded decision); no server idempotency keys.
+3. **Board `overdue` filter** — implemented server-side for F&B (`dueAt < now` on open statuses), unlike the dead param on the requests board.
+4. **Settings storage** — columns on `hotels`: `defaultStayType` (default `room_only`) and `fnbRoomChargeEnabled` (default false). Cash is always on; room charge is the only toggle (16.4 AC1). No settings table until online payment exists.
+5. **Pricing-mode encoding** — `fnb_items.includedFor`: `null` = inherit the menu's `defaultIncludedFor`; `[]` = always paid (override); non-empty = included for those stay types. Menu default `[]`.
+6. **Order snapshots** — lines snapshot names as `{ar, en, guestLanguage}` subsets plus variant label/option names, unitPrice, included flag, photo thumb key; orders snapshot room, guest, language, stay type, currency, location key+names, `menuIds` (board menu filter), SLA = max prep SLA of involved menus.
+7. **Settlement permission** — `POST /tenant/fnb-orders/stay/:stayId/settle` is guarded by **`stays.checkout`** (front-desk checkout action; seeded Front Desk has no `fnb_orders.update`). Settlement is bulk + idempotent, audited once as `fnb_orders.settled`.
+8. **Assignment permission** — no `fnb_orders.assign`; assigning is part of `fnb_orders.update`, options endpoint filters roles granting that key (or `*`).
+9. **Multi-menu carts** — allowed; every involved menu must be open at POST time (`409 MENU_UNAVAILABLE {menuId}`); order SLA is the max involved `prepSlaMinutes`.
+10. **Currency exposure** — `hotels.currency` added to the guest public profile and `/tenant/me` hotel block; `GuestProfile` gained `stayType` + `stayId` (cart key).
+11. **Fully-included orders** — `paymentMethod` stored as `null`; a method sent by the client is ignored.
+12. **Guest cancel** — `new` only; staff cancel from `new`/`preparing`; `on_the_way` can only be delivered.
+13. **Throttles** — env `GUEST_FNB_MAX_OPEN_PER_STAY` (default 5) / `GUEST_FNB_MAX_PER_DAY` (default 20); 429 codes `FNB_LIMIT_OPEN` / `FNB_LIMIT_DAILY`.
+14. **Error codes** — `FNB_MENU_NOT_FOUND`, `FNB_SECTION_NOT_FOUND`, `FNB_ITEM_NOT_FOUND`, `FNB_ITEM_DISABLED`, `FNB_NAMES_REQUIRED`, `FNB_PHOTO_INVALID`, `FNB_VARIANT_INVALID`, `FNB_LOCATION_NOT_FOUND`, `FNB_LOCATION_INVALID`, `FNB_LOCATION_NO_SPOTS`, `FNB_STICKER_RANGE_INVALID`, `MENU_UNAVAILABLE`, `FNB_ORDER_NOT_FOUND`, `FNB_ORDER_INVALID_STATUS`, `FNB_ASSIGNEE_INVALID`, `FNB_PAYMENT_METHOD_INVALID`, `FNB_NOTE_NOT_ALLOWED`, `FNB_LIMIT_OPEN`, `FNB_LIMIT_DAILY`.
