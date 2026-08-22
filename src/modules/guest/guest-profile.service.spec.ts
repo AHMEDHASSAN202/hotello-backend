@@ -18,6 +18,7 @@ const makeHotel = (o: Record<string, unknown> = {}) =>
     checkoutTime: '12:00',
     timezone: 'Africa/Cairo',
     defaultLanguage: 'ar',
+    currency: 'EGP',
     ...o,
   }) as unknown as Hotel;
 
@@ -72,6 +73,8 @@ describe('GuestProfileService — getProfile (14.4 AC1/AC5)', () => {
       checkoutTime: '12:00',
       timezone: 'Africa/Cairo',
       defaultLanguage: 'ar',
+      // Epic 16 — the Guest App formats menu prices in the hotel currency.
+      currency: 'EGP',
       enabledModules: ['requests', 'fnb', 'guest_app_branding'],
     });
   });

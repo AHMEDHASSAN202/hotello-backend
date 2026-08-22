@@ -90,6 +90,8 @@ export class TenantProfileService {
         status: state.hotelStatus,
         // Epic 15 (15.5 AC3) — request timelines render in hotel time.
         timezone: hotel?.timezone,
+        // Epic 16 — the kitchen board formats order totals in hotel currency.
+        currency: hotel?.currency,
       },
       subscription: {
         status: state.subscriptionStatus,

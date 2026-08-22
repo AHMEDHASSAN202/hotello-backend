@@ -32,6 +32,7 @@ const makeStay = (o: Record<string, unknown> = {}) =>
     guestName: 'Ahmed Ali',
     language: 'ar',
     status: 'active',
+    stayType: 'all_inclusive',
     checkOutDate: futureDate(3),
     room: { id: 'room-1', roomNumber: '101' },
     ...o,
@@ -157,6 +158,10 @@ describe('GuestSessionService (13.5)', () => {
         slug: 'sunrise',
         language: 'ar',
         checkOutDate: futureDate(3),
+        // 16.1 AC4 — the Guest App prices menus from the session alone.
+        stayType: 'all_inclusive',
+        // Epic 16 — client cart is keyed per stay (spec note 9).
+        stayId: 'stay-1',
       });
       // Lookup is O(1) by (hotelId, codeHash) among active stays.
       expect(staysRepo.findOne).toHaveBeenCalledWith(

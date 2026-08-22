@@ -76,6 +76,16 @@ export class Hotel {
   @Column({ length: 5, default: '12:00' })
   checkoutTime: string;
 
+  // Pre-selected board basis at check-in (Epic 16, Story 16.1 AC2) —
+  // resorts set all_inclusive, city hotels keep room_only.
+  @Column({ length: 20, default: 'room_only' })
+  defaultStayType: string;
+
+  // F&B payment methods (16.4 AC1): cash is always on; room charge is the
+  // only opt-in. A methods table appears only when online payment does.
+  @Column({ default: false })
+  fnbRoomChargeEnabled: boolean;
+
   /**
    * Guest App accent color '#RRGGBB' (Epic 14, Story 14.4 AC5). Applied only
    * when the plan includes `guest_app_branding`; null = GXP default. Set by a

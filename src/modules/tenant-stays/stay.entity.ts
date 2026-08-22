@@ -12,7 +12,12 @@ import {
 import { Hotel } from '../hotels/hotel.entity';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { Room } from '../tenant-rooms/room.entity';
-import { CheckoutType, GuestLanguage, StayStatus } from './stays.constants';
+import {
+  CheckoutType,
+  GuestLanguage,
+  StayStatus,
+  StayType,
+} from './stays.constants';
 
 /**
  * A guest stay (Epic 13) — the bridge between a room and a guest session.
@@ -71,6 +76,10 @@ export class Stay {
 
   @Column({ type: 'int', nullable: true })
   guestsCount: number | null;
+
+  /** Board basis (16.1 AC1) — the F&B pricing input; editable via stay edit. */
+  @Column({ length: 20, default: 'room_only' })
+  stayType: StayType;
 
   @Column({ type: 'text', nullable: true })
   note: string | null;

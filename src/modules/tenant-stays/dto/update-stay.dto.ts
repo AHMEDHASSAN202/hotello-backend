@@ -12,7 +12,12 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
-import { GUEST_LANGUAGES, GuestLanguage } from '../stays.constants';
+import {
+  GUEST_LANGUAGES,
+  GuestLanguage,
+  STAY_TYPES,
+  StayType,
+} from '../stays.constants';
 import { ISO_DATE_REGEX } from './create-stay.dto';
 
 /**
@@ -34,6 +39,11 @@ export class UpdateStayDto {
   @IsOptional()
   @IsIn(GUEST_LANGUAGES as unknown as string[])
   language?: GuestLanguage;
+
+  /** 16.1 AC1 — editable later; lands in the stay.updated audit diff. */
+  @IsOptional()
+  @IsIn(STAY_TYPES as unknown as string[])
+  stayType?: StayType;
 
   @IsOptional()
   @ValidateIf((_, value) => value !== null)

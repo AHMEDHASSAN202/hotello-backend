@@ -26,6 +26,8 @@ export interface GuestHotelProfile {
   /** IANA timezone — the app derives "checkout is today" in hotel time. */
   timezone: string;
   defaultLanguage: string;
+  /** ISO currency code — the Guest App formats F&B prices with it (Epic 16). */
+  currency: string;
   /** Plan modules, for services-grid tile gating (14.4 AC3). */
   enabledModules: string[];
 }
@@ -80,6 +82,7 @@ export class GuestProfileService {
       checkoutTime: hotel.checkoutTime,
       timezone: hotel.timezone,
       defaultLanguage: hotel.defaultLanguage,
+      currency: hotel.currency,
       enabledModules: access.enabledModules,
     };
     this.cache.set(slug, { value, expiresAt: Date.now() + this.ttlMs });

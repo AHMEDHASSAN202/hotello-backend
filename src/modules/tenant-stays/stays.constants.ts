@@ -19,6 +19,22 @@ export type GuestLanguage = (typeof GUEST_LANGUAGES)[number];
 /** Stays are permanent records — `checked_out` is final (13.4 AC4). */
 export type StayStatus = 'active' | 'checked_out';
 
+/**
+ * Board basis of a stay (Epic 16, Story 16.1 AC1) — drives F&B menu pricing:
+ * items "included for" the guest's stay type render ✓Included at price 0.
+ */
+export const STAY_TYPES = [
+  'all_inclusive',
+  'half_board',
+  'bed_breakfast',
+  'room_only',
+] as const;
+
+export type StayType = (typeof STAY_TYPES)[number];
+
+/** City-hotel default; resorts flip the hotel setting to all_inclusive (16.1 AC2). */
+export const DEFAULT_STAY_TYPE: StayType = 'room_only';
+
 export type CheckoutType = 'manual' | 'automatic';
 
 /** Hotel-local checkout hour default (13.4 AC2), stored as 'HH:MM'. */

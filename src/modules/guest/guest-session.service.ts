@@ -27,6 +27,10 @@ export interface GuestProfile {
   slug: string;
   language: string;
   checkOutDate: string;
+  /** 16.1 AC4 — the Guest App prices F&B menus from this, no extra calls. */
+  stayType: string;
+  /** Epic 16 — keys the client-persisted cart per stay (spec note 9). */
+  stayId: string;
 }
 
 /**
@@ -101,6 +105,8 @@ export class GuestSessionService {
       slug: h.slug,
       language: stay.language,
       checkOutDate: stay.checkOutDate,
+      stayType: stay.stayType,
+      stayId: stay.id,
     };
   }
 

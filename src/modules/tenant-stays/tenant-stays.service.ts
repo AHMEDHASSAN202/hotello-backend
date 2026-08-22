@@ -39,6 +39,8 @@ export interface StayView {
   language: string;
   guestsCount: number | null;
   note: string | null;
+  /** Board basis (16.1) — drives F&B pricing in the Guest App. */
+  stayType: string;
   checkInDate: string;
   checkOutDate: string;
   /** Active stays only (hotel-local, never negative); null once checked out. */
@@ -134,6 +136,9 @@ export class TenantStaysService {
             language: dto.language,
             guestsCount: dto.guestsCount ?? null,
             note: dto.note?.trim() || null,
+            // 16.1 AC2 — the hotel default pre-selects; an explicit pick wins.
+            stayType:
+              dto.stayType ?? (hotel.defaultStayType as Stay['stayType']),
             codeHash: issued.codeHash,
             checkInDate: dto.checkInDate,
             checkOutDate: dto.checkOutDate,
@@ -347,7 +352,7 @@ export class TenantStaysService {
     }
 
     const diff: Record<string, { from: unknown; to: unknown }> = {};
-    const applyField = <K extends 'guestName' | 'email' | 'phone' | 'language' | 'guestsCount' | 'note'>(
+    const applyField = <K extends 'guestName' | 'email' | 'phone' | 'language' | 'guestsCount' | 'note' | 'stayType'>(
       field: K,
       next: Stay[K] | undefined,
     ) => {
@@ -357,6 +362,7 @@ export class TenantStaysService {
     };
     applyField('guestName', dto.guestName?.trim());
     applyField('language', dto.language);
+    applyField('stayType', dto.stayType);
     applyField('email', dto.email === undefined ? undefined : dto.email?.trim() || null);
     applyField('phone', dto.phone === undefined ? undefined : dto.phone?.trim() || null);
     applyField('guestsCount', dto.guestsCount === undefined ? undefined : dto.guestsCount);
@@ -531,21 +537,37 @@ export class TenantStaysService {
   // Stay settings (13.4 AC2)
   // ------------------------------------------------------------------
 
-  async getSettings(hotelId: string): Promise<{ checkoutTime: string }> {
+  async getSettings(
+    hotelId: string,
+  ): Promise<{ checkoutTime: string; defaultStayType: string }> {
     const hotel = await this.loadHotel(hotelId);
-    return { checkoutTime: hotel.checkoutTime };
+    return {
+      checkoutTime: hotel.checkoutTime,
+      defaultStayType: hotel.defaultStayType,
+    };
   }
 
   async updateSettings(
     actor: TenantUser,
     dto: UpdateStaySettingsDto,
-  ): Promise<{ checkoutTime: string }> {
+  ): Promise<{ checkoutTime: string; defaultStayType: string }> {
     const hotel = await this.loadHotel(actor.hotelId);
+    const diff: Record<string, { from: string; to: string }> = {};
     if (hotel.checkoutTime !== dto.checkoutTime) {
-      const diff = {
-        checkoutTime: { from: hotel.checkoutTime, to: dto.checkoutTime },
-      };
+      diff.checkoutTime = { from: hotel.checkoutTime, to: dto.checkoutTime };
       hotel.checkoutTime = dto.checkoutTime;
+    }
+    if (
+      dto.defaultStayType !== undefined &&
+      hotel.defaultStayType !== dto.defaultStayType
+    ) {
+      diff.defaultStayType = {
+        from: hotel.defaultStayType,
+        to: dto.defaultStayType,
+      };
+      hotel.defaultStayType = dto.defaultStayType;
+    }
+    if (Object.keys(diff).length > 0) {
       await this.hotelsRepo.save(hotel);
       await this.auditLogs.log({
         action: 'hotel.updated',
@@ -555,7 +577,10 @@ export class TenantStaysService {
         metadata: { actorType: 'tenant_user', hotelId: hotel.id, diff },
       });
     }
-    return { checkoutTime: hotel.checkoutTime };
+    return {
+      checkoutTime: hotel.checkoutTime,
+      defaultStayType: hotel.defaultStayType,
+    };
   }
 
   // ------------------------------------------------------------------
@@ -717,6 +742,7 @@ export class TenantStaysService {
       language: stay.language,
       guestsCount: stay.guestsCount,
       note: stay.note,
+      stayType: stay.stayType,
       checkInDate: stay.checkInDate,
       checkOutDate: stay.checkOutDate,
       nightsRemaining,

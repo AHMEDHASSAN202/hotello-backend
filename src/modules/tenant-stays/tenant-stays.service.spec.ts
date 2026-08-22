@@ -30,6 +30,7 @@ const HOTEL = {
   slug: 'sunrise',
   timezone: 'Africa/Cairo',
   checkoutTime: '12:00',
+  defaultStayType: 'room_only',
 } as unknown as Hotel;
 
 const ROOM = {
@@ -650,20 +651,21 @@ describe('TenantStaysService', () => {
     });
   });
 
-  describe('stay settings (13.4 AC2)', () => {
-    it('reads the hotel checkout time', async () => {
+  describe('stay settings (13.4 AC2, 16.1 AC2)', () => {
+    it('reads the hotel checkout time and default stay type', async () => {
       await expect(service.getSettings(HOTEL_ID)).resolves.toEqual({
         checkoutTime: '12:00',
+        defaultStayType: 'room_only',
       });
     });
 
-    it('updates it with an audited diff', async () => {
+    it('updates checkout time with an audited diff', async () => {
       hotelsRepo.findOne.mockResolvedValue({ ...HOTEL });
       hotelsRepo.save = jest.fn(async (h) => h);
       const res = await service.updateSettings(makeActor(), {
         checkoutTime: '14:00',
       } as any);
-      expect(res).toEqual({ checkoutTime: '14:00' });
+      expect(res).toEqual({ checkoutTime: '14:00', defaultStayType: 'room_only' });
       expect(auditLogs.log).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'hotel.updated',
@@ -674,12 +676,97 @@ describe('TenantStaysService', () => {
       );
     });
 
+    it('16.1 AC2 — updates the default stay type with an audited diff', async () => {
+      hotelsRepo.findOne.mockResolvedValue({ ...HOTEL });
+      hotelsRepo.save = jest.fn(async (h) => h);
+      const res = await service.updateSettings(makeActor(), {
+        checkoutTime: '12:00',
+        defaultStayType: 'all_inclusive',
+      } as any);
+      expect(res).toEqual({
+        checkoutTime: '12:00',
+        defaultStayType: 'all_inclusive',
+      });
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'hotel.updated',
+          metadata: expect.objectContaining({
+            diff: {
+              defaultStayType: { from: 'room_only', to: 'all_inclusive' },
+            },
+          }),
+        }),
+      );
+    });
+
     it('is a no-op when unchanged', async () => {
       hotelsRepo.findOne.mockResolvedValue({ ...HOTEL });
       hotelsRepo.save = jest.fn();
-      await service.updateSettings(makeActor(), { checkoutTime: '12:00' } as any);
+      await service.updateSettings(makeActor(), {
+        checkoutTime: '12:00',
+        defaultStayType: 'room_only',
+      } as any);
       expect(hotelsRepo.save).not.toHaveBeenCalled();
       expect(auditLogs.log).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('stay types (16.1)', () => {
+    it('AC2 — check-in without stayType falls back to the hotel default', async () => {
+      managerHotel.findOne.mockResolvedValue({
+        ...HOTEL,
+        defaultStayType: 'all_inclusive',
+      });
+      const { stay } = await service.checkIn(makeActor(), baseDto());
+      expect(stay.stayType).toEqual('all_inclusive');
+    });
+
+    it('AC1 — an explicit stayType at check-in wins over the default', async () => {
+      managerHotel.findOne.mockResolvedValue({
+        ...HOTEL,
+        defaultStayType: 'all_inclusive',
+      });
+      const { stay } = await service.checkIn(
+        makeActor(),
+        baseDto({ stayType: 'half_board' } as any),
+      );
+      expect(stay.stayType).toEqual('half_board');
+    });
+
+    it('AC1 — editing stayType lands in the stay.updated audit diff', async () => {
+      staysRepo.save = jest.fn(async (s) => s);
+      staysRepo.findOne.mockResolvedValue({
+        id: 'stay-1',
+        hotelId: HOTEL_ID,
+        roomId: 'room-1',
+        guestName: 'Ahmed Ali',
+        email: null,
+        phone: null,
+        language: 'ar',
+        guestsCount: null,
+        note: null,
+        stayType: 'room_only',
+        status: 'active',
+        checkInDate: futureDate(-2),
+        checkOutDate: futureDate(3),
+        checkoutType: null,
+        checkedOutAt: null,
+        createdAt: new Date(),
+        room: { ...ROOM },
+      } as unknown as Stay);
+
+      const res = await service.update(makeActor(), 'stay-1', {
+        stayType: 'all_inclusive',
+      } as any);
+      expect(res.stayType).toEqual('all_inclusive');
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'stay.updated',
+          metadata: expect.objectContaining({
+            diff: { stayType: { from: 'room_only', to: 'all_inclusive' } },
+          }),
+        }),
+      );
     });
   });
 

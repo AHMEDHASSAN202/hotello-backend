@@ -187,6 +187,13 @@ describe('TenantProfileService (8.7)', () => {
       expect(result.setup.staffAdded).toBe(true);
     });
 
+    it('Epic 16 — exposes the hotel currency for price formatting', async () => {
+      const result = await service.me(
+        user({ hotel: { slug: 'sunrise', currency: 'USD' } as never }),
+      );
+      expect(result.hotel.currency).toEqual('USD');
+    });
+
     it('roleCreated derives from custom (non-system) roles, scoped to the hotel', async () => {
       rolesRepo.count.mockResolvedValue(2);
       const result = await service.me(user());

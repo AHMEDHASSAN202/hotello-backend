@@ -12,7 +12,12 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-import { GUEST_LANGUAGES, GuestLanguage } from '../stays.constants';
+import {
+  GUEST_LANGUAGES,
+  GuestLanguage,
+  STAY_TYPES,
+  StayType,
+} from '../stays.constants';
 
 export const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -34,6 +39,11 @@ export class CreateStayDto {
 
   @IsIn(GUEST_LANGUAGES as unknown as string[])
   language: GuestLanguage;
+
+  /** 16.1 AC1/AC2 — omitted = the hotel's default stay type. */
+  @IsOptional()
+  @IsIn(STAY_TYPES as unknown as string[])
+  stayType?: StayType;
 
   @IsOptional()
   @IsEmail({}, { message: 'Enter a valid email address' })
