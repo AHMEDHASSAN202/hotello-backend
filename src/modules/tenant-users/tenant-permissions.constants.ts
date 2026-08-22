@@ -169,6 +169,46 @@ export const TENANT_PERMISSION_CATALOG: TenantPermissionGroup[] = [
       },
     ],
   },
+  {
+    // Epic 15 — first module-gated group: dormant on every role while the
+    // `requests` module is outside the hotel's plan (Story 10.5 AC3).
+    group: 'requests',
+    labelEn: 'Guest Requests',
+    labelAr: 'طلبات النزلاء',
+    module: 'requests',
+    permissions: [
+      {
+        key: 'requests.read',
+        labelEn: 'View requests',
+        labelAr: 'عرض الطلبات',
+        descriptionEn: 'See the requests board, history and details.',
+        descriptionAr: 'عرض لوحة الطلبات وسجلها وتفاصيلها.',
+      },
+      {
+        key: 'requests.update',
+        labelEn: 'Work requests',
+        labelAr: 'معالجة الطلبات',
+        descriptionEn: 'Start, complete and cancel guest requests.',
+        descriptionAr: 'بدء طلبات النزلاء وإكمالها وإلغاؤها.',
+      },
+      {
+        key: 'requests.assign',
+        labelEn: 'Assign requests',
+        labelAr: 'إسناد الطلبات',
+        descriptionEn: 'Assign or reassign requests to staff members.',
+        descriptionAr: 'إسناد الطلبات إلى الموظفين أو إعادة إسنادها.',
+      },
+      {
+        key: 'request_catalog.manage',
+        labelEn: 'Manage request catalog',
+        labelAr: 'إدارة قائمة الطلبات',
+        descriptionEn:
+          'Enable, disable and reorder catalog items, adjust SLA targets, and add custom items.',
+        descriptionAr:
+          'تفعيل عناصر القائمة وتعطيلها وإعادة ترتيبها وتعديل أهداف زمن الاستجابة وإضافة عناصر مخصصة.',
+      },
+    ],
+  },
 ];
 
 export const ALL_TENANT_PERMISSION_KEYS: string[] =

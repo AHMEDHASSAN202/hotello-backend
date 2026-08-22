@@ -119,6 +119,24 @@ export class TenantProfileService {
     await this.tenantUsersRepo.save(user);
   }
 
+  /**
+   * Epic 15 — remove a stored hint key. Exists for keys used as per-user
+   * toggles (e.g. `requests.soundMuted`): dismiss = off, un-dismiss = on.
+   * Same allowlist and idempotency rules as dismissHint.
+   */
+  async undismissHint(user: TenantUser, key: string): Promise<void> {
+    if (!isTenantHintKey(key)) {
+      throw new BadRequestException({
+        code: 'INVALID_HINT_KEY',
+        message: 'Unknown hint key',
+      });
+    }
+    const dismissed = user.dismissedHints ?? [];
+    if (!dismissed.includes(key)) return;
+    user.dismissedHints = dismissed.filter((k) => k !== key);
+    await this.tenantUsersRepo.save(user);
+  }
+
   async updateProfile(user: TenantUser, dto: UpdateTenantProfileDto) {
     if (dto.name !== undefined) user.name = dto.name;
     if (dto.preferredLanguage !== undefined) {

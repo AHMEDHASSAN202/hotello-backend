@@ -88,7 +88,27 @@ describe('TenantRolesService', () => {
         'stays.checkin',
         'stays.update',
         'stays.checkout',
+        'requests.read',
+        'requests.update',
+        'requests.assign',
+        'request_catalog.manage',
       ]);
+      const frontDeskRole = saved.find((r) => r.nameEn === 'Front Desk');
+      expect(frontDeskRole.permissions).toEqual(
+        expect.arrayContaining([
+          'requests.read',
+          'requests.update',
+          'requests.assign',
+        ]),
+      );
+      expect(frontDeskRole.permissions).not.toContain(
+        'request_catalog.manage',
+      );
+      const housekeepingRole = saved.find((r) => r.nameEn === 'Housekeeping');
+      expect(housekeepingRole.permissions).toEqual(
+        expect.arrayContaining(['requests.read', 'requests.update']),
+      );
+      expect(housekeepingRole.permissions).not.toContain('requests.assign');
       expect(managerRole.isSystem).toBe(false);
       expect(saved.map((r) => r.nameEn)).toEqual([
         'Owner',
@@ -191,6 +211,20 @@ describe('TenantRolesService', () => {
       expect(catalog.map((g) => g.group)).toEqual(
         expect.arrayContaining(['staff', 'roles']),
       );
+    });
+
+    it('Epic 15 note 7 — hides the requests group when the module is not in the plan', async () => {
+      access.getAccessState.mockResolvedValue({ enabledModules: ['fnb'] });
+      const catalog = await service.getCatalog('hotel-1');
+      expect(catalog.map((g) => g.group)).not.toContain('requests');
+    });
+
+    it('Epic 15 note 7 — shows the requests group when the module is enabled', async () => {
+      access.getAccessState.mockResolvedValue({
+        enabledModules: ['requests'],
+      });
+      const catalog = await service.getCatalog('hotel-1');
+      expect(catalog.map((g) => g.group)).toContain('requests');
     });
   });
 

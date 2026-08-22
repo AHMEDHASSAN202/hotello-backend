@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
@@ -53,6 +54,19 @@ export class TenantProfileController {
     @Param('key') key: string,
   ) {
     return this.profile.dismissHint(user, key);
+  }
+
+  /**
+   * Epic 15 — un-dismiss: removes a stored hint key so keys can serve as
+   * per-user toggles (the requests-board sound mute). Idempotent.
+   */
+  @Delete('hints/:key')
+  @HttpCode(204)
+  undismissHint(
+    @CurrentTenantUser() user: TenantUser,
+    @Param('key') key: string,
+  ) {
+    return this.profile.undismissHint(user, key);
   }
 
   @Post('change-password')

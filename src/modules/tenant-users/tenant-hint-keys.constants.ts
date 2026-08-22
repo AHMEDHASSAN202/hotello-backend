@@ -12,6 +12,11 @@ export const TENANT_HINT_KEYS = [
   'home.setupSteps',
   'rooms.firstRun',
   'stays.firstRun',
+  'requests.firstRun',
+  'requests.catalogFirstRun',
+  // Epic 15 — not a first-run hint: presence mutes the board's new-request
+  // sound (per-user, persisted like dismissals; DELETE un-dismiss re-enables).
+  'requests.soundMuted',
 ] as const;
 
 export type TenantHintKey = (typeof TENANT_HINT_KEYS)[number];

@@ -10,4 +10,17 @@ describe('TENANT_PERMISSION_CATALOG', () => {
       'rooms.update',
     ]);
   });
+
+  it('Epic 15 — requests group is gated by the requests module and exposes the four keys', () => {
+    const requests = TENANT_PERMISSION_CATALOG.find(
+      (g) => g.group === 'requests',
+    );
+    expect(requests?.module).toBe('requests');
+    expect(requests?.permissions.map((p) => p.key)).toEqual([
+      'requests.read',
+      'requests.update',
+      'requests.assign',
+      'request_catalog.manage',
+    ]);
+  });
 });

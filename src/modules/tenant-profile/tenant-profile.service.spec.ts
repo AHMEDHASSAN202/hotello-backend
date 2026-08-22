@@ -143,6 +143,29 @@ describe('TenantProfileService (8.7)', () => {
       const result = await service.me(user({ dismissedHints: ['roles.firstRun'] }));
       expect(result.user.dismissedHints).toEqual(['roles.firstRun']);
     });
+
+    it('Epic 15 — undismissHint removes a stored key (sound toggle un-mute)', async () => {
+      const u = user({
+        dismissedHints: ['staff.firstRun', 'requests.soundMuted'],
+      });
+      await service.undismissHint(u, 'requests.soundMuted');
+      expect(u.dismissedHints).toEqual(['staff.firstRun']);
+      expect(repo.save).toHaveBeenCalledWith(u);
+    });
+
+    it('Epic 15 — undismissHint is idempotent when the key is absent', async () => {
+      const u = user({ dismissedHints: [] });
+      await service.undismissHint(u, 'requests.soundMuted');
+      expect(u.dismissedHints).toEqual([]);
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it('Epic 15 — undismissHint rejects keys outside the allowlist', async () => {
+      await expect(
+        service.undismissHint(user(), 'not.a.hint'),
+      ).rejects.toMatchObject({ response: { code: 'INVALID_HINT_KEY' } });
+      expect(repo.save).not.toHaveBeenCalled();
+    });
   });
 
   describe('setup status (12.4 AC3 / 11.6)', () => {
