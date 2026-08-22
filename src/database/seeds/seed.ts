@@ -6,6 +6,7 @@ import { ALL_MODULE_KEYS } from '../../modules/plans/modules.constants';
 import { Plan } from '../../modules/plans/plan.entity';
 import { WILDCARD } from '../../modules/roles/permissions.constants';
 import { Role } from '../../modules/roles/role.entity';
+import { seedRequestCatalog } from '../../modules/requests/request-catalog.seed';
 import { DEFAULT_TENANT_ROLES } from '../../modules/tenant-roles/default-tenant-roles';
 import { TenantRole } from '../../modules/tenant-roles/tenant-role.entity';
 import { AppDataSource } from '../../data-source';
@@ -156,6 +157,14 @@ async function seed() {
   if (hotels.length > 0) {
     console.log(`Ensured default tenant roles for ${hotels.length} hotel(s)`);
   }
+
+  // Epic 15, Story 15.1 AC1 — platform request catalog (shared rows, not per
+  // hotel). Idempotent upsert by key; re-running propagates translation fixes.
+  const catalogResult = await seedRequestCatalog(dataSource.manager);
+  console.log(
+    `Request catalog: +${catalogResult.createdItems} items, ` +
+      `${catalogResult.updatedItems} refreshed`,
+  );
 
   await dataSource.destroy();
   console.log('Seed complete.');
