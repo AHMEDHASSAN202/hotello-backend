@@ -47,6 +47,24 @@ export function startOfHotelDay(timezone: string, now: Date): Date {
 }
 
 /** 'HH:MM' → minutes since midnight. */
+/**
+ * Compare-safe parameter for NAIVE `timestamp` columns (TypeORM's
+ * created/updatedAt). Those columns hold UTC wall time (DB default now(),
+ * session UTC), but the pg driver serializes a JS Date parameter as LOCAL
+ * wall time — on a UTC+3 host every `updatedSince` delta ran 3 hours in the
+ * future and returned nothing (verified live, Epic 16 bugfix). An ISO string
+ * casts to the naive column by dropping the zone suffix, i.e. UTC wall —
+ * matching storage regardless of the host timezone. The `as Date` lie keeps
+ * TypeORM's FindOperator typing happy; timestamptz columns don't need this.
+ */
+export function naiveUtc(value: string | Date): Date {
+  const iso =
+    typeof value === 'string'
+      ? new Date(value).toISOString()
+      : value.toISOString();
+  return iso as unknown as Date;
+}
+
 export function minutesOf(time: string): number {
   const [hours, minutes] = time.split(':').map((v) => parseInt(v, 10));
   return hours * 60 + minutes;

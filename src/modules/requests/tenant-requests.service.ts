@@ -10,7 +10,7 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
 import { WILDCARD } from '../roles/permissions.constants';
 import { Room } from '../tenant-rooms/room.entity';
-import { startOfHotelDay } from '../tenant-stays/stay-time';
+import { naiveUtc, startOfHotelDay } from '../tenant-stays/stay-time';
 import { Stay } from '../tenant-stays/stay.entity';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { AssignRequestDto } from './dto/assign-request.dto';
@@ -97,7 +97,7 @@ export class TenantRequestsService {
     const where = query.updatedSince
       ? {
           hotelId: user.hotelId,
-          updatedAt: MoreThan(new Date(query.updatedSince)),
+          updatedAt: MoreThan(naiveUtc(query.updatedSince)),
         }
       : { hotelId: user.hotelId, status: In(OPEN_REQUEST_STATUSES) };
     const rows = await this.requestsRepo.find({

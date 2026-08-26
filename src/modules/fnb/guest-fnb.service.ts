@@ -13,7 +13,7 @@ import { DataSource, In, MoreThan, MoreThanOrEqual, Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { TranslationMap, localizeField } from '../requests/requests.constants';
 import { TenantAccessService } from '../tenant-access/tenant-access.service';
-import { hotelLocalParts, startOfHotelDay } from '../tenant-stays/stay-time';
+import { hotelLocalParts, naiveUtc, startOfHotelDay } from '../tenant-stays/stay-time';
 import { Stay } from '../tenant-stays/stay.entity';
 import { GuestLanguage, StayType } from '../tenant-stays/stays.constants';
 import {
@@ -123,6 +123,8 @@ export interface GuestFnbOrderView {
   deliveredAt: Date | null;
   cancelledAt: Date | null;
   cancelledReason: string | null;
+  /** Room-charge orders flip true once the front desk collects (16.8). */
+  settled: boolean;
   updatedAt: Date;
   lines: GuestFnbOrderLineView[];
 }
@@ -525,7 +527,7 @@ export class GuestFnbService {
     const dayCount = await this.ordersRepo.count({
       where: {
         stayId: stay.id,
-        createdAt: MoreThanOrEqual(startOfHotelDay(stay.hotel.timezone, now)),
+        createdAt: MoreThanOrEqual(naiveUtc(startOfHotelDay(stay.hotel.timezone, now))),
       },
     });
     if (dayCount >= this.maxPerDay) {
@@ -551,7 +553,7 @@ export class GuestFnbService {
   ): Promise<{ data: GuestFnbOrderView[]; serverTime: string }> {
     await this.assertFnbAvailable(stay.hotelId);
     const where = query.updatedSince
-      ? { stayId: stay.id, updatedAt: MoreThan(new Date(query.updatedSince)) }
+      ? { stayId: stay.id, updatedAt: MoreThan(naiveUtc(query.updatedSince)) }
       : { stayId: stay.id };
     const orders = await this.ordersRepo.find({
       where,
@@ -639,6 +641,7 @@ export class GuestFnbService {
       deliveredAt: order.deliveredAt,
       cancelledAt: order.cancelledAt,
       cancelledReason: order.cancelledReason,
+      settled: order.settledAt !== null,
       updatedAt: order.updatedAt,
       lines: [...lines]
         .sort((a, b) => a.sortOrder - b.sortOrder)

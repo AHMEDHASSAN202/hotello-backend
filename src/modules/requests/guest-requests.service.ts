@@ -12,7 +12,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, MoreThan, MoreThanOrEqual, Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { TenantAccessService } from '../tenant-access/tenant-access.service';
-import { startOfHotelDay } from '../tenant-stays/stay-time';
+import { naiveUtc, startOfHotelDay } from '../tenant-stays/stay-time';
 import { GuestLanguage } from '../tenant-stays/stays.constants';
 import { Stay } from '../tenant-stays/stay.entity';
 import { CreateGuestRequestDto } from './dto/create-guest-request.dto';
@@ -168,7 +168,7 @@ export class GuestRequestsService {
       where: {
         stayId: stay.id,
         createdAt: MoreThanOrEqual(
-          startOfHotelDay(stay.hotel.timezone, now),
+          naiveUtc(startOfHotelDay(stay.hotel.timezone, now)),
         ),
       },
     });
@@ -244,7 +244,7 @@ export class GuestRequestsService {
   ): Promise<{ data: GuestRequestView[]; serverTime: string }> {
     await this.assertRequestsAvailable(stay.hotelId);
     const where = query.updatedSince
-      ? { stayId: stay.id, updatedAt: MoreThan(new Date(query.updatedSince)) }
+      ? { stayId: stay.id, updatedAt: MoreThan(naiveUtc(query.updatedSince)) }
       : { stayId: stay.id };
     const rows = await this.requestsRepo.find({
       where,

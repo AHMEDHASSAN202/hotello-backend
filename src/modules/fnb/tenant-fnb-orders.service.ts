@@ -10,7 +10,7 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
 import { TranslationMap } from '../requests/requests.constants';
 import { WILDCARD } from '../roles/permissions.constants';
-import { startOfHotelDay } from '../tenant-stays/stay-time';
+import { naiveUtc, startOfHotelDay } from '../tenant-stays/stay-time';
 import { TenantStaysService } from '../tenant-stays/tenant-stays.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import {
@@ -127,7 +127,7 @@ export class TenantFnbOrdersService {
     // Delta mode drops the status filter so completed/cancelled rows reach
     // the client and clear off the board (requests parity).
     const where: Record<string, unknown> = query.updatedSince
-      ? { hotelId: user.hotelId, updatedAt: MoreThan(new Date(query.updatedSince)) }
+      ? { hotelId: user.hotelId, updatedAt: MoreThan(naiveUtc(query.updatedSince)) }
       : { hotelId: user.hotelId, status: In(OPEN_FNB_ORDER_STATUSES) };
     if (!query.updatedSince) {
       if (query.status) where.status = query.status;
