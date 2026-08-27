@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -10,7 +11,10 @@ import {
   Patch,
   Post,
   Put,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentTenantUser } from '../../common/decorators/current-tenant-user.decorator';
 import { RequireModule } from '../../common/decorators/require-module.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
@@ -24,9 +28,11 @@ import {
   UpsertEssentialsDto,
 } from './dto/hotel-info.dto';
 import {
+  HOTEL_INFO_PHOTO_MAX_BYTES,
   HotelInfoSection,
   REPEATABLE_SECTIONS,
 } from './hotel-info.constants';
+import { HotelInfoPhotoService } from './hotel-info-photo.service';
 import { TenantHotelInfoService } from './tenant-hotel-info.service';
 
 /**
@@ -38,7 +44,10 @@ import { TenantHotelInfoService } from './tenant-hotel-info.service';
 @RequireModule('hotel_info')
 @Controller('tenant/hotel-info')
 export class TenantHotelInfoController {
-  constructor(private readonly info: TenantHotelInfoService) {}
+  constructor(
+    private readonly info: TenantHotelInfoService,
+    private readonly photos: HotelInfoPhotoService,
+  ) {}
 
   @Get()
   @RequirePermissions('hotel_info.manage')
@@ -82,6 +91,32 @@ export class TenantHotelInfoController {
     @Body() dto: UpdateInfoEntryDto,
   ) {
     return this.info.updateEntry(user, id, dto);
+  }
+
+  @Post('entries/:id/photos')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('hotel_info.manage')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: HOTEL_INFO_PHOTO_MAX_BYTES },
+    }),
+  )
+  addPhoto(
+    @CurrentTenantUser() user: TenantUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    return this.photos.addPhoto(user, id, file);
+  }
+
+  @Delete('entries/:id/photos/:photoId')
+  @RequirePermissions('hotel_info.manage')
+  removePhoto(
+    @CurrentTenantUser() user: TenantUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('photoId', ParseUUIDPipe) photoId: string,
+  ) {
+    return this.photos.removePhoto(user, id, photoId);
   }
 
   @Post('sections/:section/reorder')
