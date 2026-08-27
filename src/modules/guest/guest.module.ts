@@ -3,6 +3,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Hotel } from '../hotels/hotel.entity';
+import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
 import { Stay } from '../tenant-stays/stay.entity';
 import { TenantAccessModule } from '../tenant-access/tenant-access.module';
 import { TenantStaysModule } from '../tenant-stays/tenant-stays.module';
@@ -14,7 +15,7 @@ import { GuestJwtStrategy } from './strategies/guest-jwt.strategy';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Stay, Hotel]),
+    TypeOrmModule.forFeature([Stay, Hotel, HotelInfoEntry]),
     PassportModule,
     JwtModule.register({}),
     TenantStaysModule, // StayCodeService — one hashing implementation

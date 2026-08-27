@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Hotel } from '../hotels/hotel.entity';
+import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
 import { TenantAccessService } from '../tenant-access/tenant-access.service';
 
 /**
@@ -30,6 +31,11 @@ export interface GuestHotelProfile {
   currency: string;
   /** Plan modules, for services-grid tile gating (14.4 AC3). */
   enabledModules: string[];
+  /**
+   * Epic 17 AC4 tri-state signal: module on + zero content hides the Hotel
+   * Info tile entirely (an empty directory is worse than none).
+   */
+  hotelInfoHasContent: boolean;
 }
 
 const DEFAULT_CACHE_TTL_MS = 60_000;
@@ -46,6 +52,8 @@ export class GuestProfileService {
   constructor(
     @InjectRepository(Hotel)
     private readonly hotelsRepo: Repository<Hotel>,
+    @InjectRepository(HotelInfoEntry)
+    private readonly infoRepo: Repository<HotelInfoEntry>,
     private readonly tenantAccess: TenantAccessService,
     config: ConfigService,
   ) {
@@ -71,6 +79,11 @@ export class GuestProfileService {
     const access = await this.tenantAccess.getAccessState(hotel.id);
     const unavailable = hotel.status === 'suspended' || access.readOnly;
     const branded = access.enabledModules.includes('guest_app_branding');
+    const hotelInfoHasContent =
+      access.enabledModules.includes('hotel_info') &&
+      (await this.infoRepo.count({
+        where: { hotelId: hotel.id, isActive: true },
+      })) > 0;
 
     const value: GuestHotelProfile = {
       slug: hotel.slug,
@@ -84,6 +97,7 @@ export class GuestProfileService {
       defaultLanguage: hotel.defaultLanguage,
       currency: hotel.currency,
       enabledModules: access.enabledModules,
+      hotelInfoHasContent,
     };
     this.cache.set(slug, { value, expiresAt: Date.now() + this.ttlMs });
     return value;

@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Hotel } from '../hotels/hotel.entity';
+import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
 import { TenantAccessService } from '../tenant-access/tenant-access.service';
 import { GuestProfileService } from './guest-profile.service';
 
@@ -26,7 +27,7 @@ const makeAccessState = (o: Record<string, unknown> = {}) => ({
   hotelStatus: 'active',
   subscriptionStatus: 'active',
   trialEndsAt: null,
-  enabledModules: ['requests', 'fnb', 'guest_app_branding'],
+  enabledModules: ['requests', 'fnb', 'guest_app_branding', 'hotel_info'],
   planNameEn: 'Pro',
   planNameAr: 'برو',
   trialDaysRemaining: null,
@@ -37,10 +38,12 @@ const makeAccessState = (o: Record<string, unknown> = {}) => ({
 describe('GuestProfileService — getProfile (14.4 AC1/AC5)', () => {
   let service: GuestProfileService;
   let hotelsRepo: { findOne: jest.Mock };
+  let infoRepo: { count: jest.Mock };
   let tenantAccess: { getAccessState: jest.Mock };
 
   beforeEach(async () => {
     hotelsRepo = { findOne: jest.fn().mockResolvedValue(makeHotel()) };
+    infoRepo = { count: jest.fn().mockResolvedValue(2) };
     tenantAccess = {
       getAccessState: jest.fn().mockResolvedValue(makeAccessState()),
     };
@@ -49,6 +52,7 @@ describe('GuestProfileService — getProfile (14.4 AC1/AC5)', () => {
       providers: [
         GuestProfileService,
         { provide: getRepositoryToken(Hotel), useValue: hotelsRepo },
+        { provide: getRepositoryToken(HotelInfoEntry), useValue: infoRepo },
         { provide: TenantAccessService, useValue: tenantAccess },
         {
           provide: ConfigService,
@@ -75,8 +79,24 @@ describe('GuestProfileService — getProfile (14.4 AC1/AC5)', () => {
       defaultLanguage: 'ar',
       // Epic 16 — the Guest App formats menu prices in the hotel currency.
       currency: 'EGP',
-      enabledModules: ['requests', 'fnb', 'guest_app_branding'],
+      enabledModules: ['requests', 'fnb', 'guest_app_branding', 'hotel_info'],
+      // Epic 17 AC4 — active info entries exist and the module is enabled.
+      hotelInfoHasContent: true,
     });
+  });
+
+  it('Epic 17 AC4 — hotelInfoHasContent is false with zero active entries or module off', async () => {
+    infoRepo.count.mockResolvedValue(0);
+    let profile = await service.getProfile('sunrise');
+    expect(profile.hotelInfoHasContent).toBe(false);
+
+    hotelsRepo.findOne.mockResolvedValue(makeHotel({ slug: 'other' }));
+    infoRepo.count.mockResolvedValue(3);
+    tenantAccess.getAccessState.mockResolvedValue(
+      makeAccessState({ enabledModules: ['requests'] }),
+    );
+    profile = await service.getProfile('other');
+    expect(profile.hotelInfoHasContent).toBe(false);
   });
 
   it('nulls the accent color when the plan lacks guest_app_branding', async () => {
