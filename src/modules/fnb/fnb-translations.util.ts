@@ -30,10 +30,15 @@ type DescriptionFields = Partial<
   Record<(typeof DESCRIPTION_KEYS)[number][0], string>
 >;
 
-/** Merge DTO name fields over an existing map; ar + en must survive. */
+/**
+ * Merge DTO name fields over an existing map; ar + en must survive.
+ * `code` lets other modules (Epic 17 hotel info) reuse the merge with their
+ * own stable error code instead of duplicating the util.
+ */
 export function mergeNames(
   dto: NameFields,
   existing: TranslationMap = {},
+  code = 'FNB_NAMES_REQUIRED',
 ): TranslationMap {
   const names: TranslationMap = { ...existing };
   for (const [dtoKey, lang] of NAME_KEYS) {
@@ -42,7 +47,7 @@ export function mergeNames(
   }
   if (!names.ar || !names.en) {
     throw new BadRequestException({
-      code: 'FNB_NAMES_REQUIRED',
+      code,
       message: 'Arabic and English names are required',
     });
   }

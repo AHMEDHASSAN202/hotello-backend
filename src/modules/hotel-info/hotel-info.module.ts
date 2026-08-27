@@ -3,6 +3,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { Hotel } from '../hotels/hotel.entity';
 import { HotelInfoEntry } from './hotel-info-entry.entity';
+import { TenantHotelInfoController } from './tenant-hotel-info.controller';
+import { TenantHotelInfoService } from './tenant-hotel-info.service';
 
 /**
  * Epic 17 — Hotel Info / Directory: the digital in-room compendium, serving
@@ -14,7 +16,7 @@ import { HotelInfoEntry } from './hotel-info-entry.entity';
     TypeOrmModule.forFeature([HotelInfoEntry, Hotel]),
     AuditLogsModule,
   ],
-  providers: [],
-  controllers: [],
+  providers: [TenantHotelInfoService],
+  controllers: [TenantHotelInfoController],
 })
 export class HotelInfoModule {}
