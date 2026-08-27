@@ -7,6 +7,17 @@ import { STORAGE_DRIVER } from '../storage/storage.interface';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { TenantBrandingService } from './tenant-branding.service';
 
+// Two-rendition pipeline is exercised structurally — sharp itself is mocked.
+jest.mock('sharp', () => {
+  const instance = {
+    rotate: jest.fn().mockReturnThis(),
+    resize: jest.fn().mockReturnThis(),
+    webp: jest.fn().mockReturnThis(),
+    toBuffer: jest.fn().mockResolvedValue(Buffer.from('img')),
+  };
+  return { __esModule: true, default: jest.fn(() => instance) };
+});
+
 describe('TenantBrandingService (18.1)', () => {
   let service: TenantBrandingService;
   let hotelsRepo: { findOne: jest.Mock; save: jest.Mock };
@@ -150,5 +161,83 @@ describe('TenantBrandingService (18.1)', () => {
     await service.updateBranding(actor, { brandAccentColor: '#0F6B5C' });
     expect(hotelsRepo.save).not.toHaveBeenCalled();
     expect(auditLogs.log).not.toHaveBeenCalled();
+  });
+
+  describe('cover image (AC1 cover, AC3)', () => {
+    const file = { buffer: Buffer.from('png'), mimetype: 'image/png', size: 1000 };
+
+    it('stores two wide renditions under branding/{hotelId}/ and audits', async () => {
+      hotelsRepo.findOne.mockResolvedValue(hotel());
+      const view = await service.setCover(actor, file);
+      expect(storage.put).toHaveBeenCalledTimes(2);
+      const keys = storage.put.mock.calls.map((c) => c[0] as string);
+      expect(keys[0]).toMatch(/^branding\/h1\/[0-9a-f-]+-thumb\.webp$/);
+      expect(keys[1]).toMatch(/^branding\/h1\/[0-9a-f-]+-detail\.webp$/);
+      expect(view.coverThumbUrl).toBe(`files/${keys[0]}`);
+      expect(view.coverDetailUrl).toBe(`files/${keys[1]}`);
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'branding.updated',
+          metadata: expect.objectContaining({ diff: { coverImage: { changed: true } } }),
+        }),
+      );
+    });
+
+    it('replacing deletes the previous renditions quietly', async () => {
+      hotelsRepo.findOne.mockResolvedValue({
+        ...hotel(),
+        coverImageThumbKey: 'branding/h1/old-thumb.webp',
+        coverImageDetailKey: 'branding/h1/old-detail.webp',
+      });
+      await service.setCover(actor, file);
+      expect(storage.delete).toHaveBeenCalledWith('branding/h1/old-thumb.webp');
+      expect(storage.delete).toHaveBeenCalledWith('branding/h1/old-detail.webp');
+    });
+
+    it('a failing old-file delete never fails the mutation', async () => {
+      storage.delete.mockRejectedValue(new Error('gone'));
+      hotelsRepo.findOne.mockResolvedValue({
+        ...hotel(),
+        coverImageThumbKey: 'branding/h1/old-thumb.webp',
+        coverImageDetailKey: 'branding/h1/old-detail.webp',
+      });
+      await expect(service.setCover(actor, file)).resolves.toBeDefined();
+    });
+
+    it('rejects a missing file and disallowed mime types', async () => {
+      hotelsRepo.findOne.mockResolvedValue(hotel());
+      await expect(service.setCover(actor, undefined)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'BRANDING_COVER_REQUIRED' }),
+      });
+      await expect(
+        service.setCover(actor, { ...file, mimetype: 'image/svg+xml' }),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'BRANDING_COVER_INVALID' }),
+      });
+    });
+
+    it('removeCover clears keys, deletes files, audits removal (AC3 reset)', async () => {
+      hotelsRepo.findOne.mockResolvedValue({
+        ...hotel(),
+        coverImageThumbKey: 'branding/h1/old-thumb.webp',
+        coverImageDetailKey: 'branding/h1/old-detail.webp',
+      });
+      const view = await service.removeCover(actor);
+      expect(view.coverThumbUrl).toBeNull();
+      expect(view.coverDetailUrl).toBeNull();
+      expect(storage.delete).toHaveBeenCalledWith('branding/h1/old-thumb.webp');
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({ diff: { coverImage: { removed: true } } }),
+        }),
+      );
+    });
+
+    it('removeCover with no cover is a no-op (no save, no audit)', async () => {
+      hotelsRepo.findOne.mockResolvedValue(hotel());
+      await service.removeCover(actor);
+      expect(hotelsRepo.save).not.toHaveBeenCalled();
+      expect(auditLogs.log).not.toHaveBeenCalled();
+    });
   });
 });

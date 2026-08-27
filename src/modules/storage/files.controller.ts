@@ -43,12 +43,12 @@ export class FilesController {
       "default-src 'none'; style-src 'unsafe-inline'; sandbox",
     );
     res.setHeader('Content-Disposition', 'inline; filename="asset"');
-    // F&B / hotel-info photo renditions live under uuid keys that are never
-    // overwritten (a new upload = new keys), so they cache immutably
-    // (Epic 16 note 6; Epic 17 decision 9).
+    // F&B / hotel-info / branding photo renditions live under uuid keys that
+    // are never overwritten (a new upload = new keys), so they cache
+    // immutably (Epic 16 note 6; Epic 17 decision 9; Epic 18.2 AC4).
     res.setHeader(
       'Cache-Control',
-      key.startsWith('fnb/') || key.startsWith('hotel-info/')
+      key.startsWith('fnb/') || key.startsWith('hotel-info/') || key.startsWith('branding/')
         ? 'public, max-age=31536000, immutable'
         : 'public, max-age=3600',
     );
