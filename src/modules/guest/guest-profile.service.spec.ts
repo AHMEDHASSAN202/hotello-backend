@@ -20,6 +20,8 @@ const makeHotel = (o: Record<string, unknown> = {}) =>
     timezone: 'Africa/Cairo',
     defaultLanguage: 'ar',
     currency: 'EGP',
+    coverImageDetailKey: null,
+    welcomeMessage: null,
     ...o,
   }) as unknown as Hotel;
 
@@ -82,6 +84,9 @@ describe('GuestProfileService — getProfile (14.4 AC1/AC5)', () => {
       enabledModules: ['requests', 'fnb', 'guest_app_branding', 'hotel_info'],
       // Epic 17 AC4 — active info entries exist and the module is enabled.
       hotelInfoHasContent: true,
+      // Epic 18 — no cover/welcome fixture data set on the default hotel.
+      coverImageUrl: null,
+      welcomeMessage: null,
     });
   });
 
@@ -105,6 +110,34 @@ describe('GuestProfileService — getProfile (14.4 AC1/AC5)', () => {
     );
     const profile = await service.getProfile('sunrise');
     expect(profile.brandAccentColor).toBeNull();
+  });
+
+  it('returns cover URL and welcome map when the plan includes guest_app_branding (18.2 AC1)', async () => {
+    hotelsRepo.findOne.mockResolvedValue(
+      makeHotel({
+        coverImageDetailKey: 'branding/h1/x-detail.webp',
+        welcomeMessage: { ar: 'أهلاً', en: 'Welcome' },
+      }),
+    );
+    const profile = await service.getProfile('sunrise');
+    expect(profile.coverImageUrl).toBe('files/branding/h1/x-detail.webp');
+    expect(profile.welcomeMessage).toEqual({ ar: 'أهلاً', en: 'Welcome' });
+  });
+
+  it('returns defaults when the module is off, while stored values are retained (18.2 AC1)', async () => {
+    hotelsRepo.findOne.mockResolvedValue(
+      makeHotel({
+        coverImageDetailKey: 'branding/h1/x-detail.webp',
+        welcomeMessage: { ar: 'أهلاً', en: 'Welcome' },
+      }),
+    );
+    tenantAccess.getAccessState.mockResolvedValue(
+      makeAccessState({ enabledModules: ['requests'] }),
+    );
+    const profile = await service.getProfile('sunrise');
+    expect(profile.brandAccentColor).toBeNull();
+    expect(profile.coverImageUrl).toBeNull();
+    expect(profile.welcomeMessage).toBeNull();
   });
 
   it('returns a null logoUrl when the hotel has no logo', async () => {

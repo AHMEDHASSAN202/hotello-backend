@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 import { Hotel } from '../hotels/hotel.entity';
 import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
 import { TenantAccessService } from '../tenant-access/tenant-access.service';
+import { TranslationMap } from '../requests/requests.constants';
 
 /**
  * Public hotel profile for the Guest App shell (14.4 AC1) — branding basics
@@ -36,6 +37,10 @@ export interface GuestHotelProfile {
    * Info tile entirely (an empty directory is worse than none).
    */
   hotelInfoHasContent: boolean;
+  /** Wide cover image for the home header (`files/{key}`) — null without `guest_app_branding` (Epic 18). */
+  coverImageUrl: string | null;
+  /** Welcome line translations, resolved client-side with EN fallback — null without the module (Epic 18). */
+  welcomeMessage: TranslationMap | null;
 }
 
 const DEFAULT_CACHE_TTL_MS = 60_000;
@@ -98,6 +103,11 @@ export class GuestProfileService {
       currency: hotel.currency,
       enabledModules: access.enabledModules,
       hotelInfoHasContent,
+      coverImageUrl:
+        branded && hotel.coverImageDetailKey
+          ? `files/${hotel.coverImageDetailKey}`
+          : null,
+      welcomeMessage: branded ? hotel.welcomeMessage : null,
     };
     this.cache.set(slug, { value, expiresAt: Date.now() + this.ttlMs });
     return value;
