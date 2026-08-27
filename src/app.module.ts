@@ -15,6 +15,7 @@ import { GuestJwtAuthGuard } from './common/guards/guest-jwt-auth.guard';
 import { AdminsModule } from './modules/admins/admins.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { BrandingModule } from './modules/branding/branding.module';
 import { HotelsModule } from './modules/hotels/hotels.module';
 import { MailModule } from './modules/mail/mail.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
@@ -74,6 +75,7 @@ import { TenantUsersModule } from './modules/tenant-users/tenant-users.module';
     RequestsModule,
     FnbModule,
     HotelInfoModule,
+    BrandingModule,
     TenantStaffModule,
     TenantUsersModule,
   ],
