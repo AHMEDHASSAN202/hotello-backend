@@ -431,6 +431,7 @@ describe('PlansService', () => {
         'guest_app_branding',
         'analytics',
         'requests',
+        'hotel_info',
       ]);
     });
   });

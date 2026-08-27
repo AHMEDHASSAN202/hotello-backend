@@ -260,6 +260,25 @@ export const TENANT_PERMISSION_CATALOG: TenantPermissionGroup[] = [
       },
     ],
   },
+  {
+    // Epic 17 — the digital compendium; dormant while the `hotel_info`
+    // module is outside the hotel's plan (Story 10.5 AC3).
+    group: 'hotel_info',
+    labelEn: 'Hotel Info',
+    labelAr: 'معلومات الفندق',
+    module: 'hotel_info',
+    permissions: [
+      {
+        key: 'hotel_info.manage',
+        labelEn: 'Manage hotel info',
+        labelAr: 'إدارة معلومات الفندق',
+        descriptionEn:
+          'Edit the guest-facing hotel directory: WiFi, facilities, services, house rules and about.',
+        descriptionAr:
+          'تعديل دليل الفندق الظاهر للنزلاء: الواي فاي والمرافق والخدمات وقواعد الإقامة وعن الفندق.',
+      },
+    ],
+  },
 ];
 
 export const ALL_TENANT_PERMISSION_KEYS: string[] =

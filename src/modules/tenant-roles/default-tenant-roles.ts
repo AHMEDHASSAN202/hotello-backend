@@ -51,6 +51,7 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
       'fnb_orders.read',
       'fnb_orders.update',
       'fnb_settings.manage',
+      'hotel_info.manage',
     ],
     isSystem: false,
   },
@@ -71,6 +72,8 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
       // Epic 16 — room-charge visibility at checkout (16.8); settling rides
       // on stays.checkout, not an fnb key.
       'fnb_orders.read',
+      // Epic 17 — front desk knows the practical answers guests ask.
+      'hotel_info.manage',
     ],
     isSystem: false,
   },

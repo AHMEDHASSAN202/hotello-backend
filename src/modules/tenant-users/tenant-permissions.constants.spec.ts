@@ -1,4 +1,6 @@
+import { ALL_MODULE_KEYS } from '../plans/modules.constants';
 import { DEFAULT_TENANT_ROLES } from '../tenant-roles/default-tenant-roles';
+import { TENANT_HINT_KEYS } from './tenant-hint-keys.constants';
 import {
   ALL_TENANT_PERMISSION_KEYS,
   TENANT_PERMISSION_CATALOG,
@@ -40,6 +42,27 @@ describe('TENANT_PERMISSION_CATALOG', () => {
     ]);
   });
 
+  it('Epic 17 — hotel_info group is gated by the hotel_info module and exposes hotel_info.manage', () => {
+    const info = TENANT_PERMISSION_CATALOG.find((g) => g.group === 'hotel_info');
+    expect(info?.module).toBe('hotel_info');
+    expect(info?.permissions.map((p) => p.key)).toEqual(['hotel_info.manage']);
+  });
+
+  it('Epic 17 — hotel_info is a platform module key', () => {
+    expect(ALL_MODULE_KEYS).toContain('hotel_info');
+  });
+
+  it('Epic 17 — hotelInfo.firstRun and the Epic 16 hint keys are registered', () => {
+    for (const key of [
+      'hotelInfo.firstRun',
+      'fnb.firstRun',
+      'fnb.locationsGuidance',
+      'fnb.soundMuted',
+    ]) {
+      expect(TENANT_HINT_KEYS).toContain(key);
+    }
+  });
+
   it('permission keys are globally unique', () => {
     expect(new Set(ALL_TENANT_PERMISSION_KEYS).size).toBe(
       ALL_TENANT_PERMISSION_KEYS.length,
@@ -78,6 +101,14 @@ describe('DEFAULT_TENANT_ROLES (Epic 16 seeding)', () => {
     expect(frontDesk?.permissions).toContain('fnb_orders.read');
     expect(frontDesk?.permissions).not.toContain('fnb_orders.update');
     expect(frontDesk?.permissions).not.toContain('fnb_menus.manage');
+  });
+
+  it('Epic 17 — Manager and Front Desk gain hotel_info.manage', () => {
+    expect(byName('Manager')?.permissions).toContain('hotel_info.manage');
+    expect(byName('Front Desk')?.permissions).toContain('hotel_info.manage');
+    expect(byName('Housekeeping')?.permissions).not.toContain(
+      'hotel_info.manage',
+    );
   });
 
   it('seeds the F&B / Kitchen role (non-system) with board + menus access', () => {

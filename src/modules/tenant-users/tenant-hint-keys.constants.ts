@@ -17,6 +17,13 @@ export const TENANT_HINT_KEYS = [
   // Epic 15 — not a first-run hint: presence mutes the board's new-request
   // sound (per-user, persisted like dismissals; DELETE un-dismiss re-enables).
   'requests.soundMuted',
+  // Epic 16 — registered late (Epic 17): the hotel dashboard shipped these
+  // keys before they were listed here, so dismissals were rejected silently.
+  'fnb.firstRun',
+  'fnb.locationsGuidance',
+  'fnb.soundMuted',
+  // Epic 17
+  'hotelInfo.firstRun',
 ] as const;
 
 export type TenantHintKey = (typeof TENANT_HINT_KEYS)[number];
