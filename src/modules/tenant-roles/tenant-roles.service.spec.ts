@@ -98,6 +98,7 @@ describe('TenantRolesService', () => {
         'fnb_orders.update',
         'fnb_settings.manage',
         'hotel_info.manage',
+        'branding.manage',
       ]);
       const frontDeskRole = saved.find((r) => r.nameEn === 'Front Desk');
       expect(frontDeskRole.permissions).toEqual(

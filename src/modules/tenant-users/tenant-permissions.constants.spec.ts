@@ -124,3 +124,22 @@ describe('DEFAULT_TENANT_ROLES (Epic 16 seeding)', () => {
     ]);
   });
 });
+
+describe('Epic 18 — branding permissions', () => {
+  it('Epic 18 — branding group is gated by the guest_app_branding module', () => {
+    const group = TENANT_PERMISSION_CATALOG.find((g) => g.group === 'branding');
+    expect(group).toBeDefined();
+    expect(group!.module).toBe('guest_app_branding');
+    expect(group!.permissions.map((p) => p.key)).toEqual(['branding.manage']);
+  });
+
+  it('Epic 18 — Manager (and only Manager) gains branding.manage', () => {
+    const byName = Object.fromEntries(
+      DEFAULT_TENANT_ROLES.map((r) => [r.nameEn, r.permissions]),
+    );
+    expect(byName['Manager']).toContain('branding.manage');
+    expect(byName['Front Desk']).not.toContain('branding.manage');
+    expect(byName['Housekeeping']).not.toContain('branding.manage');
+    expect(byName['F&B / Kitchen']).not.toContain('branding.manage');
+  });
+});

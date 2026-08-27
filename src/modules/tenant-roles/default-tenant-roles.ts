@@ -52,6 +52,7 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
       'fnb_orders.update',
       'fnb_settings.manage',
       'hotel_info.manage',
+      'branding.manage',
     ],
     isSystem: false,
   },

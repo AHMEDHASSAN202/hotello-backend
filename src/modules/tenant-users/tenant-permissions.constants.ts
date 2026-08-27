@@ -279,6 +279,25 @@ export const TENANT_PERMISSION_CATALOG: TenantPermissionGroup[] = [
       },
     ],
   },
+  {
+    // Epic 18 — Guest App Branding; dormant while the `guest_app_branding`
+    // module is outside the hotel's plan (Story 10.5 AC3) — it's the upsell.
+    group: 'branding',
+    labelEn: 'Guest App Branding',
+    labelAr: 'تخصيص هوية تطبيق الضيوف',
+    module: 'guest_app_branding',
+    permissions: [
+      {
+        key: 'branding.manage',
+        labelEn: 'Manage guest app branding',
+        labelAr: 'إدارة هوية تطبيق الضيوف',
+        descriptionEn:
+          'Customize the guest app accent color, cover image, and welcome message.',
+        descriptionAr:
+          'تخصيص لون التمييز وصورة الغلاف ورسالة الترحيب في تطبيق الضيوف.',
+      },
+    ],
+  },
 ];
 
 export const ALL_TENANT_PERMISSION_KEYS: string[] =

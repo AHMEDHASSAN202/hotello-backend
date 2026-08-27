@@ -8,6 +8,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { Admin } from '../admins/admin.entity';
+import { TranslationMap } from '../requests/requests.constants';
 import { HotelStatus, SuspensionReason } from './hotels.constants';
 
 @Entity('hotels')
@@ -93,6 +94,21 @@ export class Hotel {
    */
   @Column({ type: 'varchar', length: 7, nullable: true })
   brandAccentColor: string | null;
+
+  /**
+   * Guest App home cover image — storage keys, two wide renditions (Epic 18).
+   * Applied only when the plan includes `guest_app_branding`; values persist
+   * when the module is off (server-side gating lives in the guest profile).
+   */
+  @Column({ type: 'text', nullable: true })
+  coverImageThumbKey: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  coverImageDetailKey: string | null;
+
+  /** Guest App welcome line under the greeting, per guest language (Epic 18). */
+  @Column({ type: 'jsonb', nullable: true })
+  welcomeMessage: TranslationMap | null;
 
   // Sales-declared count from onboarding — reference only, no guard reads it (11.6 AC2).
   @Column({ type: 'int', default: 0 })
