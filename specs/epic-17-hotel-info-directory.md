@@ -59,6 +59,20 @@
 
 ---
 
+## Decisions (recorded during implementation — durable)
+
+1. **Content model:** one `HotelInfoEntry` entity with `names`/`descriptions` TranslationMap columns, a per-section `structured` JSONB (essentials wifi/phones; facility `windows` + `locationNote`; service `howTo` + `priceNote`) and a dedicated `photos: {id, thumb, detail}[]` column. Per-section photo caps: facilities **1**, about **8**, others 0 (`HOTEL_INFO_MAX_PHOTOS`).
+2. **Singletons:** `essentials` and `about` are one row per hotel via `PUT /tenant/hotel-info/essentials|about` with full-replacement semantics; an all-empty upsert deletes the row. Repeatable sections get POST/PATCH + `POST sections/:section/reorder` + `isActive` — **no DELETE endpoint** (matches F&B items and AC3).
+3. **Essentials fields** are plain strings (max 80/40), no phone-format enforcement; the guest app renders `tel:` links (WhatsApp renders a `wa.me` link). Checkout time is never stored — projected from `hotel.checkoutTime` on both surfaces.
+4. **Translations:** entry names AR+EN required (`HOTEL_INFO_NAMES_REQUIRED`, reusing `mergeNames` with a code param); descriptions and aux fields (locationNote/howTo/priceNote) accept any locale subset with EN fallback. About text = the singleton's `descriptions` (≤4000/locale, paragraphs split on blank lines, no HTML).
+5. **Audit:** single action `hotel_info.updated` on entityType `hotel_info_entry` with the standard diff idiom; the WiFi password diff is `{ changed: true }` — values never logged (spec note 3).
+6. **Guest cache:** TTL-only in-process Map keyed `hotelId:language`, `HOTEL_INFO_CACHE_TTL_MS` (default 60s) — same mechanism as the profile endpoint, no invalidation hooks.
+7. **Tile tri-state (17.2 AC1/AC4):** module disabled → tile visible as "soon"; enabled + zero active entries → tile hidden entirely; enabled + content → live. Signal: public profile gained `hotelInfoHasContent` (computed inside the cached profile). Bottom-nav info slot appears only when live.
+8. **Open-now** is computed client-side (`src/lib/hours.ts`, ported from `fnb-availability.ts`/`stay-time.ts`), refreshed on a 30s tick; windows reuse the F&B shape (max 4, `start > end` = overnight, `[]` = always, no weekday dimension).
+9. **Photos:** same renditions as F&B (480×360 thumb / ≤1200 detail, WebP), keys `hotel-info/{hotelId}/{entryId}/{uuid}-*.webp`; `files` controller serves the `hotel-info/` prefix with the year-long immutable cache. Errors: `HOTEL_INFO_PHOTO_INVALID` (400), `HOTEL_INFO_PHOTOS_FULL` (409 `{max, count}`).
+10. **Module enablement:** `HotelInfoFoundation` migration appends `hotel_info` to every existing plan's `enabledModules` (super admins can remove it per plan) and grants `hotel_info.manage` to existing Manager + Front Desk roles.
+11. **Shared editors extracted (hotel FE):** `HoursEditor` and `PhotoPicker` lifted out of the F&B modals; `NameFields` gained a `namespace` prop. `TENANT_HINT_KEYS` also gained the three missing Epic 16 keys (`fnb.firstRun`, `fnb.locationsGuidance`, `fnb.soundMuted`) alongside `hotelInfo.firstRun` — their dismissals were silently 400ing.
+
 ## Notes & Dependencies
 
 - **Depends on:** Epics 14–16 machinery only. Independent of 18–22 — safe to implement immediately.
