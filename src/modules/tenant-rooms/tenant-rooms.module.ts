@@ -10,6 +10,7 @@ import { RoomQrService } from './room-qr.service';
 import { RoomTypesController } from './room-types.controller';
 import { Room } from './room.entity';
 import { Stay } from '../tenant-stays/stay.entity';
+import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { RoomType } from './room-type.entity';
 import { RoomTypesService } from './room-types.service';
 import { TenantRoomsController } from './tenant-rooms.controller';
@@ -18,7 +19,7 @@ import { RoomsXlsxService } from './xlsx/rooms-xlsx.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Room, RoomType, Hotel, Stay]),
+    TypeOrmModule.forFeature([Room, RoomType, Hotel, Stay, TenantUser]),
     AuditLogsModule,
     SubscriptionsModule,
     // Story 11.5 — the guest-URL builder for QR codes. Imports the leaf

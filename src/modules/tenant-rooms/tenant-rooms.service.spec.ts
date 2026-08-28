@@ -58,6 +58,7 @@ describe('TenantRoomsService', () => {
   // Transaction manager wiring for createRoom (11.3) — configurable countable
   // room count per test.
   let countable: number;
+  let usersRepo: { findOne: jest.Mock };
   let manager: { getRepository: jest.Mock; save: jest.Mock };
   let managerHotel: { findOne: jest.Mock; save: jest.Mock };
   let managerRoomTypes: { findOne: jest.Mock; find: jest.Mock };
@@ -98,6 +99,7 @@ describe('TenantRoomsService', () => {
       findOne: jest.fn().mockResolvedValue(null),
       exists: jest.fn().mockResolvedValue(false),
     };
+    usersRepo = { findOne: jest.fn().mockResolvedValue(null) };
     managerStays = { findOne: jest.fn().mockResolvedValue(null) };
     subscriptions = { getForHotel: jest.fn() };
     auditLogs = { log: jest.fn() };
@@ -161,6 +163,7 @@ describe('TenantRoomsService', () => {
         { provide: getRepositoryToken(RoomType), useValue: roomTypesRepo },
         { provide: getRepositoryToken(Hotel), useValue: hotelsRepo },
         { provide: getRepositoryToken(Stay), useValue: staysRepo },
+        { provide: getRepositoryToken(TenantUser), useValue: usersRepo },
         { provide: SubscriptionsService, useValue: subscriptions },
         { provide: DataSource, useValue: dataSource },
         { provide: AuditLogsService, useValue: auditLogs },
@@ -1569,6 +1572,30 @@ describe('TenantRoomsService', () => {
 
       const withoutAccess = await service.detail(HOTEL_ID, 'room-1', false);
       expect('currentStay' in withoutAccess).toBe(false);
+    });
+
+    it('detail exposes the last-cleaned line only with housekeeping.read (20.3 AC3)', async () => {
+      roomsRepo.findOne.mockResolvedValue({
+        ...baseRoom(),
+        housekeepingStatus: 'clean',
+        cleaningType: null,
+        lastCleanedAt: new Date('2026-08-29T08:00:00Z'),
+        lastCleanedById: 'user-9',
+      });
+      hotelsRepo.findOne.mockResolvedValue({ id: HOTEL_ID, slug: 'sunrise' });
+      usersRepo.findOne.mockResolvedValue({ id: 'user-9', name: 'Mona' });
+
+      const withAccess = await service.detail(HOTEL_ID, 'room-1', false, true);
+      expect(withAccess.housekeeping).toEqual({
+        housekeepingStatus: 'clean',
+        cleaningType: null,
+        lastCleanedAt: new Date('2026-08-29T08:00:00Z'),
+        lastCleanedBy: { id: 'user-9', name: 'Mona' },
+      });
+
+      const withoutAccess = await service.detail(HOTEL_ID, 'room-1', false, false);
+      expect('housekeeping' in withoutAccess).toBe(false);
+      expect(usersRepo.findOne).toHaveBeenCalledTimes(1);
     });
   });
 });

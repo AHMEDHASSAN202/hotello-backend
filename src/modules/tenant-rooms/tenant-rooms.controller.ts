@@ -42,6 +42,12 @@ const canReadStays = (user: TenantUser): boolean => {
   return permissions.includes('*') || permissions.includes('stays.read');
 };
 
+/** Epic 20 (20.3 AC3) — same field-gating for the "last cleaned" line. */
+const canReadHousekeeping = (user: TenantUser): boolean => {
+  const permissions = user.role?.permissions ?? [];
+  return permissions.includes('*') || permissions.includes('housekeeping.read');
+};
+
 /**
  * Rooms (Epic 11, Story 11.2+). `hotel_id` always comes from the
  * authenticated tenant user, never the client. Registered after
@@ -229,7 +235,12 @@ export class TenantRoomsController {
     @CurrentTenantUser() user: TenantUser,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    return this.roomsService.detail(user.hotelId, id, canReadStays(user));
+    return this.roomsService.detail(
+      user.hotelId,
+      id,
+      canReadStays(user),
+      canReadHousekeeping(user),
+    );
   }
 
   /** Story 11.5 AC3/AC4 — the per-room guest-app QR; derived on demand, never stored. */

@@ -67,6 +67,17 @@ export interface RoomView {
 /** Detail response (Story 11.5 AC4) — `RoomView` plus the derived guest URL. */
 export interface RoomDetailView extends RoomView {
   guestUrl: string;
+  /**
+   * Epic 20 (20.3 AC3) — room memory, present ONLY when the actor holds
+   * `housekeeping.read` (undefined otherwise, same field-gating as
+   * `currentStay`).
+   */
+  housekeeping?: {
+    housekeepingStatus: string;
+    cleaningType: string | null;
+    lastCleanedAt: Date | null;
+    lastCleanedBy: { id: string; name: string } | null;
+  };
 }
 
 /** A generated QR's bytes plus the filename the download should carry (Story 11.5 AC3). */
@@ -112,6 +123,8 @@ export class TenantRoomsService {
     private readonly hotelsRepo: Repository<Hotel>,
     @InjectRepository(Stay)
     private readonly staysRepo: Repository<Stay>,
+    @InjectRepository(TenantUser)
+    private readonly usersRepo: Repository<TenantUser>,
     private readonly subscriptions: SubscriptionsService,
     private readonly dataSource: DataSource,
     private readonly auditLogs: AuditLogsService,
@@ -326,6 +339,7 @@ export class TenantRoomsService {
     hotelId: string,
     id: string,
     includeOccupancy = false,
+    includeHousekeeping = false,
   ): Promise<RoomDetailView> {
     const [room, hotel] = await Promise.all([
       this.findRoomInHotel(hotelId, id),
@@ -343,6 +357,18 @@ export class TenantRoomsService {
         where: { roomId: room.id, status: 'active' },
       });
       view.currentStay = this.toCurrentStay(stay ?? undefined);
+    }
+    if (includeHousekeeping) {
+      // Epic 20 (20.3 AC3) — the detail gains the "last cleaned" line.
+      const cleaner = room.lastCleanedById
+        ? await this.usersRepo.findOne({ where: { id: room.lastCleanedById } })
+        : null;
+      view.housekeeping = {
+        housekeepingStatus: room.housekeepingStatus,
+        cleaningType: room.cleaningType,
+        lastCleanedAt: room.lastCleanedAt,
+        lastCleanedBy: cleaner ? { id: cleaner.id, name: cleaner.name } : null,
+      };
     }
     return view;
   }
