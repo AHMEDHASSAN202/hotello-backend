@@ -280,6 +280,25 @@ export const TENANT_PERMISSION_CATALOG: TenantPermissionGroup[] = [
     ],
   },
   {
+    // Epic 19 — the hotel speaks to its guests; dormant while the
+    // `announcements` module is outside the hotel's plan (Story 10.5 AC3).
+    group: 'announcements',
+    labelEn: 'Announcements',
+    labelAr: 'الإعلانات',
+    module: 'announcements',
+    permissions: [
+      {
+        key: 'announcements.manage',
+        labelEn: 'Manage announcements',
+        labelAr: 'إدارة الإعلانات',
+        descriptionEn:
+          'Compose, schedule and retract guest announcements, and view read stats.',
+        descriptionAr:
+          'إنشاء إعلانات النزلاء وجدولتها وسحبها والاطلاع على إحصاءات القراءة.',
+      },
+    ],
+  },
+  {
     // Epic 18 — Guest App Branding; dormant while the `guest_app_branding`
     // module is outside the hotel's plan (Story 10.5 AC3) — it's the upsell.
     group: 'branding',

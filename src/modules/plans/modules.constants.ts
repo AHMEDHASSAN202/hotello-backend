@@ -22,6 +22,7 @@ export const MODULE_CATALOG: ModuleCatalogEntry[] = [
   { key: 'analytics', labelEn: 'Analytics', labelAr: 'التحليلات' },
   { key: 'requests', labelEn: 'Guest Requests', labelAr: 'طلبات النزلاء' },
   { key: 'hotel_info', labelEn: 'Hotel Info', labelAr: 'معلومات الفندق' },
+  { key: 'announcements', labelEn: 'Announcements', labelAr: 'الإعلانات' },
 ];
 
 export const ALL_MODULE_KEYS: string[] = MODULE_CATALOG.map((m) => m.key);

@@ -53,6 +53,8 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
       'fnb_settings.manage',
       'hotel_info.manage',
       'branding.manage',
+      // Epic 19 — the manager owns guest communication.
+      'announcements.manage',
     ],
     isSystem: false,
   },
@@ -75,6 +77,8 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
       'fnb_orders.read',
       // Epic 17 — front desk knows the practical answers guests ask.
       'hotel_info.manage',
+      // Epic 19 — front desk posts the operational notices.
+      'announcements.manage',
     ],
     isSystem: false,
   },

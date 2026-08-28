@@ -432,6 +432,7 @@ describe('PlansService', () => {
         'analytics',
         'requests',
         'hotel_info',
+        'announcements',
       ]);
     });
   });
