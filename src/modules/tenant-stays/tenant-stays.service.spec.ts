@@ -10,6 +10,7 @@ import { DataSource, QueryFailedError } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
 import { TenantUrlsService } from '../hotels/tenant-urls.service';
+import { HousekeepingService } from '../housekeeping/housekeeping.service';
 import { Room } from '../tenant-rooms/room.entity';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { CreateStayDto } from './dto/create-stay.dto';
@@ -65,6 +66,7 @@ describe('TenantStaysService', () => {
   let stayCodes: Record<string, jest.Mock>;
   let tenantUrls: { buildGuestUrl: jest.Mock };
   let events: { emitAsync: jest.Mock };
+  let housekeeping: { onRoomVacated: jest.Mock };
   let dataSource: { transaction: jest.Mock };
   let manager: { getRepository: jest.Mock };
   let managerHotel: Record<string, jest.Mock>;
@@ -96,6 +98,7 @@ describe('TenantStaysService', () => {
       buildGuestUrl: jest.fn(() => 'https://guest.gxp.example/sunrise'),
     };
     events = { emitAsync: jest.fn() };
+    housekeeping = { onRoomVacated: jest.fn().mockResolvedValue(undefined) };
 
     managerHotel = {
       findOne: jest.fn().mockResolvedValue({ ...HOTEL }),
@@ -130,6 +133,7 @@ describe('TenantStaysService', () => {
         { provide: StayCodeService, useValue: stayCodes },
         { provide: TenantUrlsService, useValue: tenantUrls },
         { provide: EventEmitter2, useValue: events },
+        { provide: HousekeepingService, useValue: housekeeping },
       ],
     }).compile();
     service = moduleRef.get(TenantStaysService);
@@ -517,6 +521,12 @@ describe('TenantStaysService', () => {
           metadata: expect.objectContaining({ from: '101', to: '202' }),
         }),
       );
+      // Epic 20, 20.1 AC3 — the vacated room flags via the housekeeping hook.
+      expect(housekeeping.onRoomVacated).toHaveBeenCalledWith(
+        'room-1',
+        HOTEL_ID,
+        'actor-1',
+      );
     });
 
     it('409s when the target room is occupied', async () => {
@@ -561,6 +571,8 @@ describe('TenantStaysService', () => {
       } as any);
       expect(res.roomNumber).toEqual('101');
       expect(auditLogs.log).not.toHaveBeenCalled();
+      // Same room = nothing vacated (20.1 AC3).
+      expect(housekeeping.onRoomVacated).not.toHaveBeenCalled();
     });
   });
 
@@ -635,6 +647,12 @@ describe('TenantStaysService', () => {
           action: 'stay.checked_out',
           metadata: expect.objectContaining({ checkoutType: 'manual' }),
         }),
+      );
+      // Epic 20, 20.1 AC3 — manual checkout flags the room via the hook.
+      expect(housekeeping.onRoomVacated).toHaveBeenCalledWith(
+        'room-1',
+        HOTEL_ID,
+        'actor-1',
       );
     });
 

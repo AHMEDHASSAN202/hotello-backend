@@ -11,6 +11,7 @@ import { DataSource, EntityManager, In, QueryFailedError, Repository } from 'typ
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
 import { TenantUrlsService } from '../hotels/tenant-urls.service';
+import { HousekeepingService } from '../housekeeping/housekeeping.service';
 import {
   NOTIFICATION_EVENTS,
   StayCodeIssuedEvent,
@@ -98,6 +99,7 @@ export class TenantStaysService {
     private readonly stayCodes: StayCodeService,
     private readonly tenantUrls: TenantUrlsService,
     private readonly events: EventEmitter2,
+    private readonly housekeeping: HousekeepingService,
   ) {}
 
   // ------------------------------------------------------------------
@@ -443,6 +445,15 @@ export class TenantStaysService {
     }
 
     if (moved.from?.id !== moved.to.id) {
+      // Epic 20, 20.1 AC3 — a room-change vacates the old room too (the one
+      // emission point per vacate, post-commit).
+      if (moved.from) {
+        await this.housekeeping.onRoomVacated(
+          moved.from.id,
+          actor.hotelId,
+          actor.id,
+        );
+      }
       await this.auditLogs.log({
         action: 'stay.room_changed',
         entityType: 'stay',
@@ -517,6 +528,8 @@ export class TenantStaysService {
     stay.checkedOutAt = new Date();
     stay.checkedOutById = actor.id;
     await this.staysRepo.save(stay);
+    // Epic 20, 20.1 AC3 — the vacated room flags needs_cleaning (checkout).
+    await this.housekeeping.onRoomVacated(stay.roomId, actor.hotelId, actor.id);
 
     await this.auditLogs.log({
       action: 'stay.checked_out',

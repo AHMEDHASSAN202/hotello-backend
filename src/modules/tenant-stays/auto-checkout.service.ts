@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { LessThanOrEqual, Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { HousekeepingService } from '../housekeeping/housekeeping.service';
 import { Stay } from './stay.entity';
 import { isStayOverdue } from './stay-time';
 
@@ -27,6 +28,7 @@ export class AutoCheckoutService {
   constructor(
     @InjectRepository(Stay) private readonly staysRepo: Repository<Stay>,
     private readonly auditLogs: AuditLogsService,
+    private readonly housekeeping: HousekeepingService,
   ) {}
 
   @Cron(CronExpression.EVERY_HOUR)
@@ -75,6 +77,8 @@ export class AutoCheckoutService {
       stay.checkedOutAt = now;
       stay.checkedOutById = null;
       await this.staysRepo.save(stay);
+      // Epic 20, 20.1 AC3 — automatic checkouts flag the room too.
+      await this.housekeeping.onRoomVacated(stay.roomId, stay.hotelId, null);
       await this.auditLogs.log({
         action: 'stay.checked_out',
         entityType: 'stay',

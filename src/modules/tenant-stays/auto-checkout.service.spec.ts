@@ -1,6 +1,7 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { HousekeepingService } from '../housekeeping/housekeeping.service';
 import { AutoCheckoutService } from './auto-checkout.service';
 import { Stay } from './stay.entity';
 
@@ -9,6 +10,7 @@ const cairoHotel = { checkoutTime: '12:00', timezone: 'Africa/Cairo' };
 const makeStay = (o: Record<string, unknown>) => ({
   id: 'stay-1',
   hotelId: 'hotel-1',
+  roomId: 'room-1',
   status: 'active',
   hotel: { ...cairoHotel },
   room: { roomNumber: '101' },
@@ -19,15 +21,18 @@ describe('AutoCheckoutService', () => {
   let service: AutoCheckoutService;
   let staysRepo: { find: jest.Mock; save: jest.Mock };
   let auditLogs: { log: jest.Mock };
+  let housekeeping: { onRoomVacated: jest.Mock };
 
   beforeEach(async () => {
     staysRepo = { find: jest.fn().mockResolvedValue([]), save: jest.fn(async (s) => s) };
     auditLogs = { log: jest.fn() };
+    housekeeping = { onRoomVacated: jest.fn().mockResolvedValue(undefined) };
     const moduleRef = await Test.createTestingModule({
       providers: [
         AutoCheckoutService,
         { provide: getRepositoryToken(Stay), useValue: staysRepo },
         { provide: AuditLogsService, useValue: auditLogs },
+        { provide: HousekeepingService, useValue: housekeeping },
       ],
     }).compile();
     service = moduleRef.get(AutoCheckoutService);
@@ -71,6 +76,13 @@ describe('AutoCheckoutService', () => {
           actorId: null,
           metadata: expect.objectContaining({ checkoutType: 'automatic' }),
         }),
+      );
+      // Epic 20, 20.1 AC3 — automatic checkouts flag the room (system actor).
+      expect(housekeeping.onRoomVacated).toHaveBeenCalledTimes(1);
+      expect(housekeeping.onRoomVacated).toHaveBeenCalledWith(
+        'room-1',
+        'hotel-1',
+        null,
       );
     });
 

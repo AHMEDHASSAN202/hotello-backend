@@ -162,6 +162,8 @@ describe('GuestSessionService (13.5)', () => {
         stayType: 'all_inclusive',
         // Epic 16 — client cart is keyed per stay (spec note 9).
         stayId: 'stay-1',
+        // Epic 20, 20.4 — the DND switch state rides the profile envelope.
+        dndActive: false,
       });
       // Lookup is O(1) by (hotelId, codeHash) among active stays.
       expect(staysRepo.findOne).toHaveBeenCalledWith(

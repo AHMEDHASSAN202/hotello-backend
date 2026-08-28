@@ -31,6 +31,8 @@ export interface GuestProfile {
   stayType: string;
   /** Epic 16 — keys the client-persisted cart per stay (spec note 9). */
   stayId: string;
+  /** Epic 20, 20.4 — the DND switch state; reconciled on boot/pull-refresh. */
+  dndActive: boolean;
 }
 
 /**
@@ -107,6 +109,7 @@ export class GuestSessionService {
       checkOutDate: stay.checkOutDate,
       stayType: stay.stayType,
       stayId: stay.id,
+      dndActive: stay.room.housekeepingStatus === 'dnd',
     };
   }
 
