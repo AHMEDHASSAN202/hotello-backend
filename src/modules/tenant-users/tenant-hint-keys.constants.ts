@@ -24,6 +24,8 @@ export const TENANT_HINT_KEYS = [
   'fnb.soundMuted',
   // Epic 17
   'hotelInfo.firstRun',
+  // Epic 19
+  'announcements.firstRun',
 ] as const;
 
 export type TenantHintKey = (typeof TENANT_HINT_KEYS)[number];
