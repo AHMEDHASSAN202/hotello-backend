@@ -163,6 +163,10 @@ export class TenantProfileService {
     }
     user.passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
     user.refreshTokenHash = null; // invalidate every other session
+    // Story 9.7 AC4 — this is the exit from the forced change-password screen:
+    // the temporary password is gone, so the flag that blocks the dashboard has
+    // to go with it, or the next login lands on the same screen forever.
+    user.mustChangePassword = false;
     await this.tenantUsersRepo.save(user);
 
     await this.auditLogs.log({

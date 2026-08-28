@@ -255,6 +255,10 @@ export class TenantAuthService {
     user.resetTokenHash = null;
     user.resetTokenExpiresAt = null;
     user.refreshTokenHash = null; // kill all existing sessions (AC3)
+    // Story 9.7 AC4 — a self-chosen password also ends the temporary-password
+    // state, so a manager-reset user who takes the email link instead of the
+    // forced screen isn't left stuck on it.
+    user.mustChangePassword = false;
     await this.tenantUsersRepo.save(user);
 
     await this.auditLogs.log({

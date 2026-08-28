@@ -117,6 +117,17 @@ describe('TenantProfileService (8.7)', () => {
     expect(audit.log).toHaveBeenCalled();
   });
 
+  it('change-password: clears mustChangePassword (9.7 AC4 — the forced screen must not repeat)', async () => {
+    (mockedBcrypt.compare as jest.Mock).mockResolvedValue(true);
+    const u = user({ mustChangePassword: true });
+    await service.changePassword(u, {
+      currentPassword: 'temp',
+      newPassword: 'NewPass123',
+    });
+    expect(u.mustChangePassword).toBe(false);
+    expect((await service.me(u)).user.mustChangePassword).toBe(false);
+  });
+
   describe('hint dismissal (12.4)', () => {
     it('AC2 — persists a dismissed hint key on the user', async () => {
       const u = user();

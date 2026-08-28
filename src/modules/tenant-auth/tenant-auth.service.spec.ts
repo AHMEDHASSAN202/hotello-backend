@@ -325,6 +325,20 @@ describe('TenantAuthService', () => {
       expect(user.refreshTokenHash).toBeNull(); // all sessions killed
     });
 
+    it('clears mustChangePassword — the user just chose their own password', async () => {
+      const user = makeUser({
+        mustChangePassword: true,
+        resetTokenHash: 'stored',
+        resetTokenExpiresAt: new Date(Date.now() + 3600_000),
+        hotel: makeHotel(),
+      });
+      usersRepo.findOne.mockResolvedValue(user);
+
+      await service.confirmPasswordReset({ token: 't', password: 'NewPass123' });
+
+      expect(user.mustChangePassword).toBe(false);
+    });
+
     it('rejects an unknown/expired token with a generic 400', async () => {
       usersRepo.findOne.mockResolvedValue(null);
       await expect(
