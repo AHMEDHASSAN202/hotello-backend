@@ -89,3 +89,16 @@
 - **Depends on:** Epics 13–17 machinery (stays/audience data, delta poller, translations, Hotel Info for deep-links, hourly jobs).
 - **Feeds:** Epic 21 (Events) auto-announces new events through this exact pipeline; future real-push epic swaps the transport under the same inbox.
 - **Deferred:** real push notifications, images, per-guest read receipts, staff-audience announcements (internal comms — Staff PWA era), templates/recurring announcements.
+
+---
+
+## Recorded decisions (implementation)
+
+1. **Statuses include `draft`.** Canceling a scheduled announcement reverts it to `draft` (kept in history, editable, re-sendable) — honors the no-hard-deletes law. Compose exposes send/schedule; `draft` also exists as an explicit create action.
+2. **Translations are two flat JSONB columns** (`titles` + `bodies`, each a `TranslationMap`), not the nested `{title, body}` sketch — matches every existing content entity so `localizeField` and the flat per-locale DTO convention apply unchanged. A blanked optional locale is *removed* from the map (never stored as `''`) so EN fallback keeps working.
+3. **Audience dimensions AND together** and may combine (`stayTypes` + `floors` + `roomIds` — the spec's own "All-Inclusive · Floors 2–3" example); `stayId` (one guest) is exclusive with the others and must resolve to an active stay of the hotel.
+4. **Local datetimes** (`publishAtLocal`, `activeUntilLocal`) are hotel-local `'YYYY-MM-DD HH:MM'` varchars, compared lexicographically against `hotelLocalStamp(tz, now)` (the `isStayOverdue` approach) — no UTC conversion anywhere. Expiry is inclusive at the minute.
+5. **The transition cron runs every 5 minutes** (the Epic 13 *pattern* — thin trigger, `now`-injected idempotent method, re-entrancy flag — at a cadence that doesn't land a 09:00 notice at 10:00). The visibility function *also* enforces the active-until window, so guests never see an expired item between ticks.
+6. **Guest deltas use tombstones:** rows changed since the cursor that are no longer visible return `{ id, active: false }`; the client merge drops them (how retraction propagates mid-poll). Only `live/retracted/expired` rows participate in the guest feed. `unreadCount` rides every feed response over the full visible set.
+7. **Read-stats denominator** = active stays currently matching the audience filter (ignores status/window), so "قرأه 34 من 62" stays meaningful after retraction/expiry.
+8. **Error codes:** `ANNOUNCEMENT_NOT_FOUND`, `ANNOUNCEMENT_TRANSLATIONS_REQUIRED`, `ANNOUNCEMENT_NOT_EDITABLE` (409), `ANNOUNCEMENT_INVALID_STATE` (409), `ANNOUNCEMENT_SCHEDULE_REQUIRED`, `ANNOUNCEMENT_SCHEDULE_IN_PAST`, `ANNOUNCEMENT_WINDOW_INVALID`, `ANNOUNCEMENT_AUDIENCE_INVALID`, `ANNOUNCEMENT_STAY_NOT_FOUND`, `ANNOUNCEMENT_INFO_ENTRY_NOT_FOUND`.
