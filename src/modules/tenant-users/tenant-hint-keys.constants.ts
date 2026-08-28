@@ -26,6 +26,9 @@ export const TENANT_HINT_KEYS = [
   'hotelInfo.firstRun',
   // Epic 19
   'announcements.firstRun',
+  // Epic 20 — board first-run guidance + per-user chime mute (requests idiom).
+  'housekeeping.firstRun',
+  'housekeeping.soundMuted',
 ] as const;
 
 export type TenantHintKey = (typeof TENANT_HINT_KEYS)[number];

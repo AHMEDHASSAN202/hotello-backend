@@ -100,6 +100,10 @@ describe('TenantRolesService', () => {
         'hotel_info.manage',
         'branding.manage',
         'announcements.manage',
+        // Epic 20 — the manager runs the cleaning operation end to end.
+        'housekeeping.read',
+        'housekeeping.update',
+        'housekeeping.assign',
       ]);
       const frontDeskRole = saved.find((r) => r.nameEn === 'Front Desk');
       expect(frontDeskRole.permissions).toEqual(
@@ -108,16 +112,26 @@ describe('TenantRolesService', () => {
           'requests.update',
           'requests.assign',
           'announcements.manage',
+          // Epic 20 — read-only board answers "is my room ready?".
+          'housekeeping.read',
         ]),
       );
       expect(frontDeskRole.permissions).not.toContain(
         'request_catalog.manage',
       );
+      expect(frontDeskRole.permissions).not.toContain('housekeeping.update');
       const housekeepingRole = saved.find((r) => r.nameEn === 'Housekeeping');
       expect(housekeepingRole.permissions).toEqual(
-        expect.arrayContaining(['requests.read', 'requests.update']),
+        expect.arrayContaining([
+          'requests.read',
+          'requests.update',
+          // Epic 20 — attendants work the queue; assignment stays managerial.
+          'housekeeping.read',
+          'housekeeping.update',
+        ]),
       );
       expect(housekeepingRole.permissions).not.toContain('requests.assign');
+      expect(housekeepingRole.permissions).not.toContain('housekeeping.assign');
       expect(managerRole.isSystem).toBe(false);
       // Epic 16 — the F&B / Kitchen persona joins the defaults.
       const kitchenRole = saved.find((r) => r.nameEn === 'F&B / Kitchen');

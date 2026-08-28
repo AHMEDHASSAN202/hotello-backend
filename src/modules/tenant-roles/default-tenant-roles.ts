@@ -55,6 +55,10 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
       'branding.manage',
       // Epic 19 — the manager owns guest communication.
       'announcements.manage',
+      // Epic 20 — the manager runs the cleaning operation end to end.
+      'housekeeping.read',
+      'housekeeping.update',
+      'housekeeping.assign',
     ],
     isSystem: false,
   },
@@ -79,6 +83,8 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
       'hotel_info.manage',
       // Epic 19 — front desk posts the operational notices.
       'announcements.manage',
+      // Epic 20 — read-only board access answers "is my room ready?".
+      'housekeeping.read',
     ],
     isSystem: false,
   },
@@ -92,6 +98,9 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
       'rooms.update',
       'requests.read',
       'requests.update',
+      // Epic 20 — attendants work the queue; assignment stays with managers.
+      'housekeeping.read',
+      'housekeeping.update',
     ],
     isSystem: false,
   },

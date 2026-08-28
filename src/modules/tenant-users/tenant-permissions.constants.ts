@@ -299,6 +299,42 @@ export const TENANT_PERMISSION_CATALOG: TenantPermissionGroup[] = [
     ],
   },
   {
+    // Epic 20 — housekeeping operations; dormant while the `housekeeping`
+    // module is outside the hotel's plan (Story 10.5 AC3).
+    group: 'housekeeping',
+    labelEn: 'Housekeeping',
+    labelAr: 'التدبير الفندقي',
+    module: 'housekeeping',
+    permissions: [
+      {
+        key: 'housekeeping.read',
+        labelEn: 'View housekeeping board',
+        labelAr: 'عرض لوحة التدبير الفندقي',
+        descriptionEn:
+          'See the cleaning board, room cleanliness states and daily progress.',
+        descriptionAr:
+          'عرض لوحة التنظيف وحالات نظافة الغرف وتقدم العمل اليومي.',
+      },
+      {
+        key: 'housekeeping.update',
+        labelEn: 'Work the cleaning queue',
+        labelAr: 'معالجة قائمة التنظيف',
+        descriptionEn:
+          'Start, complete and interrupt room cleans, flag or unflag rooms, and edit housekeeping settings.',
+        descriptionAr:
+          'بدء تنظيف الغرف وإكماله وإيقافه، ووضع علامات التنظيف أو إزالتها، وتعديل إعدادات التدبير الفندقي.',
+      },
+      {
+        key: 'housekeeping.assign',
+        labelEn: 'Assign rooms',
+        labelAr: 'إسناد الغرف',
+        descriptionEn:
+          'Assign or reassign rooms and whole floors to attendants.',
+        descriptionAr: 'إسناد الغرف والطوابق الكاملة إلى العاملين أو إعادة إسنادها.',
+      },
+    ],
+  },
+  {
     // Epic 18 — Guest App Branding; dormant while the `guest_app_branding`
     // module is outside the hotel's plan (Story 10.5 AC3) — it's the upsell.
     group: 'branding',

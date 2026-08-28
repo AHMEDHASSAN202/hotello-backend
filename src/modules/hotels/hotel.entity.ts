@@ -77,6 +77,11 @@ export class Hotel {
   @Column({ length: 5, default: '12:00' })
   checkoutTime: string;
 
+  // Hotel-local daily housekeeping service hour 'HH:MM' (Epic 20, 20.1 AC4) —
+  // the daily-flag job and the DND auto-clear both key off this.
+  @Column({ length: 5, default: '09:00' })
+  dailyServiceTime: string;
+
   // Pre-selected board basis at check-in (Epic 16, Story 16.1 AC2) —
   // resorts set all_inclusive, city hotels keep room_only.
   @Column({ length: 20, default: 'room_only' })
