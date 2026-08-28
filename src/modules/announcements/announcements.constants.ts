@@ -1,0 +1,37 @@
+import { StayType } from '../tenant-stays/stays.constants';
+
+/**
+ * Epic 19 — Guest Announcements. Recorded decisions:
+ * - Statuses include `draft`: canceling a scheduled announcement reverts it to
+ *   draft (kept — "no hard deletes"); live ones are never editable (19.2 AC3).
+ * - Local datetimes (`publishAtLocal` / `activeUntilLocal`) are hotel-local
+ *   'YYYY-MM-DD HH:MM' strings — lexicographically comparable against
+ *   `hotelLocalStamp()`, never converted to UTC (the isStayOverdue precedent).
+ */
+export const ANNOUNCEMENT_STATUSES = [
+  'draft',
+  'scheduled',
+  'live',
+  'retracted',
+  'expired',
+] as const;
+export type AnnouncementStatus = (typeof ANNOUNCEMENT_STATUSES)[number];
+
+export const ANNOUNCEMENT_TITLE_MAX = 120;
+export const ANNOUNCEMENT_BODY_MAX = 2000;
+
+/** Hotel-local wall-clock stamp, minute precision. */
+export const LOCAL_STAMP_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
+
+/**
+ * 19.1 AC3 — the audience is a stored FILTER, not a snapshot. Empty object =
+ * all current guests. `stayId` (one specific guest) is exclusive with the
+ * other dimensions; the rest are AND-ed when combined ("All-Inclusive ·
+ * Floors 2–3").
+ */
+export interface AudienceFilter {
+  stayTypes?: StayType[];
+  floors?: number[];
+  roomIds?: string[];
+  stayId?: string;
+}
