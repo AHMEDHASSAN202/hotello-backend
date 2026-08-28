@@ -33,6 +33,7 @@ import { GuestModule } from './modules/guest/guest.module';
 import { RequestsModule } from './modules/requests/requests.module';
 import { FnbModule } from './modules/fnb/fnb.module';
 import { HotelInfoModule } from './modules/hotel-info/hotel-info.module';
+import { AnnouncementsModule } from './modules/announcements/announcements.module';
 import { TenantStaffModule } from './modules/tenant-staff/tenant-staff.module';
 import { TenantUsersModule } from './modules/tenant-users/tenant-users.module';
 
@@ -75,6 +76,7 @@ import { TenantUsersModule } from './modules/tenant-users/tenant-users.module';
     RequestsModule,
     FnbModule,
     HotelInfoModule,
+    AnnouncementsModule,
     BrandingModule,
     TenantStaffModule,
     TenantUsersModule,
