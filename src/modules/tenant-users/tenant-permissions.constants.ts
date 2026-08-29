@@ -252,11 +252,17 @@ export const TENANT_PERMISSION_CATALOG: TenantPermissionGroup[] = [
           'بدء طلبات الأغذية والمشروبات وتوصيلها وإلغاؤها وإسنادها.',
       },
       {
+        // Epic 21, Story 21.1 AC2 — key kept unchanged (roles store granted
+        // keys in a raw text[] column; renaming would silently strip access
+        // from every hotel that already granted it). Only the label/
+        // description were generalized: this now covers F&B + Events
+        // payment methods, both reading the same hotel-level toggle.
         key: 'fnb_settings.manage',
-        labelEn: 'Manage F&B settings',
-        labelAr: 'إدارة إعدادات الأغذية والمشروبات',
-        descriptionEn: 'Configure guest payment methods for orders.',
-        descriptionAr: 'ضبط طرق دفع النزلاء للطلبات.',
+        labelEn: 'Manage payment methods',
+        labelAr: 'إدارة طرق الدفع',
+        descriptionEn:
+          'Configure guest payment methods for F&B orders and events.',
+        descriptionAr: 'ضبط طرق دفع النزلاء لطلبات الأغذية والمشروبات والفعاليات.',
       },
     ],
   },

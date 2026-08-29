@@ -87,10 +87,10 @@ export class Hotel {
   @Column({ length: 20, default: 'room_only' })
   defaultStayType: string;
 
-  // F&B payment methods (16.4 AC1): cash is always on; room charge is the
-  // only opt-in. A methods table appears only when online payment does.
+  // hotel-level payment config (Epic 16 origin, Epic 21 lift) — cash is
+  // always on; room charge is the only opt-in. F&B and Events both read this.
   @Column({ default: false })
-  fnbRoomChargeEnabled: boolean;
+  roomChargeEnabled: boolean;
 
   /**
    * Guest App accent color '#RRGGBB' (Epic 14, Story 14.4 AC5). Applied only

@@ -1,58 +1,56 @@
 import { Test } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
-import { AuditLogsService } from '../audit-logs/audit-logs.service';
-import { Hotel } from '../hotels/hotel.entity';
+import { TenantPaymentSettingsService } from '../hotel-settings/tenant-payment-settings.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { TenantFnbSettingsService } from './tenant-fnb-settings.service';
 
 const actor = { id: 'user-1', hotelId: 'hotel-1' } as unknown as TenantUser;
 
+// Epic 21, Story 21.1 AC2 refactored this service into a thin delegate to
+// TenantPaymentSettingsService (its own spec: ../hotel-settings/tenant-
+// payment-settings.service.spec.ts owns the save/audit/not-found behavior
+// coverage this suite used to hold directly). This suite now proves the
+// delegation itself; the round-trip spec proves both routes share state.
 describe('TenantFnbSettingsService (16.4)', () => {
   let service: TenantFnbSettingsService;
-  let hotelsRepo: { findOne: jest.Mock; save: jest.Mock };
-  let auditLogs: { log: jest.Mock };
+  let paymentSettings: { getSettings: jest.Mock; updateSettings: jest.Mock };
 
   beforeEach(async () => {
-    hotelsRepo = {
-      findOne: jest
-        .fn()
-        .mockResolvedValue({ id: 'hotel-1', fnbRoomChargeEnabled: false }),
-      save: jest.fn(async (h) => h),
+    paymentSettings = {
+      getSettings: jest.fn(),
+      updateSettings: jest.fn(),
     };
-    auditLogs = { log: jest.fn() };
     const moduleRef = await Test.createTestingModule({
       providers: [
         TenantFnbSettingsService,
-        { provide: getRepositoryToken(Hotel), useValue: hotelsRepo },
-        { provide: AuditLogsService, useValue: auditLogs },
+        { provide: TenantPaymentSettingsService, useValue: paymentSettings },
       ],
     }).compile();
     service = moduleRef.get(TenantFnbSettingsService);
   });
 
-  it('AC1 — cash is always on; room charge reads from the hotel column', async () => {
+  it('AC1 — getSettings delegates to TenantPaymentSettingsService', async () => {
+    paymentSettings.getSettings.mockResolvedValue({
+      cashEnabled: true,
+      roomChargeEnabled: false,
+    });
+
     await expect(service.getSettings('hotel-1')).resolves.toEqual({
       cashEnabled: true,
       roomChargeEnabled: false,
     });
+    expect(paymentSettings.getSettings).toHaveBeenCalledWith('hotel-1');
   });
 
-  it('AC1 — enabling room charge saves + audits a diff', async () => {
-    const res = await service.updateSettings(actor, true);
-    expect(res).toEqual({ cashEnabled: true, roomChargeEnabled: true });
-    expect(auditLogs.log).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: 'hotel.updated',
-        metadata: expect.objectContaining({
-          diff: { fnbRoomChargeEnabled: { from: false, to: true } },
-        }),
-      }),
-    );
-  });
+  it('AC1 — updateSettings delegates to TenantPaymentSettingsService', async () => {
+    paymentSettings.updateSettings.mockResolvedValue({
+      cashEnabled: true,
+      roomChargeEnabled: true,
+    });
 
-  it('no-op when unchanged — no save, no audit', async () => {
-    await service.updateSettings(actor, false);
-    expect(hotelsRepo.save).not.toHaveBeenCalled();
-    expect(auditLogs.log).not.toHaveBeenCalled();
+    await expect(service.updateSettings(actor, true)).resolves.toEqual({
+      cashEnabled: true,
+      roomChargeEnabled: true,
+    });
+    expect(paymentSettings.updateSettings).toHaveBeenCalledWith(actor, true);
   });
 });

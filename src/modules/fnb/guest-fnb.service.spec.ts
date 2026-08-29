@@ -18,7 +18,7 @@ const HOTEL = {
   id: 'hotel-1',
   timezone: 'Africa/Cairo',
   currency: 'EGP',
-  fnbRoomChargeEnabled: true,
+  roomChargeEnabled: true,
 };
 
 const makeStay = (o: Record<string, unknown> = {}): Stay =>
@@ -196,7 +196,7 @@ describe('GuestFnbService (16.5/16.6)', () => {
       const withCharge = await service.getMenus(makeStay());
       expect(withCharge.paymentMethods).toEqual(['cash', 'room_charge']);
       const noCharge = await service.getMenus(
-        makeStay({ hotel: { ...HOTEL, fnbRoomChargeEnabled: false } }),
+        makeStay({ hotel: { ...HOTEL, roomChargeEnabled: false } }),
       );
       expect(noCharge.paymentMethods).toEqual(['cash']);
     });
@@ -280,7 +280,7 @@ describe('GuestFnbService (16.5/16.6)', () => {
 
       await expect(
         service.createOrder(
-          makeStay({ hotel: { ...HOTEL, fnbRoomChargeEnabled: false } }),
+          makeStay({ hotel: { ...HOTEL, roomChargeEnabled: false } }),
           {
             lines: [{ itemId: 'item-1', quantity: 1 }],
             destination: { type: 'room' },

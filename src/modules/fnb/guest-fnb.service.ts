@@ -227,7 +227,7 @@ export class GuestFnbService {
     return {
       stayType: stay.stayType,
       currency: stay.hotel.currency,
-      paymentMethods: stay.hotel.fnbRoomChargeEnabled
+      paymentMethods: stay.hotel.roomChargeEnabled
         ? ['cash', 'room_charge']
         : ['cash'],
       locations: locations.sort(bySort).map((l) => ({
@@ -425,7 +425,7 @@ export class GuestFnbService {
     // total needs an enabled method.
     let paymentMethod: FnbPaymentMethod | null = null;
     if (totalAmount > 0) {
-      const enabled: FnbPaymentMethod[] = stay.hotel.fnbRoomChargeEnabled
+      const enabled: FnbPaymentMethod[] = stay.hotel.roomChargeEnabled
         ? ['cash', 'room_charge']
         : ['cash'];
       if (!dto.paymentMethod || !enabled.includes(dto.paymentMethod)) {

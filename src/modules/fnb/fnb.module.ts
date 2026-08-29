@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { Hotel } from '../hotels/hotel.entity';
 import { TenantUrlsModule } from '../hotels/tenant-urls.module';
+import { HotelSettingsModule } from '../hotel-settings/hotel-settings.module';
 import { RenditionsModule } from '../renditions/renditions.module';
 import { TenantAccessModule } from '../tenant-access/tenant-access.module';
 import { TenantStaysModule } from '../tenant-stays/tenant-stays.module';
@@ -46,6 +47,7 @@ import { TenantFnbOrdersService } from './tenant-fnb-orders.service';
     ]),
     TenantAccessModule,
     AuditLogsModule,
+    HotelSettingsModule,
     RenditionsModule,
     // Epic 11 machinery reused wholesale: Playwright renderer + QR service
     // (exported by TenantRoomsModule) and the guest-URL builder.
