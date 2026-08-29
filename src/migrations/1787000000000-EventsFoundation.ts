@@ -23,11 +23,13 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *
  * FK/PK/index constraint names are TypeORM's own hashes (harvested via a
  * throwaway `migration:generate`) so `npm run migration:check` reports no
- * drift. `hotelId`, `cancelledById` (events) and `settledById`
- * (event_bookings) are denormalized uuid columns with no FK constraint —
- * matching the `fnb_items` precedent (no `hotels` FK) and the terse field
- * list in the Epic 21 Task 3 brief, which only calls out FKs for
- * `infoEntryId`, `createdById`, `eventId` and `stayId`.
+ * drift. `hotelId` on both tables FKs to `hotels` (the Announcement/FnbOrder
+ * aggregate-root precedent — `events` and `event_bookings` are top-level
+ * tenant records, not denormalized child rows like `fnb_items`);
+ * `cancelledById` (events) and `settledById` (event_bookings) FK to
+ * `tenant_users`, matching every `*ById` actor column on `FnbOrder`
+ * (assignedToId/startedById/deliveredById/cancelledById/settledById all FK
+ * to TenantUser with no exceptions).
  */
 export class EventsFoundation1787000000000 implements MigrationInterface {
   name = 'EventsFoundation1787000000000';
@@ -58,16 +60,28 @@ export class EventsFoundation1787000000000 implements MigrationInterface {
       `CREATE INDEX "IDX_event_bookings_event" ON "event_bookings" ("eventId") `,
     );
     await queryRunner.query(
+      `ALTER TABLE "events" ADD CONSTRAINT "FK_300f8e9e7b219dd5aa7161f1fd2" FOREIGN KEY ("hotelId") REFERENCES "hotels"("id") ON DELETE NO ACTION ON UPDATE NO ACTION`,
+    );
+    await queryRunner.query(
       `ALTER TABLE "events" ADD CONSTRAINT "FK_91d55fad2f6a2cf8b54a61863ab" FOREIGN KEY ("infoEntryId") REFERENCES "hotel_info_entries"("id") ON DELETE SET NULL ON UPDATE NO ACTION`,
     );
     await queryRunner.query(
       `ALTER TABLE "events" ADD CONSTRAINT "FK_2fb864f37ad210f4295a09b684d" FOREIGN KEY ("createdById") REFERENCES "tenant_users"("id") ON DELETE NO ACTION ON UPDATE NO ACTION`,
     );
     await queryRunner.query(
+      `ALTER TABLE "events" ADD CONSTRAINT "FK_065e035ed983ab56b3e5e454d0b" FOREIGN KEY ("cancelledById") REFERENCES "tenant_users"("id") ON DELETE NO ACTION ON UPDATE NO ACTION`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "event_bookings" ADD CONSTRAINT "FK_890699c65424a9c1b215e91550d" FOREIGN KEY ("hotelId") REFERENCES "hotels"("id") ON DELETE NO ACTION ON UPDATE NO ACTION`,
+    );
+    await queryRunner.query(
       `ALTER TABLE "event_bookings" ADD CONSTRAINT "FK_2d2bea03d5668bd4f76577d8465" FOREIGN KEY ("eventId") REFERENCES "events"("id") ON DELETE NO ACTION ON UPDATE NO ACTION`,
     );
     await queryRunner.query(
       `ALTER TABLE "event_bookings" ADD CONSTRAINT "FK_67c69e1859f5712efffcfd6b14e" FOREIGN KEY ("stayId") REFERENCES "stays"("id") ON DELETE NO ACTION ON UPDATE NO ACTION`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "event_bookings" ADD CONSTRAINT "FK_d7f53cf1269c16e27191fc050b8" FOREIGN KEY ("settledById") REFERENCES "tenant_users"("id") ON DELETE NO ACTION ON UPDATE NO ACTION`,
     );
 
     // 3 — existing Manager gains events.manage, Front Desk gains events.read
@@ -115,16 +129,28 @@ export class EventsFoundation1787000000000 implements MigrationInterface {
 
     // 2/1 — drop FKs, then indexes, then tables.
     await queryRunner.query(
+      `ALTER TABLE "event_bookings" DROP CONSTRAINT "FK_d7f53cf1269c16e27191fc050b8"`,
+    );
+    await queryRunner.query(
       `ALTER TABLE "event_bookings" DROP CONSTRAINT "FK_67c69e1859f5712efffcfd6b14e"`,
     );
     await queryRunner.query(
       `ALTER TABLE "event_bookings" DROP CONSTRAINT "FK_2d2bea03d5668bd4f76577d8465"`,
     );
     await queryRunner.query(
+      `ALTER TABLE "event_bookings" DROP CONSTRAINT "FK_890699c65424a9c1b215e91550d"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "events" DROP CONSTRAINT "FK_065e035ed983ab56b3e5e454d0b"`,
+    );
+    await queryRunner.query(
       `ALTER TABLE "events" DROP CONSTRAINT "FK_2fb864f37ad210f4295a09b684d"`,
     );
     await queryRunner.query(
       `ALTER TABLE "events" DROP CONSTRAINT "FK_91d55fad2f6a2cf8b54a61863ab"`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE "events" DROP CONSTRAINT "FK_300f8e9e7b219dd5aa7161f1fd2"`,
     );
     await queryRunner.query(`DROP INDEX "public"."IDX_event_bookings_event"`);
     await queryRunner.query(`DROP INDEX "public"."IDX_event_bookings_stay"`);

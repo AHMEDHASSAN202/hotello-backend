@@ -10,6 +10,7 @@ import {
 } from 'typeorm';
 import { ColumnNumericTransformer } from '../../common/transformers/decimal.transformer';
 import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
+import { Hotel } from '../hotels/hotel.entity';
 import { TranslationMap } from '../requests/requests.constants';
 import { StayType } from '../tenant-stays/stays.constants';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
@@ -38,6 +39,10 @@ export class Event {
 
   @Column('uuid')
   hotelId: string;
+
+  @ManyToOne(() => Hotel)
+  @JoinColumn({ name: 'hotelId' })
+  hotel: Hotel;
 
   @Column({ type: 'jsonb', default: () => `'{}'` })
   titles: TranslationMap;
@@ -106,6 +111,10 @@ export class Event {
 
   @Column({ type: 'uuid', nullable: true })
   cancelledById: string | null;
+
+  @ManyToOne(() => TenantUser, { nullable: true })
+  @JoinColumn({ name: 'cancelledById' })
+  cancelledBy: TenantUser | null;
 
   @CreateDateColumn()
   createdAt: Date;

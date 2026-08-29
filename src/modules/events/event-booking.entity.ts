@@ -10,7 +10,9 @@ import {
 } from 'typeorm';
 import { ColumnNumericTransformer } from '../../common/transformers/decimal.transformer';
 import { FnbPaymentMethod } from '../fnb/fnb.constants';
+import { Hotel } from '../hotels/hotel.entity';
 import { Stay } from '../tenant-stays/stay.entity';
+import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { Event } from './event.entity';
 import {
   EventBookingCancelledBy,
@@ -36,6 +38,10 @@ export class EventBooking {
 
   @Column('uuid')
   hotelId: string;
+
+  @ManyToOne(() => Hotel)
+  @JoinColumn({ name: 'hotelId' })
+  hotel: Hotel;
 
   /** No cascade delete — events are never hard-deleted. */
   @Column('uuid')
@@ -104,6 +110,10 @@ export class EventBooking {
 
   @Column({ type: 'uuid', nullable: true })
   settledById: string | null;
+
+  @ManyToOne(() => TenantUser, { nullable: true })
+  @JoinColumn({ name: 'settledById' })
+  settledBy: TenantUser | null;
 
   @CreateDateColumn()
   createdAt: Date;
