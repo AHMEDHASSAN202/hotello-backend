@@ -143,3 +143,30 @@ describe('Epic 18 — branding permissions', () => {
     expect(byName['F&B / Kitchen']).not.toContain('branding.manage');
   });
 });
+
+describe('Epic 21 — events permissions', () => {
+  it('events group is gated by the events module and exposes the two keys', () => {
+    const group = TENANT_PERMISSION_CATALOG.find((g) => g.group === 'events');
+    expect(group).toBeDefined();
+    expect(group!.module).toBe('events');
+    expect(group!.permissions.map((p) => p.key)).toEqual([
+      'events.manage',
+      'events.read',
+    ]);
+  });
+
+  it('events is a platform module key', () => {
+    expect(ALL_MODULE_KEYS).toContain('events');
+  });
+
+  it('Manager gains events.manage, Front Desk gains events.read only', () => {
+    const byName = Object.fromEntries(
+      DEFAULT_TENANT_ROLES.map((r) => [r.nameEn, r.permissions]),
+    );
+    expect(byName['Manager']).toContain('events.manage');
+    expect(byName['Front Desk']).toContain('events.read');
+    expect(byName['Front Desk']).not.toContain('events.manage');
+    expect(byName['Housekeeping']).not.toContain('events.read');
+    expect(byName['F&B / Kitchen']).not.toContain('events.read');
+  });
+});

@@ -59,6 +59,8 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
       'housekeeping.read',
       'housekeeping.update',
       'housekeeping.assign',
+      // Epic 21 — the manager runs events end to end (create/publish/cancel).
+      'events.manage',
     ],
     isSystem: false,
   },
@@ -85,6 +87,8 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
       'announcements.manage',
       // Epic 20 — read-only board access answers "is my room ready?".
       'housekeeping.read',
+      // Epic 21 — front desk can see attendee counts but not manage events.
+      'events.read',
     ],
     isSystem: false,
   },

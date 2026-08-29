@@ -267,6 +267,32 @@ export const TENANT_PERMISSION_CATALOG: TenantPermissionGroup[] = [
     ],
   },
   {
+    // Epic 21 — Events & Workshops; dormant while the `events` module is
+    // outside the hotel's plan (Story 10.5 AC3).
+    group: 'events',
+    labelEn: 'Events & Workshops',
+    labelAr: 'الفعاليات وورش العمل',
+    module: 'events',
+    permissions: [
+      {
+        key: 'events.manage',
+        labelEn: 'Manage events',
+        labelAr: 'إدارة الفعاليات',
+        descriptionEn:
+          'Create, edit, publish and cancel events; view attendees and settle room-charge bookings.',
+        descriptionAr:
+          'إنشاء الفعاليات وتعديلها ونشرها وإلغاؤها، وعرض الحضور وتسوية حجوزات الفوترة على الغرفة.',
+      },
+      {
+        key: 'events.read',
+        labelEn: 'View events',
+        labelAr: 'عرض الفعاليات',
+        descriptionEn: 'See the events list, details and attendee counts.',
+        descriptionAr: 'عرض قائمة الفعاليات وتفاصيلها وأعداد الحضور.',
+      },
+    ],
+  },
+  {
     // Epic 17 — the digital compendium; dormant while the `hotel_info`
     // module is outside the hotel's plan (Story 10.5 AC3).
     group: 'hotel_info',

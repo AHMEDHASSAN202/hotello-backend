@@ -433,6 +433,7 @@ describe('PlansService', () => {
         'requests',
         'hotel_info',
         'announcements',
+        'events',
       ]);
     });
   });

@@ -35,6 +35,7 @@ import { FnbModule } from './modules/fnb/fnb.module';
 import { HotelInfoModule } from './modules/hotel-info/hotel-info.module';
 import { AnnouncementsModule } from './modules/announcements/announcements.module';
 import { HousekeepingModule } from './modules/housekeeping/housekeeping.module';
+import { EventsModule } from './modules/events/events.module';
 import { TenantStaffModule } from './modules/tenant-staff/tenant-staff.module';
 import { TenantUsersModule } from './modules/tenant-users/tenant-users.module';
 
@@ -79,6 +80,7 @@ import { TenantUsersModule } from './modules/tenant-users/tenant-users.module';
     HotelInfoModule,
     AnnouncementsModule,
     HousekeepingModule,
+    EventsModule,
     BrandingModule,
     TenantStaffModule,
     TenantUsersModule,
