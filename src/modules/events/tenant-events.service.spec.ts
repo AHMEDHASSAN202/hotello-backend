@@ -193,6 +193,7 @@ describe('TenantEventsService (Story 21.2)', () => {
       ['includedFor', { includedFor: ['all_inclusive'] }],
       ['locationText', { locationText: 'Different spot' }],
       ['capacity decrease', { capacity: 5 }],
+      ['infoEntryId', { infoEntryId: 'info-2' }],
     ])('published: changing %s is rejected with EVENT_NOT_SAFE_EDIT', async (_label, patch) => {
       eventsRepo.findOne.mockResolvedValue(
         makeEvent({ status: 'published', capacity: 10 }),

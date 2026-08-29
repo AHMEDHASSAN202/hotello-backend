@@ -356,10 +356,11 @@ export class TenantEventsService {
   }
 
   /**
-   * The safe-edit matrix (Story 21.2 AC — recorded decision): draft is
-   * fully editable; published locks schedule/price/capacity-decrease (guests
-   * may already be booked against those) but leaves titles/descriptions/
-   * photo/capacity-increase open; completed/cancelled lock everything.
+   * The safe-edit matrix (Story 21.2 AC1/AC2): draft is fully editable;
+   * published allows only description, photo, and capacity increases — AC1
+   * groups the optional Hotel Info entry link under the `location` field
+   * conceptually, so `infoEntryId` locks alongside `locationText`, not
+   * alongside `titles`/`descriptions`. completed/cancelled lock everything.
    */
   private assertEditable(event: Event, dto: UpdateEventDto): void {
     if (event.status === 'draft') return;
@@ -376,6 +377,7 @@ export class TenantEventsService {
         dto.price !== undefined ||
         dto.includedFor !== undefined ||
         dto.locationText !== undefined ||
+        dto.infoEntryId !== undefined ||
         !capacitySafe;
       if (touchesRestricted) this.throwNotSafeEdit();
       return;

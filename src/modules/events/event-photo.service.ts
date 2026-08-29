@@ -27,10 +27,16 @@ interface UploadedPhoto {
  * Story 21.2/21.1 AC1 — event cover photo: server-side resize to two
  * renditions (list thumb / detail) via the shared `RenditionService`,
  * immutable uuid keys under `events/`, storage-driver backed. Mirrors
- * `FnbPhotoService`/`HotelInfoPhotoService`. The safe-edit matrix allows
- * photo changes at any non-terminal status, so this never touches
- * `assertEditable` — replacing a cover photo doesn't invalidate a guest's
- * booking snapshot.
+ * `FnbPhotoService`/`HotelInfoPhotoService`.
+ *
+ * Unlike `TenantEventsService.update()`, this service does NOT check
+ * `event.status` — it doesn't call `assertEditable`, so photo changes are
+ * currently allowed at any status, including `completed`/`cancelled`. This
+ * task only ever produces `draft` events, so the gap is unreachable today;
+ * whether photo edits should lock on completed/cancelled events (the AC2
+ * safe-edit matrix says published allows photo edits, but is silent on the
+ * terminal statuses) is an explicit decision left for Task 6, which
+ * introduces those transitions.
  */
 @Injectable()
 export class EventPhotoService {
