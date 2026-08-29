@@ -1,6 +1,7 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { RenditionService } from '../renditions/rendition.service';
 import { STORAGE_DRIVER } from '../storage/storage.interface';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { FnbItem } from './fnb-item.entity';
@@ -48,6 +49,7 @@ describe('FnbPhotoService (16.2 AC2, spec note 6)', () => {
     const moduleRef = await Test.createTestingModule({
       providers: [
         FnbPhotoService,
+        RenditionService,
         { provide: getRepositoryToken(FnbItem), useValue: itemsRepo },
         { provide: STORAGE_DRIVER, useValue: storage },
         { provide: TenantFnbMenusService, useValue: menus },

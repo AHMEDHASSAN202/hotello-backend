@@ -1,21 +1,19 @@
 import {
   BadRequestException,
   ConflictException,
-  Inject,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import sharp from 'sharp';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
-import { STORAGE_DRIVER, StorageDriver } from '../storage/storage.interface';
+import { RenditionService } from '../renditions/rendition.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { HotelInfoEntry } from './hotel-info-entry.entity';
 import {
   HOTEL_INFO_MAX_PHOTOS,
+  HOTEL_INFO_PHOTO_PRESET,
   HotelInfoPhoto,
 } from './hotel-info.constants';
 import { InfoEntryManageView, toManageView } from './hotel-info-view';
@@ -42,12 +40,10 @@ interface UploadedPhoto {
  */
 @Injectable()
 export class HotelInfoPhotoService {
-  private readonly logger = new Logger(HotelInfoPhotoService.name);
-
   constructor(
     @InjectRepository(HotelInfoEntry)
     private readonly repo: Repository<HotelInfoEntry>,
-    @Inject(STORAGE_DRIVER) private readonly storage: StorageDriver,
+    private readonly renditions: RenditionService,
     private readonly auditLogs: AuditLogsService,
   ) {}
 
@@ -73,32 +69,26 @@ export class HotelInfoPhotoService {
       });
     }
 
-    const base = `hotel-info/${user.hotelId}/${entry.id}/${randomUUID()}`;
-    const photo: HotelInfoPhoto = {
-      id: randomUUID(),
-      thumb: `${base}-thumb.webp`,
-      detail: `${base}-detail.webp`,
-    };
-    const [thumb, detail] = await Promise.all([
-      sharp(file.buffer)
-        .rotate()
-        .resize(480, 360, { fit: 'cover' })
-        .webp({ quality: 80 })
-        .toBuffer(),
-      sharp(file.buffer)
-        .rotate()
-        .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
-        .webp({ quality: 82 })
-        .toBuffer(),
-    ]).catch(() => {
+    let stored: Record<string, string>;
+    try {
+      stored = await this.renditions.store(
+        user.hotelId,
+        'hotel-info',
+        [entry.id],
+        HOTEL_INFO_PHOTO_PRESET,
+        file.buffer,
+      );
+    } catch {
       throw new BadRequestException({
         code: 'HOTEL_INFO_PHOTO_INVALID',
         message: 'The uploaded file could not be read as an image',
       });
-    });
-
-    await this.storage.put(photo.thumb, thumb, 'image/webp');
-    await this.storage.put(photo.detail, detail, 'image/webp');
+    }
+    const photo: HotelInfoPhoto = {
+      id: randomUUID(),
+      thumb: stored.thumb,
+      detail: stored.detail,
+    };
 
     entry.photos = [...entry.photos, photo];
     await this.repo.save(entry);
@@ -143,13 +133,7 @@ export class HotelInfoPhotoService {
 
   /** Best-effort cleanup — a missing object never fails the mutation. */
   private async deleteQuietly(photo: HotelInfoPhoto): Promise<void> {
-    for (const key of [photo.thumb, photo.detail]) {
-      try {
-        await this.storage.delete(key);
-      } catch (err) {
-        this.logger.warn(`Failed to delete photo object ${key}: ${err}`);
-      }
-    }
+    await this.renditions.deleteQuietly([photo.thumb, photo.detail]);
   }
 
   private async audit(

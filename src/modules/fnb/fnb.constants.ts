@@ -1,4 +1,5 @@
 import { TranslationMap } from '../requests/requests.constants';
+import { RenditionPreset } from '../renditions/rendition.interface';
 
 /**
  * Epic 16 — F&B ordering constants. Statuses, transitions and cancel reasons
@@ -91,6 +92,12 @@ export interface FnbPhotoKeys {
   thumb: string;
   detail: string;
 }
+
+/** Spec note 6 — list thumb / detail renditions for item photos. */
+export const FNB_PHOTO_PRESET: RenditionPreset = {
+  thumb: { width: 480, height: 360, fit: 'cover', quality: 80 },
+  detail: { width: 1200, height: 1200, fit: 'inside', quality: 82, withoutEnlargement: true },
+};
 
 export const FNB_MAX_WINDOWS = 4;
 export const FNB_MAX_VARIANT_OPTIONS = 6;

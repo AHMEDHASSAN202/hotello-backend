@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Response } from 'express';
 import { Public } from '../../common/decorators/public.decorator';
+import { IMMUTABLE_RENDITION_PREFIXES } from '../renditions/rendition.constants';
 import { STORAGE_DRIVER, StorageDriver } from './storage.interface';
 
 /** Stored keys only ever contain these characters (see uploadLogo). */
@@ -48,7 +49,7 @@ export class FilesController {
     // immutably (Epic 16 note 6; Epic 17 decision 9; Epic 18.2 AC4).
     res.setHeader(
       'Cache-Control',
-      key.startsWith('fnb/') || key.startsWith('hotel-info/') || key.startsWith('branding/')
+      IMMUTABLE_RENDITION_PREFIXES.some((p) => key.startsWith(p))
         ? 'public, max-age=31536000, immutable'
         : 'public, max-age=3600',
     );

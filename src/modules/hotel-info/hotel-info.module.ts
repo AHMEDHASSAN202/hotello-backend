@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { Hotel } from '../hotels/hotel.entity';
+import { RenditionsModule } from '../renditions/renditions.module';
 import { TenantAccessModule } from '../tenant-access/tenant-access.module';
 import { GuestHotelInfoController } from './guest-hotel-info.controller';
 import { GuestHotelInfoService } from './guest-hotel-info.service';
@@ -20,6 +21,7 @@ import { TenantHotelInfoService } from './tenant-hotel-info.service';
     TypeOrmModule.forFeature([HotelInfoEntry, Hotel]),
     AuditLogsModule,
     TenantAccessModule,
+    RenditionsModule,
   ],
   providers: [
     TenantHotelInfoService,

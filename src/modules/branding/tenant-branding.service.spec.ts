@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
+import { RenditionService } from '../renditions/rendition.service';
 import { STORAGE_DRIVER } from '../storage/storage.interface';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { TenantBrandingService } from './tenant-branding.service';
@@ -40,6 +41,7 @@ describe('TenantBrandingService (18.1)', () => {
     const module = await Test.createTestingModule({
       providers: [
         TenantBrandingService,
+        RenditionService,
         { provide: getRepositoryToken(Hotel), useValue: hotelsRepo },
         { provide: AuditLogsService, useValue: auditLogs },
         { provide: STORAGE_DRIVER, useValue: storage },

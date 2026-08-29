@@ -1,19 +1,16 @@
-import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
-import { randomUUID } from 'crypto';
-import sharp from 'sharp';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
+import { RenditionService } from '../renditions/rendition.service';
 import { TranslationMap } from '../requests/requests.constants';
 import { GuestLanguage } from '../tenant-stays/stays.constants';
-import { STORAGE_DRIVER, StorageDriver } from '../storage/storage.interface';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import {
   BRANDING_COVER_MIME_TYPES,
+  BRANDING_COVER_PRESET,
   BrandingManageView,
-  COVER_DETAIL,
-  COVER_THUMB,
 } from './branding.constants';
 import { isAccentAllowed, nearestSafeAccent } from './contrast.util';
 import { UpdateBrandingDto } from './dto/update-branding.dto';
@@ -41,12 +38,10 @@ const WELCOME_FIELDS: Array<[keyof UpdateBrandingDto, GuestLanguage]> = [
  */
 @Injectable()
 export class TenantBrandingService {
-  private readonly logger = new Logger(TenantBrandingService.name);
-
   constructor(
     @InjectRepository(Hotel) private readonly hotels: Repository<Hotel>,
     private readonly auditLogs: AuditLogsService,
-    @Inject(STORAGE_DRIVER) private readonly storage: StorageDriver,
+    private readonly renditions: RenditionService,
   ) {}
 
   async getBranding(user: TenantUser): Promise<BrandingManageView> {
@@ -101,31 +96,24 @@ export class TenantBrandingService {
       });
     }
     const hotel = await this.loadHotel(user);
-    const [thumb, detail] = await Promise.all([
-      sharp(file.buffer)
-        .rotate()
-        .resize(COVER_THUMB.width, COVER_THUMB.height, { fit: 'cover' })
-        .webp({ quality: 82 })
-        .toBuffer(),
-      sharp(file.buffer)
-        .rotate()
-        .resize(COVER_DETAIL.width, COVER_DETAIL.height, { fit: 'cover' })
-        .webp({ quality: 82 })
-        .toBuffer(),
-    ]).catch(() => {
+    let stored: Record<string, string>;
+    try {
+      stored = await this.renditions.store(
+        user.hotelId,
+        'branding',
+        [],
+        BRANDING_COVER_PRESET,
+        file.buffer,
+      );
+    } catch {
       throw new BadRequestException({
         code: 'BRANDING_COVER_INVALID',
         message: 'Cover image could not be processed.',
       });
-    });
-    const base = `branding/${user.hotelId}/${randomUUID()}`;
-    const thumbKey = `${base}-thumb.webp`;
-    const detailKey = `${base}-detail.webp`;
-    await this.storage.put(thumbKey, thumb, 'image/webp');
-    await this.storage.put(detailKey, detail, 'image/webp');
+    }
     const oldKeys = [hotel.coverImageThumbKey, hotel.coverImageDetailKey];
-    hotel.coverImageThumbKey = thumbKey;
-    hotel.coverImageDetailKey = detailKey;
+    hotel.coverImageThumbKey = stored.thumb;
+    hotel.coverImageDetailKey = stored.detail;
     await this.hotels.save(hotel);
     await this.deleteQuietly(oldKeys);
     await this.audit(user, { coverImage: { changed: true } });
@@ -145,14 +133,7 @@ export class TenantBrandingService {
   }
 
   private async deleteQuietly(keys: Array<string | null>): Promise<void> {
-    for (const key of keys) {
-      if (!key) continue;
-      try {
-        await this.storage.delete(key);
-      } catch (err) {
-        this.logger.warn(`Failed to delete stale cover rendition ${key}: ${String(err)}`);
-      }
-    }
+    await this.renditions.deleteQuietly(keys);
   }
 
   private mergeWelcome(

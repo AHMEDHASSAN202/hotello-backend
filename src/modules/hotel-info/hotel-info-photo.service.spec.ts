@@ -1,6 +1,7 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { RenditionService } from '../renditions/rendition.service';
 import { STORAGE_DRIVER } from '../storage/storage.interface';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { HotelInfoEntry } from './hotel-info-entry.entity';
@@ -56,6 +57,7 @@ describe('HotelInfoPhotoService (17.1 AC1, spec note 5 reuse)', () => {
     const moduleRef = await Test.createTestingModule({
       providers: [
         HotelInfoPhotoService,
+        RenditionService,
         { provide: getRepositoryToken(HotelInfoEntry), useValue: repo },
         { provide: STORAGE_DRIVER, useValue: storage },
         { provide: AuditLogsService, useValue: auditLogs },

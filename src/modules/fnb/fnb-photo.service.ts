@@ -1,13 +1,11 @@
-import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
-import { randomUUID } from 'crypto';
-import sharp from 'sharp';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
-import { STORAGE_DRIVER, StorageDriver } from '../storage/storage.interface';
+import { RenditionService } from '../renditions/rendition.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { FnbItem } from './fnb-item.entity';
-import { FnbPhotoKeys } from './fnb.constants';
+import { FNB_PHOTO_PRESET, FnbPhotoKeys } from './fnb.constants';
 import { TenantFnbMenusService, FnbItemManageView } from './tenant-fnb-menus.service';
 
 export const FNB_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
@@ -34,12 +32,10 @@ interface UploadedPhoto {
  */
 @Injectable()
 export class FnbPhotoService {
-  private readonly logger = new Logger(FnbPhotoService.name);
-
   constructor(
     @InjectRepository(FnbItem)
     private readonly itemsRepo: Repository<FnbItem>,
-    @Inject(STORAGE_DRIVER) private readonly storage: StorageDriver,
+    private readonly renditions: RenditionService,
     private readonly menus: TenantFnbMenusService,
     private readonly auditLogs: AuditLogsService,
   ) {}
@@ -57,31 +53,22 @@ export class FnbPhotoService {
     }
     const item = await this.menus.findItem(user.hotelId, itemId);
 
-    const base = `fnb/${user.hotelId}/${item.id}/${randomUUID()}`;
-    const keys: FnbPhotoKeys = {
-      thumb: `${base}-thumb.webp`,
-      detail: `${base}-detail.webp`,
-    };
-    const [thumb, detail] = await Promise.all([
-      sharp(file.buffer)
-        .rotate()
-        .resize(480, 360, { fit: 'cover' })
-        .webp({ quality: 80 })
-        .toBuffer(),
-      sharp(file.buffer)
-        .rotate()
-        .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
-        .webp({ quality: 82 })
-        .toBuffer(),
-    ]).catch(() => {
+    let stored: Record<string, string>;
+    try {
+      stored = await this.renditions.store(
+        user.hotelId,
+        'fnb',
+        [item.id],
+        FNB_PHOTO_PRESET,
+        file.buffer,
+      );
+    } catch {
       throw new BadRequestException({
         code: 'FNB_PHOTO_INVALID',
         message: 'The uploaded file could not be read as an image',
       });
-    });
-
-    await this.storage.put(keys.thumb, thumb, 'image/webp');
-    await this.storage.put(keys.detail, detail, 'image/webp');
+    }
+    const keys: FnbPhotoKeys = { thumb: stored.thumb, detail: stored.detail };
 
     const old = item.photoKeys;
     item.photoKeys = keys;
@@ -129,13 +116,6 @@ export class FnbPhotoService {
 
   /** Best-effort cleanup — a missing object never fails the mutation. */
   private async deleteQuietly(keys: FnbPhotoKeys | null): Promise<void> {
-    if (!keys) return;
-    for (const key of [keys.thumb, keys.detail]) {
-      try {
-        await this.storage.delete(key);
-      } catch (err) {
-        this.logger.warn(`Failed to delete photo object ${key}: ${err}`);
-      }
-    }
+    await this.renditions.deleteQuietly(Object.values(keys ?? {}));
   }
 }

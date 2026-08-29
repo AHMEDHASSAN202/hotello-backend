@@ -1,5 +1,6 @@
 import { TranslationMap } from '../requests/requests.constants';
 import { FnbWindow } from '../fnb/fnb.constants';
+import { RenditionPreset } from '../renditions/rendition.interface';
 
 /**
  * Epic 17 — Hotel Info / Directory. Fixed platform-defined section types,
@@ -45,6 +46,12 @@ export interface HotelInfoPhoto {
   thumb: string;
   detail: string;
 }
+
+/** Same two-rendition pipeline as F&B (spec note 5) — facility card / gallery photos. */
+export const HOTEL_INFO_PHOTO_PRESET: RenditionPreset = {
+  thumb: { width: 480, height: 360, fit: 'cover', quality: 80 },
+  detail: { width: 1200, height: 1200, fit: 'inside', quality: 82, withoutEnlargement: true },
+};
 
 /**
  * Essentials singleton fields (17.1 AC1). Plain strings — phone formats are
