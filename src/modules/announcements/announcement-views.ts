@@ -1,6 +1,10 @@
 import { TranslationMap } from '../requests/requests.constants';
 import { Announcement } from './announcement.entity';
-import { AnnouncementStatus, AudienceFilter } from './announcements.constants';
+import {
+  AnnouncementSource,
+  AnnouncementStatus,
+  AudienceFilter,
+} from './announcements.constants';
 
 /** 19.3 — sent history + detail. Stats are live-computed, never stored. */
 export interface TenantAnnouncementView {
@@ -22,6 +26,8 @@ export interface TenantAnnouncementView {
   audienceStay: { guestName: string; roomNumber: string } | null;
   /** "قرأه 34 من 62" — reads / currently-matching audience (19.3 AC1). */
   stats: { reads: number; audienceNow: number };
+  /** 21.3 groundwork — null = manual; set → tenant UI badges "auto · event". */
+  source: AnnouncementSource | null;
 }
 
 /** 19.4 — one inbox entry, pre-localized to the stay's language. */
@@ -31,6 +37,8 @@ export interface GuestAnnouncementView {
   body: string;
   priority: boolean;
   infoChip: { entryId: string; section: string; name: string } | null;
+  /** 21.3 groundwork — resolved the same way as `infoChip`, when set. */
+  eventChip: { eventId: string; title: string; startAtLocal: string } | null;
   publishedAt: string | null;
   readAt: string | null;
   active: true;
@@ -76,5 +84,6 @@ export function toTenantView(
     updatedAt: iso(a.updatedAt) as string,
     audienceStay: extras.audienceStay,
     stats: { reads: extras.reads, audienceNow: extras.audienceNow },
+    source: a.source,
   };
 }

@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsIn,
@@ -49,6 +50,13 @@ export class AudienceFilterDto {
   @IsOptional()
   @IsUUID()
   stayId?: string;
+
+  /** 21.3 AC3 — event-cancel notice targets N booked stays. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(200)
+  @IsUUID('4', { each: true })
+  stayIds?: string[];
 }
 
 /** Flat 7-language title/body fields (19.1 AC1) + link, priority, audience. */

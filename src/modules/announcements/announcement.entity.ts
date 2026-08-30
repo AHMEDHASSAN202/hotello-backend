@@ -8,11 +8,16 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { Event } from '../events/event.entity';
 import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
 import { Hotel } from '../hotels/hotel.entity';
 import { TranslationMap } from '../requests/requests.constants';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
-import { AnnouncementStatus, AudienceFilter } from './announcements.constants';
+import {
+  AnnouncementSource,
+  AnnouncementStatus,
+  AudienceFilter,
+} from './announcements.constants';
 
 /**
  * Epic 19 spec note 1 — one row per announcement; the audience is a JSONB
@@ -91,4 +96,19 @@ export class Announcement {
   /** The guest delta cursor — status flips bump it (tombstone deltas). */
   @UpdateDateColumn()
   updatedAt: Date;
+
+  /**
+   * 21.3 groundwork — null = manually composed by a tenant user (every
+   * pre-existing row); set when Events auto-generates the notice so the
+   * tenant UI can badge it "auto · event".
+   */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  source: AnnouncementSource | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  eventId: string | null;
+
+  @ManyToOne(() => Event, { onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'eventId' })
+  event: Event | null;
 }

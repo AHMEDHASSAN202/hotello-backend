@@ -101,6 +101,40 @@ describe('matchesAudience (19.1 AC2/AC3)', () => {
     expect(matchesAudience({ stayId: 'stay-2' }, makeStay())).toBe(false);
   });
 
+  describe('stayIds (21.3 AC3 — event-cancel notice targets N booked stays)', () => {
+    it('matches a stay present in a single-id list', () => {
+      expect(matchesAudience({ stayIds: ['stay-1'] }, makeStay())).toBe(true);
+    });
+
+    it('matches a stay present among multiple ids and rejects one absent', () => {
+      const filter: AudienceFilter = { stayIds: ['stay-1', 'stay-2', 'stay-3'] };
+      expect(matchesAudience(filter, makeStay())).toBe(true);
+      expect(
+        matchesAudience(filter, makeStay({ id: 'stay-9' })),
+      ).toBe(false);
+    });
+
+    it('an empty stayIds array is treated as "not set" and falls through to other dimensions', () => {
+      // No other dimensions present → empty filter behavior (matches everyone).
+      expect(matchesAudience({ stayIds: [] }, makeStay())).toBe(true);
+      // Combined with another dimension, that dimension still applies.
+      expect(
+        matchesAudience(
+          { stayIds: [], stayTypes: ['room_only'] },
+          makeStay(),
+        ),
+      ).toBe(false);
+    });
+
+    it('stayIds ignores other dimensions, mirroring stayId exclusivity', () => {
+      const filter: AudienceFilter = {
+        stayIds: ['stay-1'],
+        stayTypes: ['room_only'],
+      };
+      expect(matchesAudience(filter, makeStay())).toBe(true);
+    });
+  });
+
   it("dynamic audience: tonight's check-in matching the filter is included (AC3)", () => {
     // The filter is stored, never a snapshot — a brand-new stay object that
     // matches is visible with no reference to when the announcement went out.

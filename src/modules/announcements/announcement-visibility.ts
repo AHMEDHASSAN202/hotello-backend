@@ -20,8 +20,11 @@ export function hotelLocalStamp(timezone: string, now: Date): string {
 
 /**
  * 19.1 AC2/AC3 — dynamic audience match. Empty filter = everyone. `stayId`
- * targets exactly one stay (other dimensions ignored); otherwise present
- * dimensions AND together. Floor matching requires the `room` relation.
+ * targets exactly one stay (other dimensions ignored); `stayIds` (21.3 AC3)
+ * targets a fixed list of stays the same exclusive way — an empty array is
+ * treated as "not set" (falls through), matching every other dimension.
+ * Otherwise present dimensions AND together. Floor matching requires the
+ * `room` relation.
  */
 export function matchesAudience(
   filter: AudienceFilter | null | undefined,
@@ -29,6 +32,7 @@ export function matchesAudience(
 ): boolean {
   if (!filter) return true;
   if (filter.stayId) return stay.id === filter.stayId;
+  if (filter.stayIds?.length) return filter.stayIds.includes(stay.id);
   if (filter.stayTypes?.length && !filter.stayTypes.includes(stay.stayType)) {
     return false;
   }

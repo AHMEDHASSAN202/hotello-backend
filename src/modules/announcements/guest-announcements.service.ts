@@ -4,7 +4,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, MoreThan, Repository } from 'typeorm';
+import { In, MoreThan, Not, Repository } from 'typeorm';
+import { Event } from '../events/event.entity';
 import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
 import { localizeField } from '../requests/requests.constants';
 import { Stay } from '../tenant-stays/stay.entity';
@@ -41,6 +42,8 @@ export class GuestAnnouncementsService {
     private readonly readsRepo: Repository<AnnouncementRead>,
     @InjectRepository(HotelInfoEntry)
     private readonly infoRepo: Repository<HotelInfoEntry>,
+    @InjectRepository(Event)
+    private readonly eventsRepo: Repository<Event>,
     private readonly access: TenantAccessService,
   ) {}
 
@@ -80,17 +83,25 @@ export class GuestAnnouncementsService {
           updatedAt: MoreThan(naiveUtc(query.updatedSince)),
         },
       });
-      const chips = await this.resolveChips(stay, changed);
+      const [chips, eventChips] = await Promise.all([
+        this.resolveChips(stay, changed),
+        this.resolveEventChips(stay, changed),
+      ]);
       data = changed
         .sort(byPriorityThenNewest)
         .map((a) =>
           isVisibleToStay(a, stay, nowLocal)
-            ? this.toView(a, stay, readAtById, chips)
+            ? this.toView(a, stay, readAtById, chips, eventChips)
             : { id: a.id, active: false as const },
         );
     } else {
-      const chips = await this.resolveChips(stay, visible);
-      data = visible.map((a) => this.toView(a, stay, readAtById, chips));
+      const [chips, eventChips] = await Promise.all([
+        this.resolveChips(stay, visible),
+        this.resolveEventChips(stay, visible),
+      ]);
+      data = visible.map((a) =>
+        this.toView(a, stay, readAtById, chips, eventChips),
+      );
     }
 
     return { data, unreadCount, serverTime: new Date().toISOString() };
@@ -167,13 +178,33 @@ export class GuestAnnouncementsService {
     return new Map(entries.map((e) => [e.id, e]));
   }
 
+  /**
+   * 21.3 groundwork — batch-resolve the source Event for the "auto · event"
+   * chip; dangling or cancelled links become null, same as `resolveChips`.
+   */
+  private async resolveEventChips(
+    stay: Stay,
+    rows: Announcement[],
+  ): Promise<Map<string, Event>> {
+    const ids = rows
+      .map((a) => a.eventId)
+      .filter((id): id is string => Boolean(id));
+    if (!ids.length) return new Map();
+    const events = await this.eventsRepo.find({
+      where: { id: In(ids), hotelId: stay.hotelId, status: Not('cancelled') },
+    });
+    return new Map(events.map((e) => [e.id, e]));
+  }
+
   private toView(
     a: Announcement,
     stay: Stay,
     readAtById: Map<string, Date>,
     chips: Map<string, HotelInfoEntry>,
+    eventChips: Map<string, Event>,
   ): GuestAnnouncementView {
     const entry = a.infoEntryId ? chips.get(a.infoEntryId) : undefined;
+    const event = a.eventId ? eventChips.get(a.eventId) : undefined;
     const readAt = readAtById.get(a.id);
     return {
       id: a.id,
@@ -185,6 +216,13 @@ export class GuestAnnouncementsService {
             entryId: entry.id,
             section: entry.section,
             name: localizeField(entry.names, stay.language),
+          }
+        : null,
+      eventChip: event
+        ? {
+            eventId: event.id,
+            title: localizeField(event.titles, stay.language),
+            startAtLocal: event.startAtLocal,
           }
         : null,
       publishedAt: a.publishedAt ? new Date(a.publishedAt).toISOString() : null,

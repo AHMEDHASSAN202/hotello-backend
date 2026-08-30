@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
+import { Event } from '../events/event.entity';
 import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
 import { Hotel } from '../hotels/hotel.entity';
 import { Stay } from '../tenant-stays/stay.entity';
@@ -16,6 +17,8 @@ import { TenantAnnouncementsService } from './tenant-announcements.service';
 /**
  * Epic 19 — Guest Announcements: tenant compose/schedule/retract + stats,
  * guest inbox feed, and the 5-minute scheduled→live→expired transition job.
+ * `TenantAnnouncementsService` is exported for Events (Story 21.3, wired in
+ * Task 6) — its first cross-module caller.
  */
 @Module({
   imports: [
@@ -25,6 +28,7 @@ import { TenantAnnouncementsService } from './tenant-announcements.service';
       Stay,
       Hotel,
       HotelInfoEntry,
+      Event,
     ]),
     AuditLogsModule,
     TenantAccessModule,
@@ -35,5 +39,6 @@ import { TenantAnnouncementsService } from './tenant-announcements.service';
     GuestAnnouncementsService,
     AnnouncementSchedulerService,
   ],
+  exports: [TenantAnnouncementsService],
 })
 export class AnnouncementsModule {}

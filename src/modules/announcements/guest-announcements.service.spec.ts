@@ -1,6 +1,7 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { Event } from '../events/event.entity';
 import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
 import { Stay } from '../tenant-stays/stay.entity';
 import { TenantAccessService } from '../tenant-access/tenant-access.service';
@@ -28,6 +29,8 @@ const makeAnnouncement = (o: Partial<Announcement> = {}): Announcement =>
     infoEntryId: null,
     priority: false,
     audience: {},
+    source: null,
+    eventId: null,
     status: 'live',
     publishAtLocal: null,
     activeUntilLocal: null,
@@ -44,6 +47,7 @@ describe('GuestAnnouncementsService', () => {
   let repo: Record<string, jest.Mock>;
   let readsRepo: Record<string, jest.Mock>;
   let infoRepo: Record<string, jest.Mock>;
+  let eventsRepo: Record<string, jest.Mock>;
   let access: { getAccessState: jest.Mock };
 
   beforeEach(async () => {
@@ -58,6 +62,7 @@ describe('GuestAnnouncementsService', () => {
       save: jest.fn(async (e) => e),
     };
     infoRepo = { find: jest.fn().mockResolvedValue([]) };
+    eventsRepo = { find: jest.fn().mockResolvedValue([]) };
     access = {
       getAccessState: jest.fn().mockResolvedValue({
         hotelStatus: 'active',
@@ -72,6 +77,7 @@ describe('GuestAnnouncementsService', () => {
         { provide: getRepositoryToken(Announcement), useValue: repo },
         { provide: getRepositoryToken(AnnouncementRead), useValue: readsRepo },
         { provide: getRepositoryToken(HotelInfoEntry), useValue: infoRepo },
+        { provide: getRepositoryToken(Event), useValue: eventsRepo },
         { provide: TenantAccessService, useValue: access },
       ],
     }).compile();
@@ -195,6 +201,54 @@ describe('GuestAnnouncementsService', () => {
         infoChip: unknown;
       };
       expect(dangling.infoChip).toBeNull();
+    });
+
+    it('resolves the event chip and drops dangling/cancelled links (21.3 groundwork)', async () => {
+      repo.find.mockResolvedValue([
+        makeAnnouncement({ id: 'ann-1', eventId: 'event-1', source: 'event_publish' }),
+        makeAnnouncement({ id: 'ann-2', eventId: 'event-gone' }),
+        makeAnnouncement({ id: 'ann-3', eventId: 'event-cancelled' }),
+      ]);
+      eventsRepo.find.mockResolvedValue([
+        {
+          id: 'event-1',
+          titles: { en: 'Wine Tasting', ru: 'Дегустация вин' },
+          startAtLocal: '2026-02-01 18:00',
+        },
+      ]);
+      const feed = await service.listForStay(STAY, {});
+
+      const withChip = feed.data.find((d) => d.id === 'ann-1') as {
+        eventChip: { eventId: string; title: string; startAtLocal: string } | null;
+      };
+      expect(withChip.eventChip).toEqual({
+        eventId: 'event-1',
+        title: 'Дегустация вин',
+        startAtLocal: '2026-02-01 18:00',
+      });
+
+      const dangling = feed.data.find((d) => d.id === 'ann-2') as {
+        eventChip: unknown;
+      };
+      expect(dangling.eventChip).toBeNull();
+
+      const cancelled = feed.data.find((d) => d.id === 'ann-3') as {
+        eventChip: unknown;
+      };
+      expect(cancelled.eventChip).toBeNull();
+
+      // Cancelled/dangling ids are filtered server-side (In + hotelId + Not cancelled).
+      expect(eventsRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ hotelId: 'hotel-1' }),
+        }),
+      );
+    });
+
+    it('no eventId anywhere → the events repo is never queried', async () => {
+      repo.find.mockResolvedValue([makeAnnouncement({ id: 'ann-1' })]);
+      await service.listForStay(STAY, {});
+      expect(eventsRepo.find).not.toHaveBeenCalled();
     });
   });
 
