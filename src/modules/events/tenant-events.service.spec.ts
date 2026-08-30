@@ -5,6 +5,7 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { TenantAnnouncementsService } from '../announcements/tenant-announcements.service';
 import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
 import { Hotel } from '../hotels/hotel.entity';
+import { Stay } from '../tenant-stays/stay.entity';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { CancelEventDto } from './dto/cancel-event.dto';
 import { CreateEventDto } from './dto/create-event.dto';
@@ -62,6 +63,7 @@ describe('TenantEventsService (Story 21.2)', () => {
   let bookingsRepo: Record<string, jest.Mock>;
   let infoRepo: Record<string, jest.Mock>;
   let hotelsRepo: Record<string, jest.Mock>;
+  let staysRepo: Record<string, jest.Mock>;
   let auditLogs: { log: jest.Mock };
   let bookingsQb: Record<string, jest.Mock>;
   let eventsQb: Record<string, jest.Mock>;
@@ -97,6 +99,13 @@ describe('TenantEventsService (Story 21.2)', () => {
     hotelsRepo = {
       findOne: jest.fn().mockResolvedValue({ id: HOTEL_ID, timezone: 'Africa/Cairo' }),
     };
+    // Default: every stay resolves as active — individual cancel() tests
+    // override this to simulate checked-out guests (final-review C2).
+    staysRepo = {
+      find: jest.fn(async ({ where }: { where: { id: { value: string[] } } }) =>
+        (where.id.value as string[]).map((id) => ({ id, status: 'active' })),
+      ),
+    };
     auditLogs = { log: jest.fn() };
 
     managerEvents = {
@@ -124,6 +133,7 @@ describe('TenantEventsService (Story 21.2)', () => {
         { provide: getRepositoryToken(EventBooking), useValue: bookingsRepo },
         { provide: getRepositoryToken(HotelInfoEntry), useValue: infoRepo },
         { provide: getRepositoryToken(Hotel), useValue: hotelsRepo },
+        { provide: getRepositoryToken(Stay), useValue: staysRepo },
         { provide: AuditLogsService, useValue: auditLogs },
         { provide: DataSource, useValue: dataSource },
         { provide: TenantAnnouncementsService, useValue: announcements },
@@ -315,6 +325,20 @@ describe('TenantEventsService (Story 21.2)', () => {
       });
       expect(announcements.create).not.toHaveBeenCalled();
     });
+
+    it('an announcement-pipeline failure is logged but does not fail the publish (already-committed)', async () => {
+      eventsRepo.findOne.mockResolvedValue(futureDraft());
+      announcements.create.mockRejectedValue(new Error('announcement pipeline down'));
+      const loggerSpy = jest
+        .spyOn((service as unknown as { logger: { error: (msg: string) => void } }).logger, 'error')
+        .mockImplementation(() => undefined);
+
+      const result = await service.publish(actor, 'event-1', {});
+
+      expect(result.status).toBe('published');
+      expect(loggerSpy).toHaveBeenCalledWith(expect.stringContaining('event-1'));
+      loggerSpy.mockRestore();
+    });
   });
 
   describe('cancel (Story 21.2 AC3)', () => {
@@ -389,6 +413,58 @@ describe('TenantEventsService (Story 21.2)', () => {
       );
     });
 
+    // final-review C2 — bookings deliberately survive checkout (21.5 AC3),
+    // so a booked guest's stay can be `checked_out` by the time the event is
+    // cancelled. resolveAudience() 400s if ANY id in the audience fails to
+    // resolve to an active stay — the regression this guards against.
+    it('mix of active and checked-out attendees: cancel still succeeds and notifies only the resident guests', async () => {
+      managerEvents.findOne.mockResolvedValue(makeEvent({ status: 'published' }));
+      const bookings = [
+        makeBooking({ id: 'b1', stayId: 'stay-active' }),
+        makeBooking({ id: 'b2', stayId: 'stay-checked-out' }),
+      ];
+      managerBookings.find.mockResolvedValue(bookings);
+      staysRepo.find.mockResolvedValue([{ id: 'stay-active', status: 'active' }]);
+
+      const result = await service.cancel(actor, 'event-1', { reason: 'Storm warning' });
+
+      expect(result.status).toBe('cancelled');
+      expect(bookings.every((b) => b.status === 'cancelled')).toBe(true);
+      expect(announcements.create).toHaveBeenCalledTimes(1);
+      expect(announcements.create).toHaveBeenCalledWith(
+        actor,
+        expect.objectContaining({ audience: { stayIds: ['stay-active'] } }),
+        { source: 'event_cancel', eventId: 'event-1' },
+      );
+    });
+
+    it('every booked guest already checked out: cancel succeeds, skips the announcement entirely', async () => {
+      managerEvents.findOne.mockResolvedValue(makeEvent({ status: 'published' }));
+      const bookings = [makeBooking({ id: 'b1', stayId: 'stay-checked-out' })];
+      managerBookings.find.mockResolvedValue(bookings);
+      staysRepo.find.mockResolvedValue([]); // no stay in the list is still active
+
+      const result = await service.cancel(actor, 'event-1', { reason: 'Storm warning' });
+
+      expect(result.status).toBe('cancelled');
+      expect(announcements.create).not.toHaveBeenCalled();
+    });
+
+    it('an announcement-pipeline failure is logged but does not fail the cancel (already-committed)', async () => {
+      managerEvents.findOne.mockResolvedValue(makeEvent({ status: 'published' }));
+      managerBookings.find.mockResolvedValue([makeBooking({ id: 'b1', stayId: 'stay-1' })]);
+      announcements.create.mockRejectedValue(new Error('announcement pipeline down'));
+      const loggerSpy = jest
+        .spyOn((service as unknown as { logger: { error: (msg: string) => void } }).logger, 'error')
+        .mockImplementation(() => undefined);
+
+      const result = await service.cancel(actor, 'event-1', { reason: 'Storm warning' });
+
+      expect(result.status).toBe('cancelled');
+      expect(loggerSpy).toHaveBeenCalledWith(expect.stringContaining('event-1'));
+      loggerSpy.mockRestore();
+    });
+
     it('rejects a non-published event', async () => {
       managerEvents.findOne.mockResolvedValue(makeEvent({ status: 'draft' }));
       await expect(
@@ -458,8 +534,7 @@ describe('TenantEventsService (Story 21.2)', () => {
       const result = await service.list(actor, { tab: 'upcoming' });
 
       expect(eventsQb.andWhere).toHaveBeenCalledWith(
-        expect.stringContaining("e.status = 'draft'"),
-        expect.objectContaining({ nowLocal: expect.any(String) }),
+        `(e.status = 'draft' OR e.status = 'published')`,
       );
       // One grouped query for the whole page, not one per row.
       expect(bookingsRepo.createQueryBuilder).toHaveBeenCalledTimes(1);
@@ -467,6 +542,24 @@ describe('TenantEventsService (Story 21.2)', () => {
         expect.objectContaining({ id: 'e1', bookedCount: 3 }),
         expect.objectContaining({ id: 'e2', bookedCount: 5 }),
       ]);
+    });
+
+    // final-review I1 — a published event that has STARTED but isn't
+    // auto-completed yet (the scheduler only flips status at endAtLocal ??
+    // start+180min) must still be findable — it belongs in `upcoming`, not
+    // stuck between tabs for the hours until the next cron tick.
+    it('upcoming: includes a published event whose start has already passed but is not yet completed', async () => {
+      const events = [
+        makeEvent({ id: 'e1', status: 'published', startAtLocal: '2020-01-01 10:00' }),
+      ];
+      eventsQb.getMany.mockResolvedValue(events);
+
+      const result = await service.list(actor, { tab: 'upcoming' });
+
+      expect(eventsQb.andWhere).toHaveBeenCalledWith(
+        `(e.status = 'draft' OR e.status = 'published')`,
+      );
+      expect(result.data).toEqual([expect.objectContaining({ id: 'e1' })]);
     });
 
     it('past: filters to completed only', async () => {

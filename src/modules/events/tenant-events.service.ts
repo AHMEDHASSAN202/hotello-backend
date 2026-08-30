@@ -2,16 +2,18 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { CreateAnnouncementDto } from '../announcements/dto/announcements.dto';
 import { TenantAnnouncementsService } from '../announcements/tenant-announcements.service';
 import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
 import { Hotel } from '../hotels/hotel.entity';
 import { TranslationMap } from '../requests/requests.constants';
+import { Stay } from '../tenant-stays/stay.entity';
 import { StayType } from '../tenant-stays/stays.constants';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { CancelEventDto } from './dto/cancel-event.dto';
@@ -129,6 +131,8 @@ const touchesDescriptions = (dto: DescriptionFields): boolean =>
  */
 @Injectable()
 export class TenantEventsService {
+  private readonly logger = new Logger(TenantEventsService.name);
+
   constructor(
     @InjectRepository(Event)
     private readonly eventsRepo: Repository<Event>,
@@ -138,6 +142,8 @@ export class TenantEventsService {
     private readonly infoRepo: Repository<HotelInfoEntry>,
     @InjectRepository(Hotel)
     private readonly hotelsRepo: Repository<Hotel>,
+    @InjectRepository(Stay)
+    private readonly staysRepo: Repository<Stay>,
     private readonly auditLogs: AuditLogsService,
     private readonly dataSource: DataSource,
     private readonly announcements: TenantAnnouncementsService,
@@ -251,18 +257,21 @@ export class TenantEventsService {
     user: TenantUser,
     query: ListTenantEventsQueryDto,
   ): Promise<{ data: EventListItemView[] }> {
-    const hotel = await this.hotelsRepo.findOne({ where: { id: user.hotelId } });
-    const nowLocal = hotelLocalStamp(hotel?.timezone ?? 'UTC', new Date());
-
     const qb = this.eventsRepo
       .createQueryBuilder('e')
       .where('e.hotelId = :hotelId', { hotelId: user.hotelId });
 
     if (query.tab === 'upcoming') {
-      qb.andWhere(
-        `(e.status = 'draft' OR (e.status = 'published' AND e.startAtLocal >= :nowLocal))`,
-        { nowLocal },
-      ).orderBy('e.startAtLocal', 'ASC');
+      // final-review I1 — a published event that has already STARTED but
+      // isn't auto-completed yet (the scheduler only flips status at
+      // endAtLocal ?? start+180min) must still show up somewhere staff can
+      // find it. `upcoming` is the right home: it's still "today's
+      // programme," not history, so published events aren't time-filtered
+      // here at all — only draft/published belong to `past`/`cancelled`.
+      qb.andWhere(`(e.status = 'draft' OR e.status = 'published')`).orderBy(
+        'e.startAtLocal',
+        'ASC',
+      );
     } else if (query.tab === 'past') {
       qb.andWhere(`e.status = 'completed'`).orderBy('e.startAtLocal', 'DESC');
     } else {
@@ -316,16 +325,26 @@ export class TenantEventsService {
     });
 
     if (dto.announce !== false) {
+      // final-review C2 — a notification failure must never fail the
+      // emitting business operation (repo law). The event is already
+      // committed as published by this point; don't let the announcement
+      // pipeline turn that success into an HTTP error.
       const content = composePublishAnnouncement(event);
-      await this.announcements.create(
-        user,
-        {
-          ...content,
-          action: 'send',
-          audience: {},
-        } as CreateAnnouncementDto,
-        { source: 'event_publish', eventId: event.id },
-      );
+      try {
+        await this.announcements.create(
+          user,
+          {
+            ...content,
+            action: 'send',
+            audience: {},
+          } as CreateAnnouncementDto,
+          { source: 'event_publish', eventId: event.id },
+        );
+      } catch (err) {
+        this.logger.error(
+          `Failed to send event-publish announcement for event ${event.id}: ${err instanceof Error ? err.message : err}`,
+        );
+      }
     }
 
     return this.toManageView(event);
@@ -341,6 +360,17 @@ export class TenantEventsService {
    * at least one booking was actually cancelled (21.3 AC3 — the publish
    * announcement and this one are independent records; neither touches the
    * other).
+   *
+   * final-review C2 — bookings deliberately survive guest checkout (Story
+   * 21.5 AC3: the booking stays `booked`, only the `Stay` becomes
+   * `checked_out`), so `stayIds` collected here can include stays that are
+   * no longer `active`. `resolveAudience()` on the announcements side
+   * requires EVERY id to resolve to an active stay, so we filter to
+   * currently-active stays before building the audience — a checked-out
+   * guest can't receive an in-app notice anyway — and skip the announcement
+   * entirely if nothing active is left. The `announcements.create()` call
+   * is also wrapped so a notification failure never fails the cancel
+   * itself, which has already committed by this point.
    */
   async cancel(
     user: TenantUser,
@@ -395,16 +425,36 @@ export class TenantEventsService {
     await this.audit(user, 'event.cancelled', event.id, { bookingsCancelled });
 
     if (bookingsCancelled > 0) {
-      const content = composeCancelAnnouncement(event, dto.reason);
-      await this.announcements.create(
-        user,
-        {
-          ...content,
-          action: 'send',
-          audience: { stayIds },
-        } as CreateAnnouncementDto,
-        { source: 'event_cancel', eventId: event.id },
-      );
+      // A checked-out guest's stay is no longer `active`; `resolveAudience`
+      // 400s if ANY id in the list fails to resolve, so filter first —
+      // still-resident guests must get the notice even when some booked
+      // guests already checked out.
+      const activeStayIds = stayIds.length
+        ? (
+            await this.staysRepo.find({
+              where: { id: In(stayIds), hotelId: user.hotelId, status: 'active' },
+            })
+          ).map((s) => s.id)
+        : [];
+
+      if (activeStayIds.length > 0) {
+        const content = composeCancelAnnouncement(event, dto.reason);
+        try {
+          await this.announcements.create(
+            user,
+            {
+              ...content,
+              action: 'send',
+              audience: { stayIds: activeStayIds },
+            } as CreateAnnouncementDto,
+            { source: 'event_cancel', eventId: event.id },
+          );
+        } catch (err) {
+          this.logger.error(
+            `Failed to send event-cancel announcement for event ${event.id}: ${err instanceof Error ? err.message : err}`,
+          );
+        }
+      }
     }
 
     return this.toManageView(event);
@@ -424,6 +474,17 @@ export class TenantEventsService {
       });
     }
     return event;
+  }
+
+  /**
+   * Exposed for `EventPhotoService` (final-review I2) — photo changes ride
+   * the same safe-edit matrix as `update()`: allowed on `draft`/`published`,
+   * locked on the terminal `completed`/`cancelled` statuses.
+   */
+  assertPhotoEditable(event: Event): void {
+    if (event.status === 'completed' || event.status === 'cancelled') {
+      this.throwNotSafeEdit();
+    }
   }
 
   /** Exposed for `EventPhotoService` (the F&B `toItemView` precedent). */
