@@ -342,7 +342,7 @@ export class GuestEventsService {
                 addMinutesLocal(b.snapshot.startAtLocal, 180)),
         )
         .sort((a, b) =>
-          a.snapshot.startAtLocal.localeCompare(b.snapshot.startAtLocal),
+          a.snapshot.startAtLocal < b.snapshot.startAtLocal ? -1 : 1,
         )[0] ?? null;
 
     return {

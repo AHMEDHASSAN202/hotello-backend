@@ -76,6 +76,11 @@ describe('TenantEventsService (Story 21.2)', () => {
   let announcements: { create: jest.Mock };
   let access: { getAccessState: jest.Mock };
 
+  // Spies here are restored in the test bodies too, but a test that FAILS
+  // never reaches those lines and leaks its spy into the next one — which
+  // turns one real failure into two confusing ones.
+  afterEach(() => jest.restoreAllMocks());
+
   beforeEach(async () => {
     bookingsQb = {};
     for (const m of ['select', 'addSelect', 'where', 'andWhere', 'groupBy']) {

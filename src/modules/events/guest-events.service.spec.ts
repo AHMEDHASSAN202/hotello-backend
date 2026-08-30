@@ -476,6 +476,9 @@ describe('GuestEventsService (Story 21.4/21.5)', () => {
       const started = () =>
         makeEvent({ startAtLocal: '2030-01-15 18:00', endAtLocal: '2030-01-15 20:00' });
 
+      // This case is also the local-vs-UTC discriminator: 16:00Z is 18:00 in
+      // Cairo, so the gate closes — a server that compared the raw UTC stamp
+      // ('…15 16:00' < '…15 18:00') would still take the booking.
       it('at exactly the start time → 409 EVENT_NOT_BOOKABLE, nothing written', async () => {
         managerEvents.findOne.mockResolvedValue(started());
         await expect(
@@ -496,14 +499,6 @@ describe('GuestEventsService (Story 21.4/21.5)', () => {
         managerEvents.findOne.mockResolvedValue(started());
         await expect(
           service.book(makeStay(), 'event-1', dto(), new Date('2030-01-15T15:59:00.000Z')),
-        ).resolves.toMatchObject({ status: 'booked' });
-      });
-
-      it('the gate is the HOTEL-local clock, not UTC (a Cairo event is still open at 17:30 local == 15:30Z)', async () => {
-        managerEvents.findOne.mockResolvedValue(started());
-        // 18:30Z would be past start if the server compared UTC stamps.
-        await expect(
-          service.book(makeStay(), 'event-1', dto(), new Date('2030-01-15T15:30:00.000Z')),
         ).resolves.toMatchObject({ status: 'booked' });
       });
 
