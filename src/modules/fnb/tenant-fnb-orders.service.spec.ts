@@ -5,6 +5,7 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
 import { TenantStaysService } from '../tenant-stays/tenant-stays.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
+import { FnbSettlementSource } from './fnb-settlement-source';
 import { FnbOrderLine } from './fnb-order-line.entity';
 import { FnbOrder } from './fnb-order.entity';
 import { FNB_ORDER_STATUSES, FnbOrderStatus } from './fnb.constants';
@@ -93,6 +94,10 @@ describe('TenantFnbOrdersService (16.7/16.8)', () => {
     const moduleRef = await Test.createTestingModule({
       providers: [
         TenantFnbOrdersService,
+        // Real FnbSettlementSource sharing the same mocked orders repo —
+        // TenantFnbOrdersService now delegates settlement queries/mutations
+        // to it (Story 21.6 AC2), so this is the same repo mock either way.
+        FnbSettlementSource,
         { provide: getRepositoryToken(FnbOrder), useValue: ordersRepo },
         { provide: getRepositoryToken(FnbOrderLine), useValue: linesRepo },
         { provide: getRepositoryToken(TenantUser), useValue: usersRepo },

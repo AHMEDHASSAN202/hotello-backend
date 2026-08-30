@@ -9,6 +9,7 @@ import { TenantAccessModule } from '../tenant-access/tenant-access.module';
 import { TenantStaysModule } from '../tenant-stays/tenant-stays.module';
 import { TenantRoomsModule } from '../tenant-rooms/tenant-rooms.module';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
+import { FnbSettlementSource } from './fnb-settlement-source';
 import { FnbStickerPdfService } from './fnb-sticker-pdf.service';
 import { TenantFnbLocationsController } from './tenant-fnb-locations.controller';
 import { TenantFnbLocationsService } from './tenant-fnb-locations.service';
@@ -72,7 +73,10 @@ import { TenantFnbOrdersService } from './tenant-fnb-orders.service';
     TenantFnbSettingsService,
     GuestFnbService,
     TenantFnbOrdersService,
+    FnbSettlementSource,
   ],
-  exports: [],
+  // Story 21.6 AC2 — StaySettlementModule injects FnbSettlementSource for
+  // the combined checkout total; nothing else needs the rest of the module.
+  exports: [FnbSettlementSource],
 })
 export class FnbModule {}

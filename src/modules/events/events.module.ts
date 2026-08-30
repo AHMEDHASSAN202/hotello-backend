@@ -10,6 +10,7 @@ import { Stay } from '../tenant-stays/stay.entity';
 import { EventBooking } from './event-booking.entity';
 import { Event } from './event.entity';
 import { EventPhotoService } from './event-photo.service';
+import { EventSettlementSource } from './event-settlement-source';
 import { GuestEventsController } from './guest-events.controller';
 import { GuestEventsService } from './guest-events.service';
 import { TenantEventAttendeesController } from './tenant-event-attendees.controller';
@@ -27,7 +28,9 @@ import { TenantEventsService } from './tenant-events.service';
  * settlement (Task 9) both depend on this landing first. Task 8: the
  * read-only attendee list + live totals — its own controller/service,
  * batch-loading `Stay` (with `room`) for guest name / room number since
- * `EventBooking` doesn't snapshot those fields.
+ * `EventBooking` doesn't snapshot those fields. Task 9: `EventSettlementSource`
+ * exported for `StaySettlementModule` — the events side of the shared
+ * `SettlementSource` interface (Story 21.6 AC2), mirroring `FnbSettlementSource`.
  */
 @Module({
   imports: [
@@ -47,6 +50,8 @@ import { TenantEventsService } from './tenant-events.service';
     EventPhotoService,
     TenantEventAttendeesService,
     GuestEventsService,
+    EventSettlementSource,
   ],
+  exports: [EventSettlementSource],
 })
 export class EventsModule {}

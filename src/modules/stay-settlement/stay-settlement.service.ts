@@ -1,0 +1,95 @@
+import { Inject, Injectable } from '@nestjs/common';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { TenantStaysService } from '../tenant-stays/tenant-stays.service';
+import { TenantUser } from '../tenant-users/tenant-user.entity';
+import {
+  SETTLEMENT_SOURCES,
+  SettlementSource,
+  UnsettledLine,
+} from './settlement-source.interface';
+
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+const sumLines = (lines: UnsettledLine[]): number =>
+  round2(lines.reduce((sum, line) => sum + line.totalAmount, 0));
+
+export interface StayUnsettledView {
+  total: number;
+  /** Per-source subtotal, keyed by `SettlementSource.key` (the UI breakdown). */
+  byKey: Record<string, number>;
+}
+
+/**
+ * Story 21.6 AC2 — the stay-checkout drawer's combined view: one unsettled
+ * total and one settle action across every `SettlementSource` (today: F&B
+ * room-charge orders + event-booking room-charge bookings). Never
+ * re-implements either domain's eligibility rule — it only orchestrates the
+ * sources behind the shared interface, so there is exactly one
+ * implementation of "which fnb orders are unsettled" / "which event
+ * bookings are unsettled", each owned by its own module.
+ */
+@Injectable()
+export class StaySettlementService {
+  constructor(
+    @Inject(SETTLEMENT_SOURCES)
+    private readonly sources: SettlementSource[],
+    private readonly stays: TenantStaysService,
+    private readonly auditLogs: AuditLogsService,
+  ) {}
+
+  async unsettledTotal(
+    user: TenantUser,
+    stayId: string,
+  ): Promise<StayUnsettledView> {
+    // Cross-tenant chokepoint: unknown/foreign stays 404 here, before any
+    // source is queried.
+    await this.stays.findStayInHotel(user.hotelId, stayId);
+
+    const perSource = await Promise.all(
+      this.sources.map((source) => source.findUnsettled(user.hotelId, stayId)),
+    );
+
+    const byKey: Record<string, number> = {};
+    let total = 0;
+    this.sources.forEach((source, i) => {
+      const subtotal = sumLines(perSource[i]);
+      byKey[source.key] = subtotal;
+      total += subtotal;
+    });
+
+    return { total: round2(total), byKey };
+  }
+
+  async settle(
+    user: TenantUser,
+    stayId: string,
+  ): Promise<{ settled: number; unsettledTotal: number }> {
+    await this.stays.findStayInHotel(user.hotelId, stayId);
+
+    const perSource = await Promise.all(
+      this.sources.map((source) =>
+        source.markSettled(user.hotelId, stayId, user.id),
+      ),
+    );
+
+    const breakdown: Record<string, { count: number; total: number }> = {};
+    let settled = 0;
+    this.sources.forEach((source, i) => {
+      const lines = perSource[i];
+      breakdown[source.key] = { count: lines.length, total: sumLines(lines) };
+      settled += lines.length;
+    });
+
+    // One audit entry per settle() call — never one per source, so the
+    // combined checkout action reads as a single event in the log.
+    await this.auditLogs.log({
+      action: 'stay_settlement.settled',
+      entityType: 'stay',
+      entityId: stayId,
+      actorId: user.id,
+      metadata: { actorType: 'tenant_user', hotelId: user.hotelId, breakdown },
+    });
+
+    return { settled, unsettledTotal: 0 };
+  }
+}

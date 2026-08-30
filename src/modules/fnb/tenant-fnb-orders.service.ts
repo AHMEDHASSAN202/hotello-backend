@@ -5,7 +5,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, LessThan, MoreThan, Repository } from 'typeorm';
+import { In, LessThan, MoreThan, Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
 import { TranslationMap } from '../requests/requests.constants';
@@ -19,6 +19,7 @@ import {
   ListTenantFnbOrdersQueryDto,
   SettleFnbOrdersDto,
 } from './dto/tenant-fnb-orders.dto';
+import { FnbSettlementSource } from './fnb-settlement-source';
 import { FnbOrderLine } from './fnb-order-line.entity';
 import { FnbOrder } from './fnb-order.entity';
 import {
@@ -91,7 +92,10 @@ const localized = (map: TranslationMap | null, lang: 'en' | 'ar'): string =>
  * status filter so finalized rows flow out; counts in one shape; the
  * options-endpoint assignment pattern) with the F&B transition map enforced
  * server-side. Lines are batch-loaded, never joined into pagination
- * (recorded two-pass pagination ruling).
+ * (recorded two-pass pagination ruling). Story 21.6 AC2 — the settlement
+ * query/mutation itself now lives in `FnbSettlementSource`; this service
+ * delegates to it and keeps its own audit entry + response shape so the
+ * public routes stay byte-identical.
  */
 @Injectable()
 export class TenantFnbOrdersService {
@@ -106,6 +110,7 @@ export class TenantFnbOrdersService {
     private readonly hotelsRepo: Repository<Hotel>,
     private readonly stays: TenantStaysService,
     private readonly auditLogs: AuditLogsService,
+    private readonly fnbSettlement: FnbSettlementSource,
   ) {}
 
   // ------------------------------------------------------------------
@@ -361,27 +366,38 @@ export class TenantFnbOrdersService {
   // Stay orders + settlement (16.8)
   // ------------------------------------------------------------------
 
-  /** The stay drawer's list + the "Unsettled room charges" line (AC1). */
+  /**
+   * The stay drawer's list + the "Unsettled room charges" line (AC1). The
+   * unsettled total delegates to `FnbSettlementSource` — the single
+   * implementation of fnb settlement eligibility, shared with
+   * `StaySettlementService`'s combined checkout total (Story 21.6 AC2).
+   */
   async stayOrders(
     user: TenantUser,
     stayId: string,
   ): Promise<{ data: TenantFnbOrderView[]; unsettledTotal: number }> {
     // Cross-tenant chokepoint: unknown/foreign stays 404 here.
     await this.stays.findStayInHotel(user.hotelId, stayId);
-    const orders = await this.ordersRepo.find({
-      where: { hotelId: user.hotelId, stayId },
-      order: { createdAt: 'DESC' },
-    });
+    const [orders, unsettled] = await Promise.all([
+      this.ordersRepo.find({
+        where: { hotelId: user.hotelId, stayId },
+        order: { createdAt: 'DESC' },
+      }),
+      this.fnbSettlement.findUnsettled(user.hotelId, stayId),
+    ]);
     return {
       data: await this.toViews(orders),
-      unsettledTotal: this.unsettledTotal(orders),
+      unsettledTotal: this.roundedSum(unsettled),
     };
   }
 
   /**
    * AC2 — bulk "mark as settled" at checkout. Idempotent: only delivered
    * room-charge orders with no settledAt move; a second call settles zero.
-   * Auto-checkout never calls this — unsettled charges stay visible.
+   * Auto-checkout never calls this — unsettled charges stay visible. The
+   * actual query/mutation lives in `FnbSettlementSource.markSettled` (this
+   * route's optional `orderIds` subset is an fnb-only extra on top of it);
+   * this method keeps this route's own audit entry + response shape.
    */
   async settleStayOrders(
     user: TenantUser,
@@ -389,22 +405,13 @@ export class TenantFnbOrdersService {
     dto: SettleFnbOrdersDto,
   ): Promise<{ settled: number; unsettledTotal: number }> {
     await this.stays.findStayInHotel(user.hotelId, stayId);
-    const where: Record<string, unknown> = {
-      hotelId: user.hotelId,
+    const settledLines = await this.fnbSettlement.markSettled(
+      user.hotelId,
       stayId,
-      status: 'delivered' as FnbOrderStatus,
-      paymentMethod: 'room_charge',
-      settledAt: IsNull(),
-    };
-    if (dto.orderIds?.length) where.id = In(dto.orderIds);
-    const toSettle = await this.ordersRepo.find({ where });
-    if (toSettle.length > 0) {
-      const now = new Date();
-      for (const order of toSettle) {
-        order.settledAt = now;
-        order.settledById = user.id;
-      }
-      await this.ordersRepo.save(toSettle);
+      user.id,
+      dto.orderIds,
+    );
+    if (settledLines.length > 0) {
       await this.auditLogs.log({
         action: 'fnb_orders.settled',
         entityType: 'stay',
@@ -413,32 +420,24 @@ export class TenantFnbOrdersService {
         metadata: {
           actorType: 'tenant_user',
           hotelId: user.hotelId,
-          orderIds: toSettle.map((o) => o.id),
-          total: toSettle.reduce((sum, o) => sum + o.totalAmount, 0),
+          orderIds: settledLines.map((l) => l.id),
+          total: settledLines.reduce((sum, l) => sum + l.totalAmount, 0),
         },
       });
     }
-    const remaining = await this.ordersRepo.find({
-      where: { hotelId: user.hotelId, stayId },
-    });
+    const remaining = await this.fnbSettlement.findUnsettled(
+      user.hotelId,
+      stayId,
+    );
     return {
-      settled: toSettle.length,
-      unsettledTotal: this.unsettledTotal(remaining),
+      settled: settledLines.length,
+      unsettledTotal: this.roundedSum(remaining),
     };
   }
 
-  private unsettledTotal(orders: FnbOrder[]): number {
+  private roundedSum(lines: { totalAmount: number }[]): number {
     return (
-      Math.round(
-        orders
-          .filter(
-            (o) =>
-              o.status === 'delivered' &&
-              o.paymentMethod === 'room_charge' &&
-              !o.settledAt,
-          )
-          .reduce((sum, o) => sum + o.totalAmount, 0) * 100,
-      ) / 100
+      Math.round(lines.reduce((sum, l) => sum + l.totalAmount, 0) * 100) / 100
     );
   }
 
