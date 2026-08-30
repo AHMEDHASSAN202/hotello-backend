@@ -10,6 +10,7 @@ import { Stay } from '../tenant-stays/stay.entity';
 import { EventBooking } from './event-booking.entity';
 import { Event } from './event.entity';
 import { EventPhotoService } from './event-photo.service';
+import { EventSchedulerService } from './event-scheduler.service';
 import { EventSettlementSource } from './event-settlement-source';
 import { GuestEventsController } from './guest-events.controller';
 import { GuestEventsService } from './guest-events.service';
@@ -31,6 +32,8 @@ import { TenantEventsService } from './tenant-events.service';
  * `EventBooking` doesn't snapshot those fields. Task 9: `EventSettlementSource`
  * exported for `StaySettlementModule` — the events side of the shared
  * `SettlementSource` interface (Story 21.6 AC2), mirroring `FnbSettlementSource`.
+ * Task 10: `EventSchedulerService` — the 5-minute completion-tick job
+ * (Story 21.2 AC2), the Announcements/Housekeeping cron pattern.
  */
 @Module({
   imports: [
@@ -51,6 +54,7 @@ import { TenantEventsService } from './tenant-events.service';
     TenantEventAttendeesService,
     GuestEventsService,
     EventSettlementSource,
+    EventSchedulerService,
   ],
   exports: [EventSettlementSource],
 })
