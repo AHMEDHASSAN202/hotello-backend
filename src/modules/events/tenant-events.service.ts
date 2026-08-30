@@ -13,6 +13,7 @@ import { TenantAnnouncementsService } from '../announcements/tenant-announcement
 import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
 import { Hotel } from '../hotels/hotel.entity';
 import { TranslationMap } from '../requests/requests.constants';
+import { TenantAccessService } from '../tenant-access/tenant-access.service';
 import { Stay } from '../tenant-stays/stay.entity';
 import { StayType } from '../tenant-stays/stays.constants';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
@@ -147,7 +148,27 @@ export class TenantEventsService {
     private readonly auditLogs: AuditLogsService,
     private readonly dataSource: DataSource,
     private readonly announcements: TenantAnnouncementsService,
+    private readonly access: TenantAccessService,
   ) {}
+
+  /**
+   * The publish/cancel notices call `TenantAnnouncementsService` directly,
+   * bypassing the `@RequireModule('announcements')` guard that gates the
+   * HTTP layer — so a hotel whose plan has `events` but not `announcements`
+   * would accumulate announcement rows no guest or staff surface can show.
+   * Same source of truth as the guard (`TenantAccessService.enabledModules`);
+   * a disabled module just means "no notice", never a failed publish/cancel.
+   */
+  private async announcementsEnabled(hotelId: string): Promise<boolean> {
+    const state = await this.access.getAccessState(hotelId);
+    const enabled = state.enabledModules.includes('announcements');
+    if (!enabled) {
+      this.logger.log(
+        `Skipping event announcement for hotel ${hotelId} — the announcements module is not in its plan`,
+      );
+    }
+    return enabled;
+  }
 
   async create(user: TenantUser, dto: CreateEventDto): Promise<EventManageView> {
     const titles = mergeTitles(dto);
@@ -328,18 +349,22 @@ export class TenantEventsService {
       // final-review C2 — a notification failure must never fail the
       // emitting business operation (repo law). The event is already
       // committed as published by this point; don't let the announcement
-      // pipeline turn that success into an HTTP error.
-      const content = composePublishAnnouncement(event);
+      // pipeline turn that success into an HTTP error. Composition sits
+      // INSIDE the try for the same reason (cancel()'s precedent) — a
+      // future compose throw must not fail an already-committed publish.
       try {
-        await this.announcements.create(
-          user,
-          {
-            ...content,
-            action: 'send',
-            audience: {},
-          } as CreateAnnouncementDto,
-          { source: 'event_publish', eventId: event.id },
-        );
+        if (await this.announcementsEnabled(user.hotelId)) {
+          const content = composePublishAnnouncement(event);
+          await this.announcements.create(
+            user,
+            {
+              ...content,
+              action: 'send',
+              audience: {},
+            } as CreateAnnouncementDto,
+            { source: 'event_publish', eventId: event.id },
+          );
+        }
       } catch (err) {
         this.logger.error(
           `Failed to send event-publish announcement for event ${event.id}: ${err instanceof Error ? err.message : err}`,
@@ -442,7 +467,10 @@ export class TenantEventsService {
             ).map((s) => s.id)
           : [];
 
-        if (activeStayIds.length > 0) {
+        if (
+          activeStayIds.length > 0 &&
+          (await this.announcementsEnabled(user.hotelId))
+        ) {
           const content = composeCancelAnnouncement(event, dto.reason);
           await this.announcements.create(
             user,
@@ -451,7 +479,16 @@ export class TenantEventsService {
               action: 'send',
               audience: { stayIds: activeStayIds },
             } as CreateAnnouncementDto,
-            { source: 'event_cancel', eventId: event.id },
+            {
+              source: 'event_cancel',
+              eventId: event.id,
+              // A guest can check out between the filter above and
+              // `resolveAudience()`'s own re-validation; without this flag
+              // that race 400s and drops the notice for EVERY remaining
+              // resident attendee. Internal caller → drop the stragglers,
+              // notify the rest.
+              dropUnresolvedStays: true,
+            },
           );
         }
       } catch (err) {
@@ -573,11 +610,14 @@ export class TenantEventsService {
     if (event.status === 'draft') return;
 
     if (event.status === 'published') {
+      // Capacity on a published event may only go UP or to `null`
+      // (unlimited). A currently-unlimited event is NOT a free pass:
+      // null → a finite number is a reduction against an unbounded booked
+      // count and can land below the seats already sold, so it 409s too.
       const capacitySafe =
         dto.capacity === undefined ||
         dto.capacity === null ||
-        event.capacity === null ||
-        dto.capacity >= event.capacity;
+        (event.capacity !== null && dto.capacity >= event.capacity);
       const touchesRestricted =
         dto.startAtLocal !== undefined ||
         dto.endAtLocal !== undefined ||

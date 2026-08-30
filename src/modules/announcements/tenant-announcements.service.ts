@@ -36,6 +36,21 @@ import {
 } from './dto/announcements.dto';
 
 /**
+ * Options only internal cross-module callers pass (Events' publish/cancel).
+ * `dropUnresolvedStays` relaxes the stay-id validation from "all-or-400" to
+ * "notify whoever is still here": a guest checking out between the caller's
+ * own active-stay filter and `resolveAudience()`'s re-validation must not
+ * cost the remaining residents their notice. The public
+ * `POST /tenant/announcements` route never sets it — a manual audience with
+ * a stale stay id still 400s, so the composer sees its mistake.
+ */
+export interface InternalCreateOptions {
+  source?: AnnouncementSource;
+  eventId?: string;
+  dropUnresolvedStays?: boolean;
+}
+
+/**
  * Epic 19, Stories 19.1–19.3 — compose & target, publish/schedule/retract,
  * sent history + read stats. The audience is a FILTER (19.1 AC3): nothing is
  * snapshotted, so `matchesAudience` against *current* active stays answers
@@ -76,17 +91,35 @@ export class TenantAnnouncementsService {
   async create(
     user: TenantUser,
     dto: CreateAnnouncementDto,
+  ): Promise<TenantAnnouncementView>;
+  async create(
+    user: TenantUser,
+    dto: CreateAnnouncementDto,
+    internal: InternalCreateOptions,
+  ): Promise<TenantAnnouncementView | null>;
+  async create(
+    user: TenantUser,
+    dto: CreateAnnouncementDto,
     /**
      * 21.3 groundwork — set only by internal cross-module callers (Events'
      * publish/cancel, Task 6), never by the public `POST /tenant/announcements`
      * route: the field isn't on `CreateAnnouncementDto`, so a tenant user has
      * no way to self-badge a manual announcement as "auto · event".
      */
-    internal?: { source?: AnnouncementSource; eventId?: string },
-  ): Promise<TenantAnnouncementView> {
+    internal?: InternalCreateOptions,
+  ): Promise<TenantAnnouncementView | null> {
     const titles = mergeTitles(dto);
     const bodies = mergeBodies(dto);
-    const audience = await this.resolveAudience(user.hotelId, dto.audience);
+    const audience = await this.resolveAudience(user.hotelId, dto.audience, {
+      dropUnresolvedStays: internal?.dropUnresolvedStays,
+    });
+    if (audience === null) {
+      // Every targeted stay went inactive between the caller's own check and
+      // this one — there is nobody left to notify, so creating an
+      // unreachable row would be noise. Not an error: the caller's business
+      // operation (the event cancel) already committed.
+      return null;
+    }
     const infoEntryId = await this.resolveInfoEntry(
       user.hotelId,
       dto.infoEntryId ?? null,
@@ -359,17 +392,39 @@ export class TenantAnnouncementsService {
   private async resolveAudience(
     hotelId: string,
     dto?: AudienceFilterDto,
-  ): Promise<AudienceFilter> {
+  ): Promise<AudienceFilter>;
+  private async resolveAudience(
+    hotelId: string,
+    dto: AudienceFilterDto | undefined,
+    opts: { dropUnresolvedStays?: boolean },
+  ): Promise<AudienceFilter | null>;
+  /**
+   * Strict by default: every targeted stay id must resolve to an active stay
+   * of this hotel or the whole call 400s (the manual/public path — a typo in
+   * the audience must be visible). With `dropUnresolvedStays`, unresolvable
+   * ids are filtered out instead, and `null` is returned when that leaves
+   * nobody — never an empty `stayIds`, which would silently mean "everyone".
+   */
+  private async resolveAudience(
+    hotelId: string,
+    dto?: AudienceFilterDto,
+    opts: { dropUnresolvedStays?: boolean } = {},
+  ): Promise<AudienceFilter | null> {
     const filter = this.normalizeAudience(dto);
+    const drop = opts.dropUnresolvedStays === true;
+
     if (filter.stayId) {
       const stay = await this.staysRepo.findOne({
         where: { id: filter.stayId, hotelId, status: 'active' },
       });
       if (!stay) {
-        throw new BadRequestException({
-          code: 'ANNOUNCEMENT_STAY_NOT_FOUND',
-          message: 'The targeted guest stay was not found or is not active',
-        });
+        if (!drop) {
+          throw new BadRequestException({
+            code: 'ANNOUNCEMENT_STAY_NOT_FOUND',
+            message: 'The targeted guest stay was not found or is not active',
+          });
+        }
+        return null;
       }
     }
     if (filter.stayIds?.length) {
@@ -377,11 +432,17 @@ export class TenantAnnouncementsService {
         where: { id: In(filter.stayIds), hotelId, status: 'active' },
       });
       if (stays.length !== filter.stayIds.length) {
-        throw new BadRequestException({
-          code: 'ANNOUNCEMENT_STAY_NOT_FOUND',
-          message:
-            'One or more targeted guest stays were not found or are not active',
-        });
+        if (!drop) {
+          throw new BadRequestException({
+            code: 'ANNOUNCEMENT_STAY_NOT_FOUND',
+            message:
+              'One or more targeted guest stays were not found or are not active',
+          });
+        }
+        if (stays.length === 0) return null;
+        // Keep the caller's ordering, minus whoever left.
+        const stillActive = new Set(stays.map((s) => s.id));
+        filter.stayIds = filter.stayIds.filter((id) => stillActive.has(id));
       }
     }
     return filter;

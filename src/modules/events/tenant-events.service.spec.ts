@@ -6,7 +6,9 @@ import { TenantAnnouncementsService } from '../announcements/tenant-announcement
 import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
 import { Hotel } from '../hotels/hotel.entity';
 import { Stay } from '../tenant-stays/stay.entity';
+import { TenantAccessService } from '../tenant-access/tenant-access.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
+import * as announceUtil from './event-announce.util';
 import { CancelEventDto } from './dto/cancel-event.dto';
 import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
@@ -72,6 +74,7 @@ describe('TenantEventsService (Story 21.2)', () => {
   let manager: { getRepository: jest.Mock };
   let dataSource: { transaction: jest.Mock };
   let announcements: { create: jest.Mock };
+  let access: { getAccessState: jest.Mock };
 
   beforeEach(async () => {
     bookingsQb = {};
@@ -125,6 +128,16 @@ describe('TenantEventsService (Story 21.2)', () => {
       transaction: jest.fn(async (cb: (m: unknown) => unknown) => cb(manager)),
     };
     announcements = { create: jest.fn().mockResolvedValue({ id: 'ann-1' }) };
+    // Default plan has both modules; the announcements-disabled tests
+    // override this (final-review — the internal announcements.create()
+    // call bypasses the @RequireModule HTTP guard).
+    access = {
+      getAccessState: jest.fn().mockResolvedValue({
+        hotelStatus: 'active',
+        readOnly: false,
+        enabledModules: ['events', 'announcements'],
+      }),
+    };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -137,6 +150,7 @@ describe('TenantEventsService (Story 21.2)', () => {
         { provide: AuditLogsService, useValue: auditLogs },
         { provide: DataSource, useValue: dataSource },
         { provide: TenantAnnouncementsService, useValue: announcements },
+        { provide: TenantAccessService, useValue: access },
       ],
     }).compile();
     service = moduleRef.get(TenantEventsService);
@@ -262,6 +276,48 @@ describe('TenantEventsService (Story 21.2)', () => {
       expect(result.capacity).toBeNull();
     });
 
+    // final-review — the safe-edit hole: an unlimited published event
+    // (capacity === null) used to accept ANY new capacity, including one
+    // below the seats already sold. Only null → null and finite increases
+    // are safe.
+    it('published: unlimited (null) capacity → a finite number is rejected with EVENT_NOT_SAFE_EDIT', async () => {
+      eventsRepo.findOne.mockResolvedValue(
+        makeEvent({ status: 'published', capacity: null }),
+      );
+      await expect(
+        service.update(actor, 'event-1', { capacity: 5 }),
+      ).rejects.toMatchObject({ response: { code: 'EVENT_NOT_SAFE_EDIT' } });
+      expect(eventsRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('published: unlimited (null) capacity → null stays allowed (a no-op edit)', async () => {
+      eventsRepo.findOne.mockResolvedValue(
+        makeEvent({ status: 'published', capacity: null }),
+      );
+      const result = await service.update(actor, 'event-1', {
+        capacity: null,
+        descriptionEn: 'Updated description',
+        descriptionAr: 'وصف محدث',
+      });
+      expect(result.capacity).toBeNull();
+    });
+
+    it('published: a finite capacity increase is allowed, a decrease is not', async () => {
+      eventsRepo.findOne.mockResolvedValue(
+        makeEvent({ status: 'published', capacity: 10 }),
+      );
+      await expect(
+        service.update(actor, 'event-1', { capacity: 11 }),
+      ).resolves.toMatchObject({ capacity: 11 });
+
+      eventsRepo.findOne.mockResolvedValue(
+        makeEvent({ status: 'published', capacity: 10 }),
+      );
+      await expect(
+        service.update(actor, 'event-1', { capacity: 9 }),
+      ).rejects.toMatchObject({ response: { code: 'EVENT_NOT_SAFE_EDIT' } });
+    });
+
     it('is a no-op (no save/audit) when the dto changes nothing', async () => {
       eventsRepo.findOne.mockResolvedValue(makeEvent({ status: 'draft' }));
       await service.update(actor, 'event-1', {});
@@ -324,6 +380,50 @@ describe('TenantEventsService (Story 21.2)', () => {
         response: { code: 'EVENT_NOT_PUBLISHABLE' },
       });
       expect(announcements.create).not.toHaveBeenCalled();
+    });
+
+    // final-review — the internal announcements.create() call bypasses the
+    // @RequireModule('announcements') guard that only gates the HTTP layer:
+    // a hotel on a plan with `events` but not `announcements` would collect
+    // announcement rows nothing renders. The publish itself still succeeds.
+    it('announcements module not in the plan → publishes with zero announcements created', async () => {
+      access.getAccessState.mockResolvedValue({
+        hotelStatus: 'active',
+        readOnly: false,
+        enabledModules: ['events'],
+      });
+      eventsRepo.findOne.mockResolvedValue(futureDraft());
+
+      const result = await service.publish(actor, 'event-1', {});
+
+      expect(result.status).toBe('published');
+      expect(eventsRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'published' }),
+      );
+      expect(announcements.create).not.toHaveBeenCalled();
+    });
+
+    // final-review — composePublishAnnouncement() used to sit OUTSIDE the
+    // try/catch (cancel() already had it inside): a throw there would have
+    // turned an already-committed publish into a 500.
+    it('a compose failure is logged but does not fail the publish (already-committed)', async () => {
+      eventsRepo.findOne.mockResolvedValue(futureDraft());
+      const composeSpy = jest
+        .spyOn(announceUtil, 'composePublishAnnouncement')
+        .mockImplementation(() => {
+          throw new Error('compose blew up');
+        });
+      const loggerSpy = jest
+        .spyOn((service as unknown as { logger: { error: (msg: string) => void } }).logger, 'error')
+        .mockImplementation(() => undefined);
+
+      const result = await service.publish(actor, 'event-1', {});
+
+      expect(result.status).toBe('published');
+      expect(announcements.create).not.toHaveBeenCalled();
+      expect(loggerSpy).toHaveBeenCalledWith(expect.stringContaining('event-1'));
+      composeSpy.mockRestore();
+      loggerSpy.mockRestore();
     });
 
     it('an announcement-pipeline failure is logged but does not fail the publish (already-committed)', async () => {
@@ -395,8 +495,50 @@ describe('TenantEventsService (Story 21.2)', () => {
           action: 'send',
           audience: { stayIds: ['stay-1', 'stay-2'] },
         }),
-        { source: 'event_cancel', eventId: 'event-1' },
+        {
+          source: 'event_cancel',
+          eventId: 'event-1',
+          dropUnresolvedStays: true,
+        },
       );
+    });
+
+    // final-review — the checkout race between cancel()'s own active-stay
+    // filter and resolveAudience()'s re-validation: a guest leaving in that
+    // window used to 400 the whole notice, silently dropping it for every
+    // guest still in the hotel. The flag makes the announcements side filter
+    // instead of throw.
+    it('passes dropUnresolvedStays so a checkout mid-cancel cannot drop the notice for the remaining guests', async () => {
+      managerEvents.findOne.mockResolvedValue(makeEvent({ status: 'published' }));
+      managerBookings.find.mockResolvedValue([
+        makeBooking({ id: 'b1', stayId: 'stay-1' }),
+        makeBooking({ id: 'b2', stayId: 'stay-2' }),
+      ]);
+
+      await service.cancel(actor, 'event-1', { reason: 'Storm warning' });
+
+      expect(announcements.create).toHaveBeenCalledWith(
+        actor,
+        expect.anything(),
+        expect.objectContaining({ dropUnresolvedStays: true }),
+      );
+    });
+
+    it('announcements module not in the plan → cancel succeeds with zero announcements created', async () => {
+      access.getAccessState.mockResolvedValue({
+        hotelStatus: 'active',
+        readOnly: false,
+        enabledModules: ['events'],
+      });
+      managerEvents.findOne.mockResolvedValue(makeEvent({ status: 'published' }));
+      const bookings = [makeBooking({ id: 'b1', stayId: 'stay-1' })];
+      managerBookings.find.mockResolvedValue(bookings);
+
+      const result = await service.cancel(actor, 'event-1', { reason: 'Storm warning' });
+
+      expect(result.status).toBe('cancelled');
+      expect(bookings[0].status).toBe('cancelled');
+      expect(announcements.create).not.toHaveBeenCalled();
     });
 
     it('zero active bookings → no announcement created', async () => {
@@ -434,7 +576,7 @@ describe('TenantEventsService (Story 21.2)', () => {
       expect(announcements.create).toHaveBeenCalledWith(
         actor,
         expect.objectContaining({ audience: { stayIds: ['stay-active'] } }),
-        { source: 'event_cancel', eventId: 'event-1' },
+        expect.objectContaining({ source: 'event_cancel', eventId: 'event-1' }),
       );
     });
 

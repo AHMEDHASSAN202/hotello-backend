@@ -271,6 +271,94 @@ describe('TenantAnnouncementsService', () => {
       );
     });
 
+    // final-review — the checkout race: Events' cancel() filters its
+    // attendee stays to `active`, then this method re-validates them. A
+    // guest checking out in between made resolveAudience 400 and the whole
+    // cancellation notice was dropped for the guests still in the hotel.
+    // The internal `dropUnresolvedStays` flag turns that all-or-nothing
+    // validation into "notify whoever is still here".
+    describe('internal dropUnresolvedStays (event-cancel race)', () => {
+      it('drops the stays that went inactive and still notifies the rest', async () => {
+        staysRepo.find.mockResolvedValueOnce(
+          ACTIVE_STAYS.filter((s) => s.id === 'stay-1'),
+        );
+
+        const view = await service.create(
+          actor,
+          {
+            ...CONTENT,
+            action: 'send',
+            audience: { stayIds: ['stay-1', 'stay-checked-out'] },
+          },
+          {
+            source: 'event_cancel',
+            eventId: 'event-1',
+            dropUnresolvedStays: true,
+          },
+        );
+
+        expect(view).not.toBeNull();
+        expect(repo.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            audience: { stayIds: ['stay-1'] },
+            source: 'event_cancel',
+            eventId: 'event-1',
+          }),
+        );
+      });
+
+      it('every targeted stay gone → no announcement row is created (never an empty stayIds, which would mean everyone)', async () => {
+        staysRepo.find.mockResolvedValueOnce([]);
+
+        const view = await service.create(
+          actor,
+          {
+            ...CONTENT,
+            action: 'send',
+            audience: { stayIds: ['stay-gone-1', 'stay-gone-2'] },
+          },
+          { source: 'event_cancel', dropUnresolvedStays: true },
+        );
+
+        expect(view).toBeNull();
+        expect(repo.create).not.toHaveBeenCalled();
+        expect(repo.save).not.toHaveBeenCalled();
+        expect(auditLogs.log).not.toHaveBeenCalled();
+      });
+
+      it('a single-guest stayId that went inactive → skipped, not 400', async () => {
+        staysRepo.findOne.mockResolvedValue(null);
+
+        const view = await service.create(
+          actor,
+          { ...CONTENT, action: 'send', audience: { stayId: 'stay-gone' } },
+          { dropUnresolvedStays: true },
+        );
+
+        expect(view).toBeNull();
+        expect(repo.create).not.toHaveBeenCalled();
+      });
+
+      it('the internal source badge alone does NOT relax validation — only the explicit flag does', async () => {
+        staysRepo.find.mockResolvedValueOnce(
+          ACTIVE_STAYS.filter((s) => s.id === 'stay-1'),
+        );
+        await expect(
+          service.create(
+            actor,
+            {
+              ...CONTENT,
+              action: 'send',
+              audience: { stayIds: ['stay-1', 'stay-gone'] },
+            },
+            { source: 'event_cancel', eventId: 'event-1' },
+          ),
+        ).rejects.toMatchObject({
+          response: { code: 'ANNOUNCEMENT_STAY_NOT_FOUND' },
+        });
+      });
+    });
+
     it('info entry link must exist, be active and belong to this hotel', async () => {
       await expect(
         service.create(actor, {
