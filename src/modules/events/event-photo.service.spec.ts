@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
@@ -28,6 +29,7 @@ const makeEvent = (o: Record<string, unknown> = {}) =>
     hotelId: 'hotel-1',
     titles: { ar: 'حفلة', en: 'Party' },
     photoKeys: null,
+    status: 'draft',
     ...o,
   }) as unknown as Event;
 
@@ -35,7 +37,11 @@ describe('EventPhotoService (Story 21.2 photo endpoints)', () => {
   let service: EventPhotoService;
   let eventsRepo: { save: jest.Mock };
   let storage: { put: jest.Mock; delete: jest.Mock };
-  let events: { findEvent: jest.Mock; toManageView: jest.Mock };
+  let events: {
+    findEvent: jest.Mock;
+    toManageView: jest.Mock;
+    assertPhotoEditable: jest.Mock;
+  };
   let auditLogs: { log: jest.Mock };
 
   beforeEach(async () => {
@@ -44,6 +50,16 @@ describe('EventPhotoService (Story 21.2 photo endpoints)', () => {
     events = {
       findEvent: jest.fn().mockResolvedValue(makeEvent()),
       toManageView: jest.fn((e) => ({ id: e.id })),
+      // Mirrors the real TenantEventsService.assertPhotoEditable (final
+      // review I2) — allowed on draft/published, locked on terminal statuses.
+      assertPhotoEditable: jest.fn((event: { status: string }) => {
+        if (event.status === 'completed' || event.status === 'cancelled') {
+          throw new ConflictException({
+            code: 'EVENT_NOT_SAFE_EDIT',
+            message: 'This event is live or finished.',
+          });
+        }
+      }),
     };
     auditLogs = { log: jest.fn() };
 
@@ -115,5 +131,59 @@ describe('EventPhotoService (Story 21.2 photo endpoints)', () => {
     await service.removePhoto(actor, 'event-1');
     expect(eventsRepo.save).not.toHaveBeenCalled();
     expect(auditLogs.log).not.toHaveBeenCalled();
+  });
+
+  describe('safe-edit matrix on photo endpoints (final-review I2)', () => {
+    it.each(['draft', 'published'] as const)(
+      'setPhoto still succeeds on a %s event',
+      async (status) => {
+        events.findEvent.mockResolvedValue(makeEvent({ status }));
+        await expect(service.setPhoto(actor, 'event-1', file())).resolves.toBeDefined();
+        expect(events.assertPhotoEditable).toHaveBeenCalledWith(
+          expect.objectContaining({ status }),
+        );
+        expect(eventsRepo.save).toHaveBeenCalled();
+      },
+    );
+
+    it.each(['draft', 'published'] as const)(
+      'removePhoto still succeeds on a %s event',
+      async (status) => {
+        events.findEvent.mockResolvedValue(
+          makeEvent({ status, photoKeys: { thumb: 't', detail: 'd' } }),
+        );
+        await expect(service.removePhoto(actor, 'event-1')).resolves.toBeDefined();
+        expect(events.assertPhotoEditable).toHaveBeenCalledWith(
+          expect.objectContaining({ status }),
+        );
+        expect(eventsRepo.save).toHaveBeenCalled();
+      },
+    );
+
+    it.each(['completed', 'cancelled'] as const)(
+      'setPhoto is rejected with EVENT_NOT_SAFE_EDIT on a %s event',
+      async (status) => {
+        events.findEvent.mockResolvedValue(makeEvent({ status }));
+        await expect(
+          service.setPhoto(actor, 'event-1', file()),
+        ).rejects.toMatchObject({ response: { code: 'EVENT_NOT_SAFE_EDIT' } });
+        expect(storage.put).not.toHaveBeenCalled();
+        expect(eventsRepo.save).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['completed', 'cancelled'] as const)(
+      'removePhoto is rejected with EVENT_NOT_SAFE_EDIT on a %s event',
+      async (status) => {
+        events.findEvent.mockResolvedValue(
+          makeEvent({ status, photoKeys: { thumb: 't', detail: 'd' } }),
+        );
+        await expect(service.removePhoto(actor, 'event-1')).rejects.toMatchObject({
+          response: { code: 'EVENT_NOT_SAFE_EDIT' },
+        });
+        expect(eventsRepo.save).not.toHaveBeenCalled();
+        expect(storage.delete).not.toHaveBeenCalled();
+      },
+    );
   });
 });

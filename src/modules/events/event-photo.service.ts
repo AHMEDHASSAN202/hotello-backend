@@ -29,14 +29,10 @@ interface UploadedPhoto {
  * immutable uuid keys under `events/`, storage-driver backed. Mirrors
  * `FnbPhotoService`/`HotelInfoPhotoService`.
  *
- * Unlike `TenantEventsService.update()`, this service does NOT check
- * `event.status` — it doesn't call `assertEditable`, so photo changes are
- * currently allowed at any status, including `completed`/`cancelled`. This
- * task only ever produces `draft` events, so the gap is unreachable today;
- * whether photo edits should lock on completed/cancelled events (the AC2
- * safe-edit matrix says published allows photo edits, but is silent on the
- * terminal statuses) is an explicit decision left for Task 6, which
- * introduces those transitions.
+ * Photo changes enforce the same safe-edit matrix as `update()`, via
+ * `TenantEventsService.assertPhotoEditable()`: allowed on `draft` and
+ * `published`, rejected with 409 `EVENT_NOT_SAFE_EDIT` on the terminal
+ * `completed`/`cancelled` statuses (final-review I2).
  */
 @Injectable()
 export class EventPhotoService {
@@ -60,6 +56,7 @@ export class EventPhotoService {
       });
     }
     const event = await this.events.findEvent(user.hotelId, eventId);
+    this.events.assertPhotoEditable(event);
 
     let stored: Record<string, string>;
     try {
@@ -99,6 +96,7 @@ export class EventPhotoService {
 
   async removePhoto(user: TenantUser, eventId: string): Promise<EventManageView> {
     const event = await this.events.findEvent(user.hotelId, eventId);
+    this.events.assertPhotoEditable(event);
     const old = event.photoKeys;
     if (old) {
       event.photoKeys = null;
