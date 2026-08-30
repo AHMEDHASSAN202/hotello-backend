@@ -157,11 +157,16 @@ export class GuestEventsService {
    * its INSERT, so it always sees the first booking's seats already
    * counted — real Postgres row-level serialization, not an
    * application-level check-then-act race.
+   *
+   * `now` is injectable (the `EventSchedulerService.transition()`
+   * convention) so the hotel-local booking window is testable without
+   * touching the process clock.
    */
   async book(
     stay: Stay,
     eventId: string,
     dto: BookEventDto,
+    now: Date = new Date(),
   ): Promise<GuestEventBookingView> {
     await this.assertEventsAvailable(stay.hotelId);
 
@@ -180,6 +185,21 @@ export class GuestEventsService {
         throw new ConflictException({
           code: 'EVENT_NOT_BOOKABLE',
           message: 'This event is no longer open for booking',
+        });
+      }
+
+      // Booking closes at the event's start — enforced HERE, on the hotel's
+      // clock, because the client's "already started" guard runs on the
+      // device clock and is not authoritative. Status alone is not enough:
+      // the completion tick only flips `published → completed` at
+      // endAtLocal (or start+3h), leaving a started event bookable in
+      // between. Reuses EVENT_NOT_BOOKABLE — the frontends already translate
+      // it and the guest-facing meaning ("you can't book this") is identical.
+      const nowLocal = hotelLocalStamp(stay.hotel.timezone, now);
+      if (nowLocal >= event.startAtLocal) {
+        throw new ConflictException({
+          code: 'EVENT_NOT_BOOKABLE',
+          message: 'This event has already started',
         });
       }
 
@@ -304,14 +324,26 @@ export class GuestEventsService {
       .filter((b) => this.bookingTab(b, nowLocal) === tab)
       .map((b) => this.toBookingView(b, stay.language));
 
+    // 21.5 AC1 — the home strip announces what's happening NEXT today, so
+    // when a guest holds several bookings for the same day it must be the
+    // earliest-STARTING one. `bookings` is ordered createdAt DESC (booking
+    // order, unrelated to the programme), so sort the qualifying set by its
+    // hotel-local start stamp — lexicographic ordering is chronological for
+    // 'YYYY-MM-DD HH:MM'.
     const today = nowLocal.slice(0, 10);
     const todayBooking =
-      bookings.find(
-        (b) =>
-          b.status === 'booked' &&
-          b.snapshot.startAtLocal.slice(0, 10) === today &&
-          nowLocal < (b.snapshot.endAtLocal ?? addMinutesLocal(b.snapshot.startAtLocal, 180)),
-      ) ?? null;
+      bookings
+        .filter(
+          (b) =>
+            b.status === 'booked' &&
+            b.snapshot.startAtLocal.slice(0, 10) === today &&
+            nowLocal <
+              (b.snapshot.endAtLocal ??
+                addMinutesLocal(b.snapshot.startAtLocal, 180)),
+        )
+        .sort((a, b) =>
+          a.snapshot.startAtLocal.localeCompare(b.snapshot.startAtLocal),
+        )[0] ?? null;
 
     return {
       data,
@@ -325,6 +357,16 @@ export class GuestEventsService {
    * needs to check it against a live count the way `book()` does, so there
    * is nothing for a lock to protect here (the `EventBooking` row itself is
    * the only thing mutated, and a plain `save()` is enough).
+   *
+   * It also deliberately skips `assertEventsAvailable()` — the ruling:
+   * self-cancel is a STATE-REDUCING operation (it releases capacity back to
+   * the hotel and reduces the guest's own payment obligation), so it stays
+   * available under subscription read-only and hotel suspension, where every
+   * state-*adding* guest write (book) is locked out. Trapping a guest in a
+   * booking they can't cancel — and in a room charge they'd still owe —
+   * because the hotel's own subscription lapsed would punish the wrong
+   * party. Module gating is skipped for the same reason: turning `events`
+   * off must not strand existing bookings.
    */
   async cancelOwn(stay: Stay, id: string): Promise<GuestEventBookingView> {
     const booking = await this.bookingsRepo.findOne({
@@ -432,7 +474,13 @@ export class GuestEventsService {
     stay: Stay,
     bookedPartySize: number,
   ): GuestEventCardView {
-    const spotsLeft = event.capacity == null ? null : event.capacity - bookedPartySize;
+    // Clamped at 0: a staff capacity edit (or any future path that lands
+    // bookings above capacity) must never render as "-2 spots left", and
+    // anything at or below zero reads as sold out — the guest-visible
+    // defense behind the tenant-side safe-edit rule.
+    const remaining =
+      event.capacity == null ? null : event.capacity - bookedPartySize;
+    const spotsLeft = remaining == null ? null : Math.max(0, remaining);
     const price = resolveEventPrice(event, stay.stayType as StayType, 1);
     return {
       id: event.id,
@@ -443,7 +491,7 @@ export class GuestEventsService {
       locationText: event.locationText,
       capacity: event.capacity,
       spotsLeft,
-      soldOut: spotsLeft === 0,
+      soldOut: spotsLeft !== null && spotsLeft <= 0,
       price: { included: price.included, unitPrice: price.unitPrice },
       currency: stay.hotel.currency,
     };

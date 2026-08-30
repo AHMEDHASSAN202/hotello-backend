@@ -279,6 +279,37 @@ describe('GuestEventsService (Story 21.4/21.5)', () => {
       expect(result.data[0].price).toEqual({ included: true, unitPrice: 0 });
     });
 
+    // final-review — defense behind the tenant-side safe-edit fix: if an
+    // event ever ends up over-booked (a capacity edit slipping through, a
+    // future import path), the guest must never see "-2 spots left".
+    it('over-booked event: spotsLeft clamps to 0 and the card reads sold out', async () => {
+      eventsRepo.find.mockResolvedValue([makeEvent({ id: 'e1', capacity: 2 })]);
+      bookingsQb.getRawMany.mockResolvedValue([{ eventId: 'e1', total: '5' }]);
+
+      const result = await service.listUpcoming(makeStay());
+
+      expect(result.data[0].spotsLeft).toBe(0);
+      expect(result.data[0].soldOut).toBe(true);
+    });
+
+    it('exactly-full event reads sold out, and a spot still free does not', async () => {
+      eventsRepo.find.mockResolvedValue([
+        makeEvent({ id: 'full', capacity: 2 }),
+        makeEvent({ id: 'open', capacity: 2 }),
+      ]);
+      bookingsQb.getRawMany.mockResolvedValue([
+        { eventId: 'full', total: '2' },
+        { eventId: 'open', total: '1' },
+      ]);
+
+      const result = await service.listUpcoming(makeStay());
+
+      const full = result.data.find((e) => e.id === 'full')!;
+      expect(full).toMatchObject({ spotsLeft: 0, soldOut: true });
+      const open = result.data.find((e) => e.id === 'open')!;
+      expect(open).toMatchObject({ spotsLeft: 1, soldOut: false });
+    });
+
     it('no matching events never calls the batch booked-count query', async () => {
       eventsRepo.find.mockResolvedValue([]);
       await service.listUpcoming(makeStay());
@@ -310,6 +341,19 @@ describe('GuestEventsService (Story 21.4/21.5)', () => {
       eventsRepo.findOne.mockResolvedValue(makeEvent({ status: 'cancelled' }));
       await expect(service.getDetail(makeStay(), 'event-1')).resolves.toMatchObject({
         status: 'cancelled',
+      });
+    });
+
+    // The start-time gate belongs to book() ONLY — a started event must stay
+    // viewable so a deep link from the home strip / an announcement still
+    // opens something (the booking CTA is what closes).
+    it('a started but not-yet-completed event remains viewable', async () => {
+      eventsRepo.findOne.mockResolvedValue(
+        makeEvent({ startAtLocal: '2020-01-01 10:00', endAtLocal: '2020-01-01 12:00' }),
+      );
+      await expect(service.getDetail(makeStay(), 'event-1')).resolves.toMatchObject({
+        id: 'event-1',
+        status: 'published',
       });
     });
 
@@ -418,6 +462,58 @@ describe('GuestEventsService (Story 21.4/21.5)', () => {
       managerEvents.findOne.mockResolvedValue(makeEvent({ status: 'draft' }));
       await expect(service.book(makeStay(), 'event-1', dto())).rejects.toMatchObject({
         response: { code: 'EVENT_NOT_BOOKABLE' },
+      });
+    });
+
+    // final-review — booking closes at start, enforced server-side on the
+    // HOTEL's clock. The client's guard runs on the device clock and is not
+    // authoritative, and `status` alone can't cover this: the completion
+    // tick only flips published → completed at endAtLocal (or start+3h), so
+    // a started event stays `published` for hours. Winter date (repo TZ-test
+    // convention): Africa/Cairo is a plain UTC+2 in January.
+    describe('booking window (start-time gate)', () => {
+      // 2030-01-15 18:00 hotel-local == 16:00Z.
+      const started = () =>
+        makeEvent({ startAtLocal: '2030-01-15 18:00', endAtLocal: '2030-01-15 20:00' });
+
+      it('at exactly the start time → 409 EVENT_NOT_BOOKABLE, nothing written', async () => {
+        managerEvents.findOne.mockResolvedValue(started());
+        await expect(
+          service.book(makeStay(), 'event-1', dto(), new Date('2030-01-15T16:00:00.000Z')),
+        ).rejects.toMatchObject({ response: { code: 'EVENT_NOT_BOOKABLE' } });
+        expect(managerBookings.save).not.toHaveBeenCalled();
+      });
+
+      it('after the start but before the completion tick flips the status → 409 EVENT_NOT_BOOKABLE', async () => {
+        managerEvents.findOne.mockResolvedValue(started());
+        await expect(
+          service.book(makeStay(), 'event-1', dto(), new Date('2030-01-15T16:30:00.000Z')),
+        ).rejects.toMatchObject({ response: { code: 'EVENT_NOT_BOOKABLE' } });
+        expect(managerBookings.save).not.toHaveBeenCalled();
+      });
+
+      it('one minute before the start → still bookable', async () => {
+        managerEvents.findOne.mockResolvedValue(started());
+        await expect(
+          service.book(makeStay(), 'event-1', dto(), new Date('2030-01-15T15:59:00.000Z')),
+        ).resolves.toMatchObject({ status: 'booked' });
+      });
+
+      it('the gate is the HOTEL-local clock, not UTC (a Cairo event is still open at 17:30 local == 15:30Z)', async () => {
+        managerEvents.findOne.mockResolvedValue(started());
+        // 18:30Z would be past start if the server compared UTC stamps.
+        await expect(
+          service.book(makeStay(), 'event-1', dto(), new Date('2030-01-15T15:30:00.000Z')),
+        ).resolves.toMatchObject({ status: 'booked' });
+      });
+
+      it('defaults `now` to the real clock when the caller passes none (the controller path)', async () => {
+        jest.useFakeTimers({ now: new Date('2030-01-15T16:30:00.000Z').getTime() });
+        managerEvents.findOne.mockResolvedValue(started());
+        await expect(
+          service.book(makeStay(), 'event-1', dto()),
+        ).rejects.toMatchObject({ response: { code: 'EVENT_NOT_BOOKABLE' } });
+        jest.useRealTimers();
       });
     });
 
@@ -655,6 +751,43 @@ describe('GuestEventsService (Story 21.4/21.5)', () => {
         ]);
         const result = await service.myBookings(makeStay(), {});
         expect(result.todayBooking).toBeNull();
+      });
+
+      // final-review — the strip announces what's happening NEXT today. The
+      // list arrives createdAt DESC, so `find()` picked the most recently
+      // BOOKED event; it must pick the earliest-STARTING one instead.
+      it('two bookings today → the earliest-starting one wins, not the most recently created', async () => {
+        bookingsRepo.find.mockResolvedValue([
+          // createdAt DESC order, as the repo returns it: booked today...
+          makeBooking({
+            id: 'booked-today-evening',
+            createdAt: new Date('2030-01-15T09:00:00.000Z'),
+            snapshot: { titles: { en: 'Dinner' }, startAtLocal: '2030-01-15 20:00', endAtLocal: '2030-01-15 22:00', locationText: 'Deck' },
+          }),
+          // ...and booked last week, but it starts first today.
+          makeBooking({
+            id: 'booked-last-week-morning',
+            createdAt: new Date('2030-01-08T09:00:00.000Z'),
+            snapshot: { titles: { en: 'Yoga' }, startAtLocal: '2030-01-15 09:00', endAtLocal: '2030-01-15 23:00', locationText: 'Beach' },
+          }),
+        ]);
+        const result = await service.myBookings(makeStay(), {});
+        expect(result.todayBooking?.id).toBe('booked-last-week-morning');
+      });
+
+      it('the earliest-starting booking that has already finished is skipped for the next one', async () => {
+        bookingsRepo.find.mockResolvedValue([
+          makeBooking({
+            id: 'evening',
+            snapshot: { titles: { en: 'Dinner' }, startAtLocal: '2030-01-15 20:00', endAtLocal: '2030-01-15 22:00', locationText: 'Deck' },
+          }),
+          makeBooking({
+            id: 'morning-done',
+            snapshot: { titles: { en: 'Yoga' }, startAtLocal: '2030-01-15 09:00', endAtLocal: '2030-01-15 10:00', locationText: 'Beach' },
+          }),
+        ]);
+        const result = await service.myBookings(makeStay(), {});
+        expect(result.todayBooking?.id).toBe('evening');
       });
 
       it('a cancelled booking today is never todayBooking', async () => {
