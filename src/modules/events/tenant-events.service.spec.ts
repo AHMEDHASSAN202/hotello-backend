@@ -465,6 +465,22 @@ describe('TenantEventsService (Story 21.2)', () => {
       loggerSpy.mockRestore();
     });
 
+    it('a stay-lookup failure while building the notice audience is logged but does not fail the cancel (already-committed)', async () => {
+      managerEvents.findOne.mockResolvedValue(makeEvent({ status: 'published' }));
+      managerBookings.find.mockResolvedValue([makeBooking({ id: 'b1', stayId: 'stay-1' })]);
+      staysRepo.find.mockRejectedValue(new Error('db timeout'));
+      const loggerSpy = jest
+        .spyOn((service as unknown as { logger: { error: (msg: string) => void } }).logger, 'error')
+        .mockImplementation(() => undefined);
+
+      const result = await service.cancel(actor, 'event-1', { reason: 'Storm warning' });
+
+      expect(result.status).toBe('cancelled');
+      expect(announcements.create).not.toHaveBeenCalled();
+      expect(loggerSpy).toHaveBeenCalledWith(expect.stringContaining('event-1'));
+      loggerSpy.mockRestore();
+    });
+
     it('rejects a non-published event', async () => {
       managerEvents.findOne.mockResolvedValue(makeEvent({ status: 'draft' }));
       await expect(
@@ -520,7 +536,7 @@ describe('TenantEventsService (Story 21.2)', () => {
   });
 
   describe('list', () => {
-    it('upcoming: filters to published-future OR draft, batch-loads bookedCount', async () => {
+    it('upcoming: filters to published OR draft (any start time), batch-loads bookedCount', async () => {
       const events = [
         makeEvent({ id: 'e1', status: 'draft' }),
         makeEvent({ id: 'e2', status: 'published' }),
@@ -586,5 +602,20 @@ describe('TenantEventsService (Story 21.2)', () => {
         hotelId: HOTEL_ID,
       });
     });
+  });
+
+  describe('assertPhotoEditable', () => {
+    it.each(['draft', 'published'] as const)('allows photo changes on a %s event', (status) => {
+      expect(() => service.assertPhotoEditable(makeEvent({ status }))).not.toThrow();
+    });
+
+    it.each(['completed', 'cancelled'] as const)(
+      'rejects photo changes on a %s event with EVENT_NOT_SAFE_EDIT',
+      (status) => {
+        expect(() => service.assertPhotoEditable(makeEvent({ status }))).toThrow(
+          expect.objectContaining({ response: expect.objectContaining({ code: 'EVENT_NOT_SAFE_EDIT' }) }),
+        );
+      },
+    );
   });
 });

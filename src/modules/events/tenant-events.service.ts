@@ -425,21 +425,25 @@ export class TenantEventsService {
     await this.audit(user, 'event.cancelled', event.id, { bookingsCancelled });
 
     if (bookingsCancelled > 0) {
-      // A checked-out guest's stay is no longer `active`; `resolveAudience`
-      // 400s if ANY id in the list fails to resolve, so filter first —
-      // still-resident guests must get the notice even when some booked
-      // guests already checked out.
-      const activeStayIds = stayIds.length
-        ? (
-            await this.staysRepo.find({
-              where: { id: In(stayIds), hotelId: user.hotelId, status: 'active' },
-            })
-          ).map((s) => s.id)
-        : [];
+      // Everything here is best-effort notification, not the business
+      // operation itself (already committed above) — a failure anywhere in
+      // this block, including the stay lookup, must never surface as an
+      // error for an already-successful cancellation.
+      try {
+        // A checked-out guest's stay is no longer `active`; `resolveAudience`
+        // 400s if ANY id in the list fails to resolve, so filter first —
+        // still-resident guests must get the notice even when some booked
+        // guests already checked out.
+        const activeStayIds = stayIds.length
+          ? (
+              await this.staysRepo.find({
+                where: { id: In(stayIds), hotelId: user.hotelId, status: 'active' },
+              })
+            ).map((s) => s.id)
+          : [];
 
-      if (activeStayIds.length > 0) {
-        const content = composeCancelAnnouncement(event, dto.reason);
-        try {
+        if (activeStayIds.length > 0) {
+          const content = composeCancelAnnouncement(event, dto.reason);
           await this.announcements.create(
             user,
             {
@@ -449,11 +453,11 @@ export class TenantEventsService {
             } as CreateAnnouncementDto,
             { source: 'event_cancel', eventId: event.id },
           );
-        } catch (err) {
-          this.logger.error(
-            `Failed to send event-cancel announcement for event ${event.id}: ${err instanceof Error ? err.message : err}`,
-          );
         }
+      } catch (err) {
+        this.logger.error(
+          `Failed to send event-cancel announcement for event ${event.id}: ${err instanceof Error ? err.message : err}`,
+        );
       }
     }
 
