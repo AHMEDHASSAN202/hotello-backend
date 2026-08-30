@@ -29,6 +29,8 @@ export const TENANT_HINT_KEYS = [
   // Epic 20 — board first-run guidance + per-user chime mute (requests idiom).
   'housekeeping.firstRun',
   'housekeeping.soundMuted',
+  // Epic 21 — the events list's safe-edit-lock guidance hint.
+  'events.firstRun',
 ] as const;
 
 export type TenantHintKey = (typeof TENANT_HINT_KEYS)[number];
