@@ -5,16 +5,24 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { CreateAnnouncementDto } from '../announcements/dto/announcements.dto';
+import { TenantAnnouncementsService } from '../announcements/tenant-announcements.service';
 import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
 import { Hotel } from '../hotels/hotel.entity';
 import { TranslationMap } from '../requests/requests.constants';
 import { StayType } from '../tenant-stays/stays.constants';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
+import { CancelEventDto } from './dto/cancel-event.dto';
 import { CreateEventDto } from './dto/create-event.dto';
 import { ListTenantEventsQueryDto } from './dto/list-tenant-events-query.dto';
+import { PublishEventDto } from './dto/publish-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
+import {
+  composeCancelAnnouncement,
+  composePublishAnnouncement,
+} from './event-announce.util';
 import { EventBooking } from './event-booking.entity';
 import { Event } from './event.entity';
 import { hotelLocalStamp } from './event-time';
@@ -131,6 +139,8 @@ export class TenantEventsService {
     @InjectRepository(Hotel)
     private readonly hotelsRepo: Repository<Hotel>,
     private readonly auditLogs: AuditLogsService,
+    private readonly dataSource: DataSource,
+    private readonly announcements: TenantAnnouncementsService,
   ) {}
 
   async create(user: TenantUser, dto: CreateEventDto): Promise<EventManageView> {
@@ -265,6 +275,138 @@ export class TenantEventsService {
 
   async get(user: TenantUser, id: string): Promise<EventManageView> {
     const event = await this.findEvent(user.hotelId, id);
+    return this.toManageView(event);
+  }
+
+  /**
+   * Story 21.3 AC1 — draft → published, start time must still be in the
+   * hotel-local future. `announce !== false` (the checkbox default is ON)
+   * fires a normal Epic 19 announcement through
+   * `TenantAnnouncementsService.create()` — title + a short auto-composed
+   * body per language, audience `{}` (all current guests, per-event
+   * targeting deferred per spec), badged `source: 'event_publish'`.
+   */
+  async publish(
+    user: TenantUser,
+    id: string,
+    dto: PublishEventDto,
+  ): Promise<EventManageView> {
+    const event = await this.findEvent(user.hotelId, id);
+    if (event.status !== 'draft') {
+      throw new ConflictException({
+        code: 'EVENT_NOT_PUBLISHABLE',
+        message: 'Only draft events can be published',
+      });
+    }
+
+    const hotel = await this.hotelsRepo.findOne({ where: { id: user.hotelId } });
+    const nowLocal = hotelLocalStamp(hotel?.timezone ?? 'UTC', new Date());
+    if (event.startAtLocal <= nowLocal) {
+      throw new BadRequestException({
+        code: 'EVENT_START_IN_PAST',
+        message: 'The event start time must be in the future to publish',
+      });
+    }
+
+    event.status = 'published';
+    event.publishedAt = new Date();
+    await this.eventsRepo.save(event);
+    await this.audit(user, 'event.published', event.id, {
+      status: { from: 'draft', to: 'published' },
+    });
+
+    if (dto.announce !== false) {
+      const content = composePublishAnnouncement(event);
+      await this.announcements.create(
+        user,
+        {
+          ...content,
+          action: 'send',
+          audience: {},
+        } as CreateAnnouncementDto,
+        { source: 'event_publish', eventId: event.id },
+      );
+    }
+
+    return this.toManageView(event);
+  }
+
+  /**
+   * Story 21.2 AC3 — published → cancelled, reason required. Locks the
+   * `Event` row `pessimistic_write` (mutually exclusive with a concurrent
+   * `book()`, Task 7 — the tenant-stays lock-first discipline) inside a
+   * single transaction that also cascades every active `EventBooking` to
+   * `cancelled/staff` and releases capacity. The targeted guest-facing
+   * cancellation notice fires AFTER the transaction commits, and only when
+   * at least one booking was actually cancelled (21.3 AC3 — the publish
+   * announcement and this one are independent records; neither touches the
+   * other).
+   */
+  async cancel(
+    user: TenantUser,
+    id: string,
+    dto: CancelEventDto,
+  ): Promise<EventManageView> {
+    const { event, bookingsCancelled, stayIds } = await this.dataSource.transaction(
+      async (manager) => {
+        const eventsRepo = manager.getRepository(Event);
+        const bookingsRepo = manager.getRepository(EventBooking);
+
+        const event = await eventsRepo.findOne({
+          where: { id, hotelId: user.hotelId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!event) {
+          throw new NotFoundException({
+            code: 'EVENT_NOT_FOUND',
+            message: 'Event not found',
+          });
+        }
+        if (event.status !== 'published') {
+          throw new ConflictException({
+            code: 'EVENT_NOT_CANCELLABLE',
+            message: 'Only published events can be cancelled',
+          });
+        }
+
+        const now = new Date();
+        event.status = 'cancelled';
+        event.cancelReason = dto.reason;
+        event.cancelledAt = now;
+        event.cancelledById = user.id;
+        await eventsRepo.save(event);
+
+        const bookings = await bookingsRepo.find({
+          where: { eventId: event.id, status: 'booked' },
+        });
+        for (const booking of bookings) {
+          booking.status = 'cancelled';
+          booking.cancelledBy = 'staff';
+          booking.cancelledAt = now;
+          booking.cancelledReason = dto.reason;
+        }
+        if (bookings.length) await bookingsRepo.save(bookings);
+
+        const stayIds = [...new Set(bookings.map((b) => b.stayId))];
+        return { event, bookingsCancelled: bookings.length, stayIds };
+      },
+    );
+
+    await this.audit(user, 'event.cancelled', event.id, { bookingsCancelled });
+
+    if (bookingsCancelled > 0) {
+      const content = composeCancelAnnouncement(event, dto.reason);
+      await this.announcements.create(
+        user,
+        {
+          ...content,
+          action: 'send',
+          audience: { stayIds },
+        } as CreateAnnouncementDto,
+        { source: 'event_cancel', eventId: event.id },
+      );
+    }
+
     return this.toManageView(event);
   }
 

@@ -19,16 +19,18 @@ import { RequireModule } from '../../common/decorators/require-module.decorator'
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { TenantScope } from '../../common/decorators/tenant-scope.decorator';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
+import { CancelEventDto } from './dto/cancel-event.dto';
 import { CreateEventDto } from './dto/create-event.dto';
 import { ListTenantEventsQueryDto } from './dto/list-tenant-events-query.dto';
+import { PublishEventDto } from './dto/publish-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 import { EVENT_PHOTO_MAX_BYTES, EventPhotoService } from './event-photo.service';
 import { TenantEventsService } from './tenant-events.service';
 
 /**
- * Story 21.2 — event management (create/update/list/get/photo).
- * Publish/cancel (Task 6), guest booking (Task 7) and the attendees view
- * (Task 8) are separate controllers/tasks, not this one.
+ * Story 21.2/21.3 — event management (create/update/list/get/photo) plus
+ * publish/cancel (Task 6, Epic 19 integration). Guest booking (Task 7) and
+ * the attendees view (Task 8) are separate controllers/tasks, not this one.
  */
 @TenantScope()
 @RequireModule('events')
@@ -75,6 +77,28 @@ export class TenantEventsController {
     @Body() dto: UpdateEventDto,
   ) {
     return this.events.update(user, id, dto);
+  }
+
+  @Post(':id/publish')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('events.manage')
+  publish(
+    @CurrentTenantUser() user: TenantUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: PublishEventDto,
+  ) {
+    return this.events.publish(user, id, dto);
+  }
+
+  @Post(':id/cancel')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('events.manage')
+  cancel(
+    @CurrentTenantUser() user: TenantUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CancelEventDto,
+  ) {
+    return this.events.cancel(user, id, dto);
   }
 
   @Post(':id/photo')

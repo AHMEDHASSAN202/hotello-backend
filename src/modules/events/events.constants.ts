@@ -51,3 +51,4 @@ export const EVENT_LOCAL_STAMP_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
 export const EVENT_TITLE_MAX = 120;
 export const EVENT_DESCRIPTION_MAX = 2000;
 export const EVENT_LOCATION_TEXT_MAX = 200;
+export const EVENT_CANCEL_REASON_MAX = 500;

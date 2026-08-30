@@ -1,9 +1,12 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { TenantAnnouncementsService } from '../announcements/tenant-announcements.service';
 import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
 import { Hotel } from '../hotels/hotel.entity';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
+import { CancelEventDto } from './dto/cancel-event.dto';
 import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 import { EventBooking } from './event-booking.entity';
@@ -62,6 +65,11 @@ describe('TenantEventsService (Story 21.2)', () => {
   let auditLogs: { log: jest.Mock };
   let bookingsQb: Record<string, jest.Mock>;
   let eventsQb: Record<string, jest.Mock>;
+  let managerEvents: { findOne: jest.Mock; save: jest.Mock };
+  let managerBookings: { find: jest.Mock; save: jest.Mock };
+  let manager: { getRepository: jest.Mock };
+  let dataSource: { transaction: jest.Mock };
+  let announcements: { create: jest.Mock };
 
   beforeEach(async () => {
     bookingsQb = {};
@@ -91,6 +99,24 @@ describe('TenantEventsService (Story 21.2)', () => {
     };
     auditLogs = { log: jest.fn() };
 
+    managerEvents = {
+      findOne: jest.fn().mockResolvedValue(null),
+      save: jest.fn(async (e) => e),
+    };
+    managerBookings = {
+      find: jest.fn().mockResolvedValue([]),
+      save: jest.fn(async (rows) => rows),
+    };
+    manager = {
+      getRepository: jest.fn((entity) =>
+        entity === Event ? managerEvents : managerBookings,
+      ),
+    };
+    dataSource = {
+      transaction: jest.fn(async (cb: (m: unknown) => unknown) => cb(manager)),
+    };
+    announcements = { create: jest.fn().mockResolvedValue({ id: 'ann-1' }) };
+
     const moduleRef = await Test.createTestingModule({
       providers: [
         TenantEventsService,
@@ -99,6 +125,8 @@ describe('TenantEventsService (Story 21.2)', () => {
         { provide: getRepositoryToken(HotelInfoEntry), useValue: infoRepo },
         { provide: getRepositoryToken(Hotel), useValue: hotelsRepo },
         { provide: AuditLogsService, useValue: auditLogs },
+        { provide: DataSource, useValue: dataSource },
+        { provide: TenantAnnouncementsService, useValue: announcements },
       ],
     }).compile();
     service = moduleRef.get(TenantEventsService);
@@ -230,6 +258,157 @@ describe('TenantEventsService (Story 21.2)', () => {
       expect(eventsRepo.save).not.toHaveBeenCalled();
       expect(auditLogs.log).not.toHaveBeenCalled();
     });
+  });
+
+  describe('publish (Story 21.3 AC1)', () => {
+    const futureDraft = (o: Partial<Event> = {}) =>
+      makeEvent({ status: 'draft', startAtLocal: '2030-01-01 10:00', ...o });
+
+    it('happy path: draft → published, creates a linked announcement (source=event_publish)', async () => {
+      eventsRepo.findOne.mockResolvedValue(futureDraft());
+      const result = await service.publish(actor, 'event-1', {});
+
+      expect(result.status).toBe('published');
+      expect(eventsRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'published', publishedAt: expect.any(Date) }),
+      );
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'event.published' }),
+      );
+      expect(announcements.create).toHaveBeenCalledTimes(1);
+      expect(announcements.create).toHaveBeenCalledWith(
+        actor,
+        expect.objectContaining({
+          titleEn: 'Party',
+          titleAr: 'حفلة',
+          bodyEn: expect.stringContaining('Party'),
+          bodyAr: expect.stringContaining('حفلة'),
+          action: 'send',
+          audience: {},
+        }),
+        { source: 'event_publish', eventId: 'event-1' },
+      );
+    });
+
+    it('announce: false publishes but creates no announcement', async () => {
+      eventsRepo.findOne.mockResolvedValue(futureDraft());
+      const result = await service.publish(actor, 'event-1', { announce: false });
+      expect(result.status).toBe('published');
+      expect(announcements.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a non-future startAtLocal', async () => {
+      eventsRepo.findOne.mockResolvedValue(
+        futureDraft({ startAtLocal: '2020-01-01 10:00' }),
+      );
+      await expect(service.publish(actor, 'event-1', {})).rejects.toMatchObject({
+        response: { code: 'EVENT_START_IN_PAST' },
+      });
+      expect(eventsRepo.save).not.toHaveBeenCalled();
+      expect(announcements.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a non-draft event', async () => {
+      eventsRepo.findOne.mockResolvedValue(makeEvent({ status: 'published' }));
+      await expect(service.publish(actor, 'event-1', {})).rejects.toMatchObject({
+        response: { code: 'EVENT_NOT_PUBLISHABLE' },
+      });
+      expect(announcements.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('cancel (Story 21.2 AC3)', () => {
+    const makeBooking = (o: Record<string, unknown> = {}) => ({
+      id: 'booking-1',
+      hotelId: HOTEL_ID,
+      eventId: 'event-1',
+      stayId: 'stay-1',
+      status: 'booked',
+      cancelledBy: null,
+      cancelledAt: null,
+      cancelledReason: null,
+      ...o,
+    });
+
+    it('cascades every active booking to cancelled/staff, releases capacity, and creates exactly one targeted announcement', async () => {
+      managerEvents.findOne.mockResolvedValue(makeEvent({ status: 'published' }));
+      const bookings = [
+        makeBooking({ id: 'b1', stayId: 'stay-1' }),
+        makeBooking({ id: 'b2', stayId: 'stay-2' }),
+        makeBooking({ id: 'b3', stayId: 'stay-1' }), // same stay booked twice
+      ];
+      managerBookings.find.mockResolvedValue(bookings);
+
+      const result = await service.cancel(actor, 'event-1', { reason: 'Storm warning' });
+
+      expect(result.status).toBe('cancelled');
+      expect(result.cancelReason).toBe('Storm warning');
+      // Lock discipline — the event row is locked pessimistic_write before anything else.
+      expect(managerEvents.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'event-1', hotelId: HOTEL_ID },
+          lock: { mode: 'pessimistic_write' },
+        }),
+      );
+      // All 3 bookings flip, reason copied, capacity fully released.
+      expect(bookings.every((b) => b.status === 'cancelled')).toBe(true);
+      expect(bookings.every((b) => b.cancelledBy === 'staff')).toBe(true);
+      expect(bookings.every((b) => b.cancelledReason === 'Storm warning')).toBe(true);
+      expect(managerBookings.save).toHaveBeenCalledWith(bookings);
+
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'event.cancelled',
+          metadata: expect.objectContaining({ diff: { bookingsCancelled: 3 } }),
+        }),
+      );
+
+      // Exactly one targeted announcement, audience = the N=2 distinct stay ids.
+      expect(announcements.create).toHaveBeenCalledTimes(1);
+      expect(announcements.create).toHaveBeenCalledWith(
+        actor,
+        expect.objectContaining({
+          action: 'send',
+          audience: { stayIds: ['stay-1', 'stay-2'] },
+        }),
+        { source: 'event_cancel', eventId: 'event-1' },
+      );
+    });
+
+    it('zero active bookings → no announcement created', async () => {
+      managerEvents.findOne.mockResolvedValue(makeEvent({ status: 'published' }));
+      managerBookings.find.mockResolvedValue([]);
+
+      await service.cancel(actor, 'event-1', { reason: 'No guests booked' });
+
+      expect(announcements.create).not.toHaveBeenCalled();
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({ diff: { bookingsCancelled: 0 } }),
+        }),
+      );
+    });
+
+    it('rejects a non-published event', async () => {
+      managerEvents.findOne.mockResolvedValue(makeEvent({ status: 'draft' }));
+      await expect(
+        service.cancel(actor, 'event-1', { reason: 'x' } as CancelEventDto),
+      ).rejects.toMatchObject({ response: { code: 'EVENT_NOT_CANCELLABLE' } });
+      expect(announcements.create).not.toHaveBeenCalled();
+    });
+
+    it('cross-tenant/missing event → 404 inside the locked transaction', async () => {
+      managerEvents.findOne.mockResolvedValue(null);
+      await expect(
+        service.cancel(actor, 'event-1', { reason: 'x' } as CancelEventDto),
+      ).rejects.toMatchObject({ response: { code: 'EVENT_NOT_FOUND' } });
+    });
+
+    // Story 21.2 AC3's "capacity fully released" claim also implies a
+    // subsequent booking attempt on the cancelled event returns 409
+    // EVENT_NOT_BOOKABLE. That assertion needs Task 7's book() to exist —
+    // per the plan's task ordering (Task 7 runs after Task 6), it's deferred
+    // into Task 7's own test suite rather than stubbed here.
   });
 
   describe('cross-tenant isolation', () => {

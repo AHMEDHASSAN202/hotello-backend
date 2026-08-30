@@ -27,7 +27,7 @@ import {
   TenantAnnouncementView,
   toTenantView,
 } from './announcement-views';
-import { AudienceFilter } from './announcements.constants';
+import { AnnouncementSource, AudienceFilter } from './announcements.constants';
 import {
   AudienceFilterDto,
   CreateAnnouncementDto,
@@ -76,6 +76,13 @@ export class TenantAnnouncementsService {
   async create(
     user: TenantUser,
     dto: CreateAnnouncementDto,
+    /**
+     * 21.3 groundwork — set only by internal cross-module callers (Events'
+     * publish/cancel, Task 6), never by the public `POST /tenant/announcements`
+     * route: the field isn't on `CreateAnnouncementDto`, so a tenant user has
+     * no way to self-badge a manual announcement as "auto · event".
+     */
+    internal?: { source?: AnnouncementSource; eventId?: string },
   ): Promise<TenantAnnouncementView> {
     const titles = mergeTitles(dto);
     const bodies = mergeBodies(dto);
@@ -95,6 +102,8 @@ export class TenantAnnouncementsService {
       priority: dto.priority ?? false,
       audience,
       createdById: user.id,
+      source: internal?.source ?? null,
+      eventId: internal?.eventId ?? null,
       ...timing,
     });
     const saved = await this.repo.save(row);
@@ -330,9 +339,14 @@ export class TenantAnnouncementsService {
     if (dto?.floors?.length) filter.floors = dto.floors;
     if (dto?.roomIds?.length) filter.roomIds = dto.roomIds;
     if (dto?.stayId) filter.stayId = dto.stayId;
+    if (dto?.stayIds?.length) filter.stayIds = dto.stayIds;
+    const isSingleGuestTargeting = Boolean(filter.stayId || filter.stayIds);
+    const combinesOtherDimensions = Boolean(
+      filter.stayTypes || filter.floors || filter.roomIds,
+    );
     if (
-      filter.stayId &&
-      (filter.stayTypes || filter.floors || filter.roomIds)
+      isSingleGuestTargeting &&
+      (combinesOtherDimensions || (filter.stayId && filter.stayIds))
     ) {
       throw new BadRequestException({
         code: 'ANNOUNCEMENT_AUDIENCE_INVALID',
@@ -355,6 +369,18 @@ export class TenantAnnouncementsService {
         throw new BadRequestException({
           code: 'ANNOUNCEMENT_STAY_NOT_FOUND',
           message: 'The targeted guest stay was not found or is not active',
+        });
+      }
+    }
+    if (filter.stayIds?.length) {
+      const stays = await this.staysRepo.find({
+        where: { id: In(filter.stayIds), hotelId, status: 'active' },
+      });
+      if (stays.length !== filter.stayIds.length) {
+        throw new BadRequestException({
+          code: 'ANNOUNCEMENT_STAY_NOT_FOUND',
+          message:
+            'One or more targeted guest stays were not found or are not active',
         });
       }
     }

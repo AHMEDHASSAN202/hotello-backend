@@ -204,6 +204,73 @@ describe('TenantAnnouncementsService', () => {
       });
     });
 
+    // 21.3 AC3 groundwork — `stayIds` (the event-cancel-notice audience) must
+    // not be silently dropped by normalizeAudience/resolveAudience: dropping
+    // it would persist `audience: {}`, which `matchesAudience` resolves as
+    // "everyone" — exactly the bug this coverage guards against.
+    it('stayIds audience persists correctly and targets exactly those stays, not everyone', async () => {
+      // First staysRepo.find call is resolveAudience's existence/active check;
+      // the second is toViews' activeStays() call for the stats denominator.
+      staysRepo.find.mockResolvedValueOnce(
+        ACTIVE_STAYS.filter((s) => ['stay-1', 'stay-3'].includes(s.id)),
+      );
+      const view = await service.create(actor, {
+        ...CONTENT,
+        action: 'send',
+        audience: { stayIds: ['stay-1', 'stay-3'] },
+      });
+      expect(repo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ audience: { stayIds: ['stay-1', 'stay-3'] } }),
+      );
+      // 4 active stays exist; only the 2 targeted ones should match.
+      expect(view.stats.audienceNow).toBe(2);
+    });
+
+    it('stayIds combined with other dimensions → ANNOUNCEMENT_AUDIENCE_INVALID', async () => {
+      await expect(
+        service.create(actor, {
+          ...CONTENT,
+          action: 'send',
+          audience: { stayIds: ['stay-1', 'stay-2'], floors: [2] },
+        }),
+      ).rejects.toMatchObject({
+        response: { code: 'ANNOUNCEMENT_AUDIENCE_INVALID' },
+      });
+    });
+
+    it('stayId combined with stayIds → ANNOUNCEMENT_AUDIENCE_INVALID', async () => {
+      await expect(
+        service.create(actor, {
+          ...CONTENT,
+          action: 'send',
+          audience: { stayId: 'stay-1', stayIds: ['stay-2'] },
+        }),
+      ).rejects.toMatchObject({
+        response: { code: 'ANNOUNCEMENT_AUDIENCE_INVALID' },
+      });
+    });
+
+    it('a stayIds entry that is not a valid/active stay of this hotel → ANNOUNCEMENT_STAY_NOT_FOUND', async () => {
+      // Only 1 of the 2 requested ids resolves — simulates a foreign/checked-out stay.
+      staysRepo.find.mockResolvedValueOnce(
+        ACTIVE_STAYS.filter((s) => s.id === 'stay-1'),
+      );
+      await expect(
+        service.create(actor, {
+          ...CONTENT,
+          action: 'send',
+          audience: { stayIds: ['stay-1', 'stay-other'] },
+        }),
+      ).rejects.toMatchObject({
+        response: { code: 'ANNOUNCEMENT_STAY_NOT_FOUND' },
+      });
+      expect(staysRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ hotelId: HOTEL_ID, status: 'active' }),
+        }),
+      );
+    });
+
     it('info entry link must exist, be active and belong to this hotel', async () => {
       await expect(
         service.create(actor, {
@@ -352,6 +419,20 @@ describe('TenantAnnouncementsService', () => {
       await expect(
         service.previewAudience(actor, {
           audience: { stayId: 'stay-1', roomIds: ['room-1'] },
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('stayIds targets exactly the listed stays, not everyone', async () => {
+      await expect(
+        service.previewAudience(actor, { audience: { stayIds: ['stay-1', 'stay-3'] } }),
+      ).resolves.toEqual({ count: 2 });
+    });
+
+    it('rejects stayIds combined with other dimensions', async () => {
+      await expect(
+        service.previewAudience(actor, {
+          audience: { stayIds: ['stay-1'], floors: [2] },
         }),
       ).rejects.toThrow(BadRequestException);
     });
