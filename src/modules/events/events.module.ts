@@ -6,11 +6,14 @@ import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
 import { Hotel } from '../hotels/hotel.entity';
 import { RenditionsModule } from '../renditions/renditions.module';
 import { TenantAccessModule } from '../tenant-access/tenant-access.module';
+import { Stay } from '../tenant-stays/stay.entity';
 import { EventBooking } from './event-booking.entity';
 import { Event } from './event.entity';
 import { EventPhotoService } from './event-photo.service';
 import { GuestEventsController } from './guest-events.controller';
 import { GuestEventsService } from './guest-events.service';
+import { TenantEventAttendeesController } from './tenant-event-attendees.controller';
+import { TenantEventAttendeesService } from './tenant-event-attendees.service';
 import { TenantEventsController } from './tenant-events.controller';
 import { TenantEventsService } from './tenant-events.service';
 
@@ -21,17 +24,29 @@ import { TenantEventsService } from './tenant-events.service';
  * `TenantAnnouncementsService` — the Epic 19 integration). Story 21.4/21.5
  * (Task 7): guest browse/book/my-bookings/self-cancel — the ONLY writer of
  * `EventBooking` rows in normal operation, so attendees (Task 8) and
- * settlement (Task 9) both depend on this landing first.
+ * settlement (Task 9) both depend on this landing first. Task 8: the
+ * read-only attendee list + live totals — its own controller/service,
+ * batch-loading `Stay` (with `room`) for guest name / room number since
+ * `EventBooking` doesn't snapshot those fields.
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Event, EventBooking, HotelInfoEntry, Hotel]),
+    TypeOrmModule.forFeature([Event, EventBooking, HotelInfoEntry, Hotel, Stay]),
     TenantAccessModule,
     AuditLogsModule,
     RenditionsModule,
     AnnouncementsModule,
   ],
-  controllers: [TenantEventsController, GuestEventsController],
-  providers: [TenantEventsService, EventPhotoService, GuestEventsService],
+  controllers: [
+    TenantEventsController,
+    TenantEventAttendeesController,
+    GuestEventsController,
+  ],
+  providers: [
+    TenantEventsService,
+    EventPhotoService,
+    TenantEventAttendeesService,
+    GuestEventsService,
+  ],
 })
 export class EventsModule {}
