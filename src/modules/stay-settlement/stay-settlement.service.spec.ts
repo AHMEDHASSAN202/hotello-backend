@@ -149,6 +149,8 @@ describe('StaySettlementService (Story 21.6 AC2)', () => {
 
       const res = await service.settle(actor, STAY_ID);
 
+      // unsettledTotal is re-read from the sources after the writes (the
+      // default `find` mock returns [] for those follow-up reads).
       expect(res).toEqual({ settled: 3, unsettledTotal: 0 });
       expect(fnbOrdersRepo.save).toHaveBeenCalledWith([
         expect.objectContaining({
@@ -186,12 +188,46 @@ describe('StaySettlementService (Story 21.6 AC2)', () => {
         }),
       );
 
-      // Second call: nothing left unsettled → idempotent, settles 0.
+      // Second call: nothing left unsettled → idempotent, settles 0, and
+      // writes no audit entry (nothing moved — the legacy F&B behavior).
       jest.clearAllMocks();
-      fnbOrdersRepo.find.mockResolvedValueOnce([]);
-      eventBookingsRepo.find.mockResolvedValueOnce([]);
+      fnbOrdersRepo.find.mockResolvedValue([]);
+      eventBookingsRepo.find.mockResolvedValue([]);
       const again = await service.settle(actor, STAY_ID);
       expect(again).toEqual({ settled: 0, unsettledTotal: 0 });
+      expect(auditLogs.log).not.toHaveBeenCalled();
+    });
+
+    // final-review — settle() used to return a hardcoded `unsettledTotal: 0`,
+    // so a charge landing between markSettled and the response vanished from
+    // the checkout drawer until a manual refresh. The real remaining total is
+    // re-read from every source after the writes.
+    it('a charge placed mid-settle resurfaces in the returned unsettledTotal', async () => {
+      // First read (markSettled): one settleable order. Second read
+      // (findUnsettled, post-write): a NEW room-service order the guest
+      // placed while the front desk was clicking settle.
+      fnbOrdersRepo.find
+        .mockResolvedValueOnce([makeFnbOrder({ id: 'fnb-1', totalAmount: 100 })])
+        .mockResolvedValueOnce([
+          makeFnbOrder({ id: 'fnb-late', totalAmount: 25.5 }),
+        ]);
+      eventBookingsRepo.find
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([makeBooking({ id: 'booking-late', totalAmount: 10 })]);
+
+      const res = await service.settle(actor, STAY_ID);
+
+      expect(res).toEqual({ settled: 1, unsettledTotal: 35.5 });
+    });
+
+    it('an already-settled/empty stay writes no audit entry', async () => {
+      fnbOrdersRepo.find.mockResolvedValue([]);
+      eventBookingsRepo.find.mockResolvedValue([]);
+
+      const res = await service.settle(actor, STAY_ID);
+
+      expect(res).toEqual({ settled: 0, unsettledTotal: 0 });
+      expect(auditLogs.log).not.toHaveBeenCalled();
     });
 
     it('cross-tenant stay id 404s via findStayInHotel before either source is queried', async () => {

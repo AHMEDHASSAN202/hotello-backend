@@ -81,15 +81,34 @@ export class StaySettlementService {
     });
 
     // One audit entry per settle() call — never one per source, so the
-    // combined checkout action reads as a single event in the log.
-    await this.auditLogs.log({
-      action: 'stay_settlement.settled',
-      entityType: 'stay',
-      entityId: stayId,
-      actorId: user.id,
-      metadata: { actorType: 'tenant_user', hotelId: user.hotelId, breakdown },
-    });
+    // combined checkout action reads as a single event in the log. Only
+    // written when something actually moved (the legacy F&B
+    // `settleStayOrders` behavior): a repeated/idempotent settle is a no-op,
+    // not a log entry.
+    if (settled > 0) {
+      await this.auditLogs.log({
+        action: 'stay_settlement.settled',
+        entityType: 'stay',
+        entityId: stayId,
+        actorId: user.id,
+        metadata: { actorType: 'tenant_user', hotelId: user.hotelId, breakdown },
+      });
+    }
 
-    return { settled, unsettledTotal: 0 };
+    // Re-read every source instead of assuming zero: a charge placed while
+    // the settle was in flight (guest orders room service as the front desk
+    // clicks "settle") is NOT covered by the markSettled queries above and
+    // must resurface on the drawer immediately — the same "remaining after
+    // settle" contract the legacy F&B route returns.
+    const remaining = await Promise.all(
+      this.sources.map((source) => source.findUnsettled(user.hotelId, stayId)),
+    );
+
+    return {
+      settled,
+      unsettledTotal: round2(
+        remaining.reduce((total, lines) => total + sumLines(lines), 0),
+      ),
+    };
   }
 }
