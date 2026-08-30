@@ -104,8 +104,10 @@ describe('TenantRolesService', () => {
         'housekeeping.read',
         'housekeeping.update',
         'housekeeping.assign',
-        // Epic 21 — the manager runs events end to end (create/publish/cancel).
+        // Epic 21 — the manager runs events end to end (create/publish/cancel);
+        // final-review C1 — `.manage` doesn't imply `.read`, so both ship.
         'events.manage',
+        'events.read',
       ]);
       const frontDeskRole = saved.find((r) => r.nameEn === 'Front Desk');
       expect(frontDeskRole.permissions).toEqual(

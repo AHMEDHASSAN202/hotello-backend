@@ -59,8 +59,13 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
       'housekeeping.read',
       'housekeeping.update',
       'housekeeping.assign',
-      // Epic 21 — the manager runs events end to end (create/publish/cancel).
+      // Epic 21 — the manager runs events end to end (create/publish/cancel);
+      // `.manage` does NOT imply `.read` (PermissionsGuard is exact-match),
+      // so the read key ships alongside manage here too (final-review C1 —
+      // matches every other module in this file and the migration backfill
+      // for existing hotels).
       'events.manage',
+      'events.read',
     ],
     isSystem: false,
   },
