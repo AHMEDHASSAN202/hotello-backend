@@ -1,0 +1,19 @@
+{
+  "name": "gxp-qa-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GXP end-to-end QA suites (Playwright). Tests + bug reports only — never ships in the API image.",
+  "scripts": {
+    "test": "playwright test",
+    "test:epic-11": "playwright test tests/epic-11",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^20.14.0",
+    "@types/pngjs": "^6.0.5",
+    "exceljs": "^4.4.0",
+    "jsqr": "^1.4.0",
+    "pngjs": "^7.0.0"
+  }
+}
