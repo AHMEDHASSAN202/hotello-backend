@@ -11,7 +11,7 @@ import { test as base, expect, request as playwrightRequest } from '@playwright/
 import type { APIRequestContext } from '@playwright/test';
 import {
   adminLogin,
-  listRoomTypes,
+  apiGetRetry,
   provisionHotel,
   type ProvisionedHotel,
   type RoomType,
@@ -52,7 +52,7 @@ export const test = base.extend<{}, WorkerFixtures>({
   ],
   standardType: [
     async ({ api, hotel }, use) => {
-      const types = await listRoomTypes(api, hotel.ownerToken);
+      const types = (await apiGetRetry<{ data: RoomType[] }>(api, '/tenant/room-types', hotel.ownerToken)).body.data;
       const standard = types.find((t) => t.nameEn === 'Standard');
       expect(standard, 'seeded default room types (11.1 AC2)').toBeTruthy();
       await use(standard!);

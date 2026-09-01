@@ -89,6 +89,25 @@ export async function apiPatch<T = Record<string, unknown>>(
   return { status: res.status(), body: (await res.json().catch(() => ({}))) as T };
 }
 
+/**
+ * GET with retry on 429/5xx — heavy suites share per-route throttles from one
+ * IP, so infrastructure-level 429s are expected and retryable (they are NOT
+ * product behavior under test).
+ */
+export async function apiGetRetry<T = Record<string, unknown>>(
+  request: APIRequestContext,
+  path: string,
+  token?: string,
+  retries = 10,
+): Promise<{ status: number; body: T }> {
+  let last = await apiGet<T>(request, path, token);
+  for (let i = 0; i < retries && (last.status === 429 || last.status >= 500); i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+    last = await apiGet<T>(request, path, token);
+  }
+  return last;
+}
+
 /** Raw response for binary downloads (PDF/xlsx/QR images). */
 export async function apiGetRaw(
   request: APIRequestContext,
@@ -248,6 +267,8 @@ export async function provisionHotel(
       contactEmail: `contact-${slug}@qa.example`,
       contactPhone: '+20 100 000 0000',
       city: 'Cairo',
+      // Deterministic date math: hotel-local == UTC in every QA hotel.
+      timezone: 'UTC',
       defaultLanguage: opts.defaultLanguage ?? 'en',
     },
     plan: { planId, billingCycle: 'monthly' },
@@ -382,6 +403,9 @@ export async function createRoomsQuickly(
   const { status, body } = await apiPost(request, '/tenant/rooms/bulk', {
     rooms: numbers.map((roomNumber, row) => ({ row, roomNumber, floor, roomTypeId })),
     source: 'range',
+    // Idempotent for shared hotels where numbers may already exist.
+    skipDuplicates: true,
+    skippedCount: 0,
   }, token);
   expect(status, `bulk seed failed: ${JSON.stringify(body)}`).toBe(201);
 }
@@ -430,8 +454,8 @@ export async function createStaffUser(
     request,
     '/tenant/roles',
     {
-      nameEn: `QA Role ${Date.now().toString(36)}`,
-      nameAr: 'دور اختبار',
+      nameEn: `QA Role ${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      nameAr: `دور اختبار ${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       permissions,
     },
     ownerToken,

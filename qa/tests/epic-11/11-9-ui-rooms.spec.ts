@@ -16,38 +16,11 @@ import {
   provisionHotel,
   TENANT_URL,
 } from '../../helpers/gxp-api';
+import { uiSession } from '../../helpers/tenant-ui';
 
 const ROOMS_URL = (slug: string) => `${TENANT_URL}/t/${slug}/rooms`;
 const TYPES_URL = (slug: string) => `${TENANT_URL}/t/${slug}/rooms/types`;
 const QR_URL = (slug: string) => `${TENANT_URL}/t/${slug}/rooms/qr`;
-
-/**
- * Establish the session exactly the way the app's `lib/auth.ts` does:
- * localStorage tokens + the middleware cookie flag.
- */
-async function uiSession(
-  page: import('@playwright/test').Page,
-  slug: string,
-  accessToken: string,
-  refreshToken: string,
-  awaitNav: string | null = 'Rooms',
-) {
-  // The middleware cookie flag must exist BEFORE the first navigation.
-  await page.context().addCookies([
-    { name: 'gxp_tenant_auth', value: '1', url: TENANT_URL, sameSite: 'Lax' },
-  ]);
-  await page.addInitScript(
-    ([access, refresh]) => {
-      window.localStorage.setItem('gxp_tenant_access_token', access!);
-      window.localStorage.setItem('gxp_tenant_refresh_token', refresh!);
-    },
-    [accessToken, refreshToken] as const,
-  );
-  await page.goto(`${TENANT_URL}/t/${slug}`);
-  if (awaitNav) {
-    await expect(page.getByRole('link', { name: awaitNav })).toBeVisible();
-  }
-}
 
 test('11.6 AC4 — an empty hotel gets onboarding copy, not a blank table', async ({
   page,
