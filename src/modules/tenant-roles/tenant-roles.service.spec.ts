@@ -108,6 +108,10 @@ describe('TenantRolesService', () => {
         // final-review C1 — `.manage` doesn't imply `.read`, so both ship.
         'events.manage',
         'events.read',
+        // Epic 22 — the manager sees every report, including revenue.
+        'reports.read',
+        'reports.revenue',
+        'reports.export',
       ]);
       const frontDeskRole = saved.find((r) => r.nameEn === 'Front Desk');
       expect(frontDeskRole.permissions).toEqual(

@@ -24,3 +24,21 @@ export type CleaningType = (typeof CLEANING_TYPES)[number];
 
 /** Hotel-local daily service hour default (20.1 AC4), stored as 'HH:MM'. */
 export const DEFAULT_DAILY_SERVICE_TIME = '09:00';
+
+/**
+ * Epic 22 — the housekeeping event types recorded to `housekeeping_events`
+ * (the dedicated analytics-source table; `audit_logs` stays compliance-only).
+ * Mirrors the transitions in `housekeeping-transitions.ts`; `dnd_set`/
+ * `dnd_cleared` are guest-originated (Epic 20.4), the rest are staff/system.
+ */
+export const HOUSEKEEPING_EVENT_TYPES = [
+  'flagged',
+  'started',
+  'completed',
+  'interrupted',
+  'cleared',
+  'dnd_set',
+  'dnd_cleared',
+] as const;
+
+export type HousekeepingEventType = (typeof HOUSEKEEPING_EVENT_TYPES)[number];

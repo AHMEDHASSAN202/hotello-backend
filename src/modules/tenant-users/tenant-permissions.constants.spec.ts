@@ -173,3 +173,34 @@ describe('Epic 21 — events permissions', () => {
     expect(byName['F&B / Kitchen']).not.toContain('events.read');
   });
 });
+
+describe('Epic 22 — reports permissions', () => {
+  it('reports group is gated by the analytics module and exposes the three keys', () => {
+    const group = TENANT_PERMISSION_CATALOG.find((g) => g.group === 'reports');
+    expect(group).toBeDefined();
+    expect(group!.module).toBe('analytics');
+    expect(group!.permissions.map((p) => p.key)).toEqual([
+      'reports.read',
+      'reports.revenue',
+      'reports.export',
+    ]);
+  });
+
+  it('analytics is a platform module key', () => {
+    expect(ALL_MODULE_KEYS).toContain('analytics');
+  });
+
+  it('Manager gains all three reports keys, Front Desk gains reports.read only', () => {
+    const byName = Object.fromEntries(
+      DEFAULT_TENANT_ROLES.map((r) => [r.nameEn, r.permissions]),
+    );
+    expect(byName['Manager']).toContain('reports.read');
+    expect(byName['Manager']).toContain('reports.revenue');
+    expect(byName['Manager']).toContain('reports.export');
+    expect(byName['Front Desk']).toContain('reports.read');
+    expect(byName['Front Desk']).not.toContain('reports.revenue');
+    expect(byName['Front Desk']).not.toContain('reports.export');
+    expect(byName['Housekeeping']).not.toContain('reports.read');
+    expect(byName['F&B / Kitchen']).not.toContain('reports.read');
+  });
+});

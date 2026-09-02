@@ -385,6 +385,39 @@ export const TENANT_PERMISSION_CATALOG: TenantPermissionGroup[] = [
       },
     ],
   },
+  {
+    // Epic 22 — Reports & Analytics; dormant while the `analytics` module is
+    // outside the hotel's plan (Story 10.5 AC3) — it's the upsell. Revenue
+    // visibility is a THIRD, separate key (not implied by reports.read) so
+    // Front Desk can see operational reports without seeing money.
+    group: 'reports',
+    labelEn: 'Reports & Analytics',
+    labelAr: 'التقارير والتحليلات',
+    module: 'analytics',
+    permissions: [
+      {
+        key: 'reports.read',
+        labelEn: 'View reports',
+        labelAr: 'عرض التقارير',
+        descriptionEn: 'See the overview dashboard and operational reports (stays, requests, housekeeping, balances).',
+        descriptionAr: 'عرض لوحة النظرة العامة والتقارير التشغيلية (الإقامات والطلبات والتدبير الفندقي والمستحقات).',
+      },
+      {
+        key: 'reports.revenue',
+        labelEn: 'View revenue reports',
+        labelAr: 'عرض تقارير الإيرادات',
+        descriptionEn: 'See revenue figures: dining, events, and combined totals.',
+        descriptionAr: 'عرض أرقام الإيرادات: الأغذية والمشروبات والفعاليات والإجمالي المجمّع.',
+      },
+      {
+        key: 'reports.export',
+        labelEn: 'Export reports',
+        labelAr: 'تصدير التقارير',
+        descriptionEn: 'Download reports as Excel or CSV files.',
+        descriptionAr: 'تنزيل التقارير كملفات إكسل أو CSV.',
+      },
+    ],
+  },
 ];
 
 export const ALL_TENANT_PERMISSION_KEYS: string[] =

@@ -66,6 +66,10 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
       // for existing hotels).
       'events.manage',
       'events.read',
+      // Epic 22 — the manager sees every report, including revenue.
+      'reports.read',
+      'reports.revenue',
+      'reports.export',
     ],
     isSystem: false,
   },
@@ -94,6 +98,8 @@ export const DEFAULT_TENANT_ROLES: DefaultTenantRole[] = [
       'housekeeping.read',
       // Epic 21 — front desk can see attendee counts but not manage events.
       'events.read',
+      // Epic 22 — operational reports only, no revenue.
+      'reports.read',
     ],
     isSystem: false,
   },
