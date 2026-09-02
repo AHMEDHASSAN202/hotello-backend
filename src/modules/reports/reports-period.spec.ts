@@ -35,11 +35,36 @@ describe('reports-period (Story 22.1 AC1/AC6)', () => {
       expect(parts.minutes).toBe(0);
     });
 
-    it('corrects across a Cairo DST transition day (case 3, two-pass correction)', () => {
-      // Verified live: Cairo's 2023 DST-end (fall-back) transition occurred at
-      // 2023-10-26T21:00:00Z (GMT+3 -> GMT+2). A naive single-pass guess for
-      // 2023-10-27T00:00:00Z overshoots local midnight by two hours; the
-      // second correction pass fixes it.
+    it('corrects across a Cairo spring-forward DST transition day (case 3, two-pass correction)', () => {
+      // Verified live: Cairo's 2023 DST-start (spring-forward) transition
+      // occurred at 2023-04-27T22:00:00Z (GMT+2 -> GMT+3), so local time on
+      // 2023-04-28 jumps from 23:59 (04-27) straight to 01:00 (04-28) —
+      // local midnight on 2023-04-28 never actually exists.
+      //
+      // This is the load-bearing DST case: a single-pass implementation
+      // stops after correcting by the pass-1 offset and lands on
+      // 2023-04-27T21:00:00Z, which reads back as local date 2023-04-27
+      // (the WRONG calendar date, off by one full day) — verified by hand
+      // simulation of the single-pass algorithm. Only the second correction
+      // pass (which sees the pass-1 guess overshot into the previous day and
+      // corrects by a further +60 minutes) lands on 2023-04-27T22:00:00Z,
+      // which reads back as local date 2023-04-28 (correct), 01:00 (the
+      // first local instant that exists that day — minutes is 60, not 0,
+      // because the gap swallows local midnight itself).
+      const dateStr = '2023-04-28';
+      const instant = utcInstantOfLocalMidnight(CAIRO, dateStr);
+      const parts = hotelLocalParts(CAIRO, instant);
+      expect(parts.date).toBe(dateStr);
+      expect(instant.toISOString()).toBe('2023-04-27T22:00:00.000Z');
+      expect(parts.minutes).toBe(60);
+    });
+
+    it('resolves the Cairo fall-back DST transition day cleanly (case 3b, no gap)', () => {
+      // Verified live: Cairo's 2023 DST-end (fall-back) transition occurred
+      // at 2023-10-26T21:00:00Z (GMT+3 -> GMT+2). Local midnight on
+      // 2023-10-27 is well-defined (no gap), so this case additionally
+      // confirms the two-pass correction converges to an exact minutes === 0
+      // result rather than just "the right day".
       const dateStr = '2023-10-27';
       const instant = utcInstantOfLocalMidnight(CAIRO, dateStr);
       const parts = hotelLocalParts(CAIRO, instant);
@@ -111,7 +136,7 @@ describe('reports-period (Story 22.1 AC1/AC6)', () => {
       expect(period.toDate).toBe(currentLocalDate);
     });
 
-    it('throws REPORT_RANGE_INVALID when from > to after any clamping (case 10)', () => {
+    it('throws REPORT_RANGE_INVALID when a raw from > to is given directly (no clamping involved)', () => {
       expect.assertions(2);
       try {
         resolvePeriod(CAIRO, now, {
@@ -119,6 +144,33 @@ describe('reports-period (Story 22.1 AC1/AC6)', () => {
           from: '2026-05-01',
           to: '2026-04-01',
         });
+      } catch (e) {
+        expect(e).toBeInstanceOf(ReportPeriodError);
+        expect((e as ReportPeriodError).code).toBe('REPORT_RANGE_INVALID');
+      }
+    });
+
+    it('throws REPORT_RANGE_INVALID when clamping `to` down to today is what makes from > to (case 10)', () => {
+      // now = 2026-03-05T10:00:00Z -> Cairo local date 2026-03-05 (verified
+      // earlier in this file). Pick `from` a few days AFTER today and `to`
+      // far in the future:
+      //   (a) before clamping: from='2026-03-10' <= to='2030-01-01' — valid.
+      //   (b) the future-`to` guard clamps to -> today ('2026-03-05'), never
+      //       throwing for a future `to` on its own.
+      //   (c) only AFTER that clamp does from='2026-03-10' > to='2026-03-05'
+      //       become true — this is the case that proves validation runs
+      //       after clamping, not before (a pre-clamp-only check would see
+      //       from <= to and never throw here).
+      const currentLocalDate = hotelLocalParts(CAIRO, now).date;
+      expect(currentLocalDate).toBe('2026-03-05');
+      const from = '2026-03-10';
+      const to = '2030-01-01';
+      expect(from <= to).toBe(true); // (a) valid before clamping
+      expect(from > currentLocalDate).toBe(true); // (c) invalid after clamping to->today
+
+      expect.assertions(5);
+      try {
+        resolvePeriod(CAIRO, now, { preset: 'custom', from, to });
       } catch (e) {
         expect(e).toBeInstanceOf(ReportPeriodError);
         expect((e as ReportPeriodError).code).toBe('REPORT_RANGE_INVALID');
