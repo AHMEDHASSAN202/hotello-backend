@@ -11,9 +11,13 @@ import {
 import { REQUEST_STATUSES, RequestStatus } from '../requests.constants';
 
 /**
- * 15.4 AC1/AC2 — board query. `tab=open` (default) returns every open
- * request (no pagination — the board shows them all); `tab=history` is
- * paginated. `updatedSince` switches to delta mode (spec note 4).
+ * 15.4 AC1/AC2 — board query. `tab=open` (default) returns the FULL open
+ * set (no pagination, no server-side filters — the board shows them all;
+ * the tenant UI filters client-side in board-core, and filtering the
+ * `updatedSince` delta stream would leave stale cards when a row exits the
+ * filter set). `tab=history` is paginated and applies `status`,
+ * `categoryId`, `floor`, `assigneeId` server-side. `updatedSince` switches
+ * the open tab to delta mode (spec note 4).
  */
 export class ListTenantRequestsQueryDto {
   @IsOptional()
@@ -40,11 +44,6 @@ export class ListTenantRequestsQueryDto {
   @IsOptional()
   @IsUUID()
   assigneeId?: string;
-
-  /** '1' floats only overdue rows (server-side overdue-only filter). */
-  @IsOptional()
-  @IsIn(['1'])
-  overdue?: string;
 
   @IsOptional()
   @Type(() => Number)
