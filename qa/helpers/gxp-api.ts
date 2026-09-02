@@ -303,6 +303,24 @@ export async function provisionHotel(
 
 // -------------------------------------------------------------------- plans
 
+/**
+ * A plan with EVERY module key from the live catalog. The seeded Standard
+ * plan predates later module keys (QA-14-001), so suites exercising a newer
+ * module must create explicit plans.
+ */
+export async function createFullModulePlan(
+  request: APIRequestContext,
+  adminToken: string,
+  name: string,
+): Promise<string> {
+  const catalog = await apiGet<Array<{ key: string }>>(request, '/plans/modules/catalog', adminToken);
+  const modules = catalog.body.map((m) => m.key);
+  return createPlan(request, adminToken, {
+    nameEn: name,
+    enabledModules: modules,
+  });
+}
+
 export interface PlanInput {
   nameEn: string;
   maxRooms?: number | null;
