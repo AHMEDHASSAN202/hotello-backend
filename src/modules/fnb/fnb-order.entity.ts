@@ -34,6 +34,7 @@ import {
 @Index('IDX_fnb_orders_hotel_updated', ['hotelId', 'updatedAt'])
 @Index('IDX_fnb_orders_stay', ['stayId'])
 @Index('IDX_fnb_orders_hotel_created', ['hotelId', 'createdAt'])
+@Index('IDX_fnb_orders_hotel_delivered', ['hotelId', 'deliveredAt'])
 export class FnbOrder {
   @PrimaryGeneratedColumn('uuid')
   id: string;

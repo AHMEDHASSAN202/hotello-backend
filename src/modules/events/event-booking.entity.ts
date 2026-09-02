@@ -32,6 +32,7 @@ import {
 @Index('IDX_event_bookings_event', ['eventId'])
 @Index('IDX_event_bookings_stay', ['stayId'])
 @Index('IDX_event_bookings_hotel_status', ['hotelId', 'status'])
+@Index('IDX_event_bookings_hotel_created', ['hotelId', 'createdAt'])
 export class EventBooking {
   @PrimaryGeneratedColumn('uuid')
   id: string;

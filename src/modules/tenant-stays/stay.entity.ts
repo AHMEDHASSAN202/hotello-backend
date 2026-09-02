@@ -43,6 +43,8 @@ import {
   unique: true,
   where: `"status" = 'active'`,
 })
+@Index('IDX_stays_hotel_checkin', ['hotelId', 'checkInDate'])
+@Index('IDX_stays_hotel_checkout', ['hotelId', 'checkOutDate'])
 export class Stay {
   @PrimaryGeneratedColumn('uuid')
   id: string;
