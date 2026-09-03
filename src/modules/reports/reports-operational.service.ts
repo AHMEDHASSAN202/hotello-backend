@@ -118,7 +118,8 @@ export class ReportsOperationalService {
     };
   }
 
-  private async countArrivals(hotelId: string, fromDate: string, toDate: string): Promise<number> {
+  /** Package-internal, not `private`: `ReportsOverviewService` calls this exact query shape directly. */
+  async countArrivals(hotelId: string, fromDate: string, toDate: string): Promise<number> {
     return this.staysRepo
       .createQueryBuilder('s')
       .where('s.hotelId = :hotelId', { hotelId })
@@ -126,7 +127,8 @@ export class ReportsOperationalService {
       .getCount();
   }
 
-  private async countDepartures(hotelId: string, fromUtc: Date, toUtcExclusive: Date): Promise<number> {
+  /** Package-internal, not `private`: `ReportsOverviewService` calls this exact query shape directly. */
+  async countDepartures(hotelId: string, fromUtc: Date, toUtcExclusive: Date): Promise<number> {
     return this.staysRepo.count({
       where: { hotelId, status: 'checked_out', checkedOutAt: Between(fromUtc, toUtcExclusive) },
     });
@@ -158,6 +160,15 @@ export class ReportsOperationalService {
     const completionBuckets = { '<15m': 0, '15-30m': 0, '30-60m': 0, '1-2h': 0, '>2h': 0 };
     const cancelReasons = new Map<string, number>();
     let cancelledCount = 0;
+    // Hotel-wide counterparts to the per-category `cat.*` accumulators below —
+    // kept alongside them (same loop, same branch) so the overall SLA breach
+    // rate is a true "breaches / done-with-SLA" ratio across ALL categories,
+    // never an average of the per-category percentages (that would silently
+    // misweight categories with different sample sizes).
+    let completedCount = 0;
+    let overallDoneWithSlaCount = 0;
+    let overallBreaches = 0;
+    let overallCompletionMinutesSum = 0;
 
     for (const r of rows) {
       const local = hotelLocalParts(timezone, r.createdAt);
@@ -173,11 +184,17 @@ export class ReportsOperationalService {
       byItemAgg.set(r.itemId, item);
 
       if (r.status === 'done' && r.completedAt) {
+        completedCount += 1;
         cat.doneWithSla += 1;
-        if (r.completedAt > r.dueAt) cat.breaches += 1;
+        overallDoneWithSlaCount += 1;
+        if (r.completedAt > r.dueAt) {
+          cat.breaches += 1;
+          overallBreaches += 1;
+        }
         const minutes = (r.completedAt.getTime() - r.createdAt.getTime()) / 60000;
         cat.completionMinutesSum += minutes;
         cat.completionCount += 1;
+        overallCompletionMinutesSum += minutes;
         if (minutes < 15) completionBuckets['<15m'] += 1;
         else if (minutes < 30) completionBuckets['15-30m'] += 1;
         else if (minutes < 60) completionBuckets['30-60m'] += 1;
@@ -197,6 +214,11 @@ export class ReportsOperationalService {
 
     return {
       period: { preset: dto.preset, from: resolved.fromDate, to: resolved.toDate, days: resolved.days },
+      receivedCount: rows.length,
+      completedCount,
+      overallDoneWithSlaCount,
+      overallSlaBreachRatePct: overallDoneWithSlaCount > 0 ? round1((overallBreaches / overallDoneWithSlaCount) * 100) : null,
+      overallAvgCompletionMinutes: overallDoneWithSlaCount > 0 ? round1(overallCompletionMinutesSum / overallDoneWithSlaCount) : null,
       volumeByDay: [...volumeByDayMap.entries()]
         .map(([date, count]) => ({ date, count }))
         .sort((a, b) => a.date.localeCompare(b.date)),

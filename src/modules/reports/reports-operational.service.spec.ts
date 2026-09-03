@@ -399,6 +399,108 @@ describe('ReportsOperationalService (Story 22.2)', () => {
         ],
       });
     });
+
+    it('11. receivedCount equals the fixture total row count regardless of status', async () => {
+      requestsRepo.find.mockResolvedValue([
+        makeRequest({ id: 'r1', status: 'new' }),
+        makeRequest({ id: 'r2', status: 'in_progress' }),
+        makeRequest({ id: 'r3', status: 'done', completedAt: new Date('2026-01-10T10:10:00Z') }),
+        makeRequest({ id: 'r4', status: 'cancelled', cancelledReason: 'guest_request' }),
+      ]);
+
+      const res = await service.requests(HOTEL_ID, dto, now);
+
+      expect(res.receivedCount).toBe(4);
+    });
+
+    it('12. completedCount equals the count of status="done" rows', async () => {
+      requestsRepo.find.mockResolvedValue([
+        makeRequest({ id: 'r1', status: 'new' }),
+        makeRequest({ id: 'r2', status: 'done', completedAt: new Date('2026-01-10T10:10:00Z') }),
+        makeRequest({ id: 'r3', status: 'done', completedAt: new Date('2026-01-10T10:20:00Z') }),
+        makeRequest({ id: 'r4', status: 'cancelled', cancelledReason: 'guest_request' }),
+      ]);
+
+      const res = await service.requests(HOTEL_ID, dto, now);
+
+      expect(res.completedCount).toBe(2);
+    });
+
+    it('13. overallSlaBreachRatePct/overallAvgCompletionMinutes combine ALL categories, NOT an unweighted average of per-category rates (cat A: 1/2 breach=50%, cat B: 0/3 breach=0% -> overall must be 1/5=20%, not (50+0)/2=25%)', async () => {
+      const base = new Date('2026-01-10T10:00:00Z');
+      const at = (mins: number) => new Date(base.getTime() + mins * 60000);
+      requestsRepo.find.mockResolvedValue([
+        // category A: 2 done, 1 breach (50% per-category rate)
+        makeRequest({ id: 'a1', categoryId: 'cat-a', status: 'done', createdAt: base, dueAt: at(15), completedAt: at(10) }), // on time
+        makeRequest({ id: 'a2', categoryId: 'cat-a', status: 'done', createdAt: base, dueAt: at(15), completedAt: at(25) }), // breach
+        // category B: 3 done, 0 breaches (0% per-category rate)
+        makeRequest({ id: 'b1', categoryId: 'cat-b', status: 'done', createdAt: base, dueAt: at(50), completedAt: at(5) }),
+        makeRequest({ id: 'b2', categoryId: 'cat-b', status: 'done', createdAt: base, dueAt: at(50), completedAt: at(8) }),
+        makeRequest({ id: 'b3', categoryId: 'cat-b', status: 'done', createdAt: base, dueAt: at(50), completedAt: at(12) }),
+      ]);
+      categoriesRepo.find.mockResolvedValue([
+        { id: 'cat-a', names: { en: 'A' } } as RequestCategory,
+        { id: 'cat-b', names: { en: 'B' } } as RequestCategory,
+      ]);
+
+      const res = await service.requests(HOTEL_ID, dto, now);
+
+      // Overall: 1 breach out of 5 done-with-SLA rows = 20%.
+      // The naive-average bug would produce (50 + 0) / 2 = 25% instead.
+      expect(res.overallSlaBreachRatePct).toBe(20);
+      // Overall avg completion minutes: (10 + 25 + 5 + 8 + 12) / 5 = 12.
+      expect(res.overallAvgCompletionMinutes).toBe(12);
+    });
+
+    it('14. overallDoneWithSlaCount equals the total done-with-SLA row count across all categories', async () => {
+      const base = new Date('2026-01-10T10:00:00Z');
+      requestsRepo.find.mockResolvedValue([
+        makeRequest({ id: 'a1', categoryId: 'cat-a', status: 'done', createdAt: base, dueAt: base, completedAt: base }),
+        makeRequest({ id: 'a2', categoryId: 'cat-a', status: 'done', createdAt: base, dueAt: base, completedAt: base }),
+        makeRequest({ id: 'b1', categoryId: 'cat-b', status: 'done', createdAt: base, dueAt: base, completedAt: base }),
+        makeRequest({ id: 'b2', categoryId: 'cat-b', status: 'new' }), // not done — excluded
+      ]);
+      categoriesRepo.find.mockResolvedValue([
+        { id: 'cat-a', names: { en: 'A' } } as RequestCategory,
+        { id: 'cat-b', names: { en: 'B' } } as RequestCategory,
+      ]);
+
+      const res = await service.requests(HOTEL_ID, dto, now);
+
+      expect(res.overallDoneWithSlaCount).toBe(3);
+    });
+
+    it('15. overallSlaBreachRatePct/overallAvgCompletionMinutes are null when zero rows are done in the period, even though receivedCount > 0', async () => {
+      requestsRepo.find.mockResolvedValue([
+        makeRequest({ id: 'r1', status: 'new' }),
+        makeRequest({ id: 'r2', status: 'in_progress' }),
+      ]);
+
+      const res = await service.requests(HOTEL_ID, dto, now);
+
+      expect(res.receivedCount).toBe(2);
+      expect(res.overallDoneWithSlaCount).toBe(0);
+      expect(res.overallSlaBreachRatePct).toBeNull();
+      expect(res.overallAvgCompletionMinutes).toBeNull();
+    });
+
+    it('16. countArrivals/countDepartures are callable directly (no longer private) and return the exact same values guests() derives from them', async () => {
+      qb.getCount = jest.fn().mockResolvedValue(3);
+      staysRepo.count = jest.fn().mockResolvedValue(2);
+
+      const directArrivals = await service.countArrivals(HOTEL_ID, '2026-01-10', '2026-01-10');
+      const directDepartures = await service.countDepartures(
+        HOTEL_ID,
+        new Date('2026-01-10T00:00:00Z'),
+        new Date('2026-01-11T00:00:00Z'),
+      );
+      expect(directArrivals).toBe(3);
+      expect(directDepartures).toBe(2);
+
+      const guestsReport = await service.guests(HOTEL_ID, { preset: 'today' } as any, new Date('2026-01-10T09:00:00Z'));
+      expect(guestsReport.arrivals.value).toBe(directArrivals);
+      expect(guestsReport.departures.value).toBe(directDepartures);
+    });
   });
 
   // ==================================================================

@@ -65,6 +65,11 @@ export interface GuestsReport {
 
 export interface RequestsReport {
   period: ReportPeriodView;
+  receivedCount: number; // total requests created in period
+  completedCount: number; // status='done' in period
+  overallDoneWithSlaCount: number; // sample size behind the two ratios below
+  overallSlaBreachRatePct: number | null; // breach %, ALL categories combined (not an average of per-category %s)
+  overallAvgCompletionMinutes: number | null;
   volumeByDay: { date: string; count: number }[];
   byCategory: {
     categoryId: string;
