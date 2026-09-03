@@ -6,7 +6,7 @@ import { EventBooking } from '../events/event-booking.entity';
 import { FnbOrder } from '../fnb/fnb-order.entity';
 import { Hotel } from '../hotels/hotel.entity';
 import { GuestRequest } from '../requests/request.entity';
-import { naiveUtc } from '../tenant-stays/stay-time';
+import { fromNaive, naiveUtc } from '../tenant-stays/stay-time';
 import { Stay } from '../tenant-stays/stay.entity';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { toCsv } from './csv/csv-writer';
@@ -194,7 +194,10 @@ export class ReportsExportService {
         });
         this.assertUnderCap(requests.length);
         headers = ['Room', 'Item', 'Status', 'Created', 'Completed', 'Cancelled reason'];
-        rows = requests.map((r) => [r.roomNumber, r.itemNames.en ?? '', r.status, r.createdAt.toISOString(), r.completedAt?.toISOString() ?? '', r.cancelledReason ?? '']);
+        // `createdAt` is a naive `timestamp` column (UTC wall time); pg
+        // mis-parses it as host-local. fromNaive() recovers the true
+        // instant (Epic 22 final review, C1) before it is rendered.
+        rows = requests.map((r) => [r.roomNumber, r.itemNames.en ?? '', r.status, fromNaive(r.createdAt).toISOString(), r.completedAt?.toISOString() ?? '', r.cancelledReason ?? '']);
         break;
       }
       case 'orders-feed': {
@@ -204,7 +207,9 @@ export class ReportsExportService {
         });
         this.assertUnderCap(orders.length);
         headers = ['Room', 'Guest', 'Status', 'Payment', 'Total', 'Created', 'Delivered'];
-        rows = orders.map((o) => [o.roomNumber, o.guestName, o.status, o.paymentMethod ?? 'included', o.totalAmount, o.createdAt.toISOString(), o.deliveredAt?.toISOString() ?? '']);
+        // `createdAt` is a naive `timestamp` column; fromNaive() recovers
+        // the true instant (Epic 22 final review, C1) before rendering.
+        rows = orders.map((o) => [o.roomNumber, o.guestName, o.status, o.paymentMethod ?? 'included', o.totalAmount, fromNaive(o.createdAt).toISOString(), o.deliveredAt?.toISOString() ?? '']);
         break;
       }
       case 'bookings-feed': {
@@ -214,7 +219,9 @@ export class ReportsExportService {
         });
         this.assertUnderCap(bookings.length);
         headers = ['Event', 'Party size', 'Status', 'Payment', 'Total', 'Created'];
-        rows = bookings.map((b) => [b.snapshot?.titles?.en ?? '', b.partySize, b.status, b.paymentMethod ?? 'included', b.totalAmount, b.createdAt.toISOString()]);
+        // `createdAt` is a naive `timestamp` column; fromNaive() recovers
+        // the true instant (Epic 22 final review, C1) before rendering.
+        rows = bookings.map((b) => [b.snapshot?.titles?.en ?? '', b.partySize, b.status, b.paymentMethod ?? 'included', b.totalAmount, fromNaive(b.createdAt).toISOString()]);
         break;
       }
     }

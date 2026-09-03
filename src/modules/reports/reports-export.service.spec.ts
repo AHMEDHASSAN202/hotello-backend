@@ -303,4 +303,80 @@ describe('ReportsExportService (Story 22.5)', () => {
       );
     });
   });
+
+  describe('9. CSV feeds render createdAt through fromNaive() (Epic 22 final review, C1)', () => {
+    const originalTz = process.env.TZ;
+    // Simulates what pg actually returns for a naive `timestamp` column:
+    // wall-clock digits as written (UTC wall time), parsed as host-local by
+    // the driver — constructed with the local Date constructor, matching
+    // the pattern in stay-time.spec.ts and the settlement-source specs.
+    const pgReturned = new Date(2026, 2, 15, 12, 30, 0, 0);
+    const expectedIso = '2026-03-15T12:30:00.000Z';
+
+    beforeEach(() => {
+      process.env.TZ = 'Africa/Cairo';
+    });
+
+    afterEach(() => {
+      process.env.TZ = originalTz;
+    });
+
+    it('requests-feed renders the fromNaive-recovered instant, not the raw naive value', async () => {
+      requestsRepo.find.mockResolvedValue([
+        {
+          roomNumber: '101',
+          itemNames: { en: 'Towels' },
+          status: 'done',
+          createdAt: pgReturned,
+          completedAt: null,
+          cancelledReason: null,
+        },
+      ]);
+
+      const result = await service.export(makeUser(), 'requests-feed', CUSTOM_DTO);
+
+      const csv = result.buffer.toString('utf-8');
+      expect(csv).toContain(expectedIso);
+      expect(csv).not.toContain(pgReturned.toISOString());
+    });
+
+    it('orders-feed renders the fromNaive-recovered instant, not the raw naive value', async () => {
+      ordersRepo.find.mockResolvedValue([
+        {
+          roomNumber: '101',
+          guestName: 'Guest',
+          status: 'delivered',
+          paymentMethod: 'room_charge',
+          totalAmount: 100,
+          createdAt: pgReturned,
+          deliveredAt: null,
+        },
+      ]);
+
+      const result = await service.export(makeUser(), 'orders-feed', CUSTOM_DTO);
+
+      const csv = result.buffer.toString('utf-8');
+      expect(csv).toContain(expectedIso);
+      expect(csv).not.toContain(pgReturned.toISOString());
+    });
+
+    it('bookings-feed renders the fromNaive-recovered instant, not the raw naive value', async () => {
+      bookingsRepo.find.mockResolvedValue([
+        {
+          snapshot: { titles: { en: 'Gala Dinner' } },
+          partySize: 2,
+          status: 'booked',
+          paymentMethod: 'room_charge',
+          totalAmount: 200,
+          createdAt: pgReturned,
+        },
+      ]);
+
+      const result = await service.export(makeUser(), 'bookings-feed', CUSTOM_DTO);
+
+      const csv = result.buffer.toString('utf-8');
+      expect(csv).toContain(expectedIso);
+      expect(csv).not.toContain(pgReturned.toISOString());
+    });
+  });
 });
