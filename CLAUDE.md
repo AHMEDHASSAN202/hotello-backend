@@ -73,3 +73,38 @@ during Q&A go back into the epic file.
 - Quality gates never relax: full test suite + `npm run build` +
   `npm run migration:check` must be green before every push. Never push red.
 - Changes spanning repos land backend-first, then the frontends.
+
+
+## Model Discipline (execution workflow law)
+
+This project runs a fixed model assignment per phase. These are standing
+rules, not suggestions:
+
+1. **Planning** runs on the strongest available model (Fable-class). Plans
+   read the epic spec + this file fully before proposing anything.
+
+2. **Execution** (implementing plan tasks) runs on Sonnet. Per-task reviews
+   and their fix rounds also run on Sonnet — they verify task-level
+   correctness, not architecture.
+
+3. **Final whole-epic review is a hard checkpoint:** when all plan tasks
+   (including fix rounds) are complete and the epic is otherwise ready,
+   STOP before starting the final review. Announce: "Ready for final
+   review — switch the model now." Wait for the user to switch (they will
+   run /model) and confirm before proceeding. Never run the final
+   whole-epic review on the execution model, and never skip it.
+
+4. **The final review re-verifies from scratch:** every acceptance
+   criterion in the epic spec, cross-cutting concerns (tenant isolation,
+   permission gating, i18n parity, budget/perf gates), and consistency
+   with this file's conventions. It does not trust per-task review
+   conclusions — it re-checks. Findings are classified must-fix vs
+   recommendation; must-fixes land before push.
+
+5. **After final-review fixes**, the fix verification may run on the
+   execution model, but any NEW must-fix found during verification
+   re-triggers rule 3.
+
+6. If a mid-session model switch happens for any other reason (e.g., a
+   flagged-message fallback), note it in the final report so the user
+   knows which phases ran on which model.
