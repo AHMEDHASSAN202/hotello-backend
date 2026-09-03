@@ -15,6 +15,11 @@ export interface UnsettledLine {
   totalAmount: number;
 }
 
+/** An unsettled line plus its creation time, for period-scoped reporting. */
+export interface UnsettledStayLine extends UnsettledLine {
+  createdAt: Date;
+}
+
 export interface SettlementSource {
   /** Stable identifier for the per-source breakdown (`byKey`), e.g. 'fnb'. */
   readonly key: string;
@@ -32,4 +37,18 @@ export interface SettlementSource {
     stayId: string,
     settledById: string,
   ): Promise<UnsettledLine[]>;
+
+  /**
+   * All unsettled lines for the hotel, grouped by stay. When `stayIds` is
+   * given, restricts to those stays (the caller already knows which stays
+   * it cares about — e.g. currently-active ones); when omitted, returns
+   * every unsettled line in the hotel regardless of stay. Callers that can
+   * bound the stay set SHOULD pass `stayIds` rather than relying on the
+   * unrestricted mode, since it fetches every historical order/booking for
+   * the hotel otherwise.
+   */
+  findUnsettledByStay(
+    hotelId: string,
+    stayIds?: string[],
+  ): Promise<Map<string, UnsettledStayLine[]>>;
 }

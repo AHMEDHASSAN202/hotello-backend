@@ -4,6 +4,7 @@ import { In, IsNull, Repository } from 'typeorm';
 import {
   SettlementSource,
   UnsettledLine,
+  UnsettledStayLine,
 } from '../stay-settlement/settlement-source.interface';
 import { FnbOrderStatus } from './fnb.constants';
 import { FnbOrder } from './fnb-order.entity';
@@ -70,6 +71,35 @@ export class FnbSettlementSource implements SettlementSource {
     }
     await this.ordersRepo.save(toSettle);
     return toSettle.map((o) => this.toLine(o));
+  }
+
+  /**
+   * Bulk/hotel-wide counterpart to `findUnsettled`, used by report tasks
+   * that need every unsettled line across many stays in one query rather
+   * than one `findUnsettled` call per stay. Same eligibility rule
+   * (`isEligible`), reused rather than duplicated.
+   */
+  async findUnsettledByStay(
+    hotelId: string,
+    stayIds?: string[],
+  ): Promise<Map<string, UnsettledStayLine[]>> {
+    const where: Record<string, unknown> = { hotelId };
+    if (stayIds) where.stayId = In(stayIds);
+    const orders = await this.ordersRepo.find({ where });
+
+    const map = new Map<string, UnsettledStayLine[]>();
+    for (const order of orders) {
+      if (!this.isEligible(order)) continue;
+      const line: UnsettledStayLine = {
+        id: order.id,
+        totalAmount: order.totalAmount,
+        createdAt: order.createdAt,
+      };
+      const lines = map.get(order.stayId);
+      if (lines) lines.push(line);
+      else map.set(order.stayId, [line]);
+    }
+    return map;
   }
 
   private isEligible(order: FnbOrder): boolean {

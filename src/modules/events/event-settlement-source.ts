@@ -1,9 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { In, IsNull, Repository } from 'typeorm';
 import {
   SettlementSource,
   UnsettledLine,
+  UnsettledStayLine,
 } from '../stay-settlement/settlement-source.interface';
 import { EventBooking } from './event-booking.entity';
 
@@ -60,6 +61,35 @@ export class EventSettlementSource implements SettlementSource {
     }
     await this.bookingsRepo.save(toSettle);
     return toSettle.map((b) => this.toLine(b));
+  }
+
+  /**
+   * Bulk/hotel-wide counterpart to `findUnsettled`, mirroring
+   * `FnbSettlementSource.findUnsettledByStay` — used by report tasks that
+   * need every unsettled line across many stays in one query. Same
+   * eligibility rule (`isEligible`), reused rather than duplicated.
+   */
+  async findUnsettledByStay(
+    hotelId: string,
+    stayIds?: string[],
+  ): Promise<Map<string, UnsettledStayLine[]>> {
+    const where: Record<string, unknown> = { hotelId };
+    if (stayIds) where.stayId = In(stayIds);
+    const bookings = await this.bookingsRepo.find({ where });
+
+    const map = new Map<string, UnsettledStayLine[]>();
+    for (const booking of bookings) {
+      if (!this.isEligible(booking)) continue;
+      const line: UnsettledStayLine = {
+        id: booking.id,
+        totalAmount: booking.totalAmount,
+        createdAt: booking.createdAt,
+      };
+      const lines = map.get(booking.stayId);
+      if (lines) lines.push(line);
+      else map.set(booking.stayId, [line]);
+    }
+    return map;
   }
 
   private isEligible(booking: EventBooking): boolean {
