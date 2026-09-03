@@ -249,3 +249,22 @@ implementation exactly, so no frontend workaround was needed. Combined
 with the performance numbers above, the epic is ready for pilot-hotel use;
 the only open item is the forward-looking `overview` delta-comparison cost
 noted above, which remains a later-scale concern, not a blocker.
+
+## Follow-up tasks (from the frontend final re-review's business-fit pass, 2026-09-03)
+
+Logged in priority order; neither blocks pilot use. Three sibling gaps found
+in the same pass (the balances aging column, the hotel-wide outstanding
+total, and the "vs same time yesterday" delta label) were judged core to the
+balances story and fixed before the frontend push instead of being logged.
+
+1. **Heat-strip hour axis (tablet-first).** The busiest-hours strip renders
+   24 unlabelled bars with per-hour info hover-only; on the front desk's
+   tablets (no hover) a manager can see the peak callout but cannot place
+   the *second* bump — which is the staffing question 22.2's AC asks. Add a
+   sparse hour axis (e.g. 00/06/12/18 ticks, localized) under the strip.
+2. **Content-level chart assertions.** The dining tab's three charts and the
+   services/housekeeping bar charts have no test asserting rendered content
+   — a wrong `xKey`/series key renders an empty chart and every suite stays
+   green, including on the revenue tab. Add one series-content assertion per
+   chart-consuming content component (the guests/totals tests' converted
+   async `findBy*` pattern is the template).
