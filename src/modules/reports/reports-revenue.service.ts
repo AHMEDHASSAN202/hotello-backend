@@ -83,21 +83,37 @@ export class ReportsRevenueService {
     });
   }
 
-  /** Events whose `startAtLocal` falls in the period, plus ALL their bookings (any status/createdAt — an event's performance is reported once, for its own start date, regardless of when its bookings were made). */
+  /**
+   * Events whose `startAtLocal` falls in the period, plus ALL their bookings
+   * (any status/createdAt — an event's performance is reported once, for its
+   * own start date, regardless of when its bookings were made).
+   *
+   * Epic 22 final review, I4 — the `startAtLocal` range now lives in the
+   * query (`createQueryBuilder`) instead of fetching every published/
+   * completed event for the hotel and filtering the range in memory, which
+   * defeated `IDX_events_hotel_start` (hotelId, startAtLocal) on hotels with
+   * a long event history.
+   */
   private async fetchPeriodEvents(
     hotelId: string,
     resolved: ResolvedPeriod,
   ): Promise<{ events: Event[]; bookingsByEvent: Map<string, EventBooking[]> }> {
-    const candidates = await this.eventsRepo.find({
-      where: { hotelId, status: In(['published', 'completed']) },
-    });
     const fromStamp = `${resolved.fromDate} 00:00`;
     const toStamp = `${resolved.toDate} 23:59`;
-    const events = candidates.filter((e) => e.startAtLocal >= fromStamp && e.startAtLocal <= toStamp);
+    const events = await this.eventsRepo
+      .createQueryBuilder('e')
+      .where('e.hotelId = :hotelId', { hotelId })
+      .andWhere('e.status IN (:...statuses)', { statuses: ['published', 'completed'] })
+      .andWhere('e.startAtLocal >= :from AND e.startAtLocal <= :to', { from: fromStamp, to: toStamp })
+      .getMany();
     if (events.length === 0) return { events: [], bookingsByEvent: new Map() };
 
     const eventIds = events.map((e) => e.id);
-    const bookings = await this.bookingsRepo.find({ where: { eventId: In(eventIds) } });
+    // Epic 22 final review, I4 — explicit hotelId predicate, transitively
+    // safe today (eventIds are already hotel-scoped above) but an explicit
+    // tenant-isolation guard belongs on every tenant-scoped query, not just
+    // the ones that happen to need it for correctness right now.
+    const bookings = await this.bookingsRepo.find({ where: { hotelId, eventId: In(eventIds) } });
     const bookingsByEvent = new Map<string, EventBooking[]>();
     for (const b of bookings) {
       const arr = bookingsByEvent.get(b.eventId) ?? [];

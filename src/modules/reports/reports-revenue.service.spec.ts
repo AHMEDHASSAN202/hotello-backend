@@ -1,7 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Between, In } from 'typeorm';
+import { Between } from 'typeorm';
 import { EventBooking } from '../events/event-booking.entity';
 import { Event } from '../events/event.entity';
 import { EventSettlementSource } from '../events/event-settlement-source';
@@ -88,7 +88,8 @@ describe('ReportsRevenueService (Story 22.3)', () => {
   let hotelsRepo: { findOne: jest.Mock };
   let ordersRepo: { find: jest.Mock };
   let linesRepo: { find: jest.Mock };
-  let eventsRepo: { find: jest.Mock };
+  let eventsRepo: { find: jest.Mock; createQueryBuilder: jest.Mock };
+  let eventsQb: Record<string, jest.Mock>;
   let bookingsRepo: { find: jest.Mock };
   let fnbSettlement: { findUnsettledByStay: jest.Mock };
   let eventSettlement: { findUnsettledByStay: jest.Mock };
@@ -97,7 +98,21 @@ describe('ReportsRevenueService (Story 22.3)', () => {
     hotelsRepo = { findOne: jest.fn().mockResolvedValue(makeHotel()) };
     ordersRepo = { find: jest.fn().mockResolvedValue([]) };
     linesRepo = { find: jest.fn().mockResolvedValue([]) };
-    eventsRepo = { find: jest.fn().mockResolvedValue([]) };
+    // Epic 22 final review, I4 — fetchPeriodEvents() now pushes the
+    // startAtLocal range (and status) into the query via
+    // createQueryBuilder() instead of eventsRepo.find() + in-memory
+    // filtering (which defeated IDX_events_hotel_start).
+    eventsQb = {
+      where: jest.fn(),
+      andWhere: jest.fn(),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+    eventsQb.where.mockReturnValue(eventsQb);
+    eventsQb.andWhere.mockReturnValue(eventsQb);
+    eventsRepo = {
+      find: jest.fn().mockResolvedValue([]),
+      createQueryBuilder: jest.fn(() => eventsQb),
+    };
     bookingsRepo = { find: jest.fn().mockResolvedValue([]) };
     fnbSettlement = { findUnsettledByStay: jest.fn().mockResolvedValue(new Map()) };
     eventSettlement = { findUnsettledByStay: jest.fn().mockResolvedValue(new Map()) };
@@ -334,38 +349,64 @@ describe('ReportsRevenueService (Story 22.3)', () => {
     const dto = { preset: 'custom', from: '2026-01-10', to: '2026-01-12' } as any;
     const now = new Date('2026-01-15T10:00:00Z');
 
-    it('1. queries events by hotelId + status in [published, completed]', async () => {
+    // Epic 22 final review, I4 — fetchPeriodEvents() now pushes hotelId,
+    // status, AND the startAtLocal range into the query itself
+    // (createQueryBuilder), instead of fetching every published/completed
+    // event for the hotel and filtering the range in memory (which defeated
+    // IDX_events_hotel_start). A mocked query builder can't exercise real
+    // SQL boundary semantics, so these tests assert the exact predicate/
+    // param values reach the query builder, rather than asserting on
+    // filtered-vs-unfiltered fixture rows.
+    it('1. queries events by hotelId + status in [published, completed] via the query builder', async () => {
       await service.events(HOTEL_ID, dto, now);
 
-      const callArg = eventsRepo.find.mock.calls[0][0];
-      expect(callArg.where).toEqual({ hotelId: HOTEL_ID, status: In(['published', 'completed']) });
+      expect(eventsRepo.createQueryBuilder).toHaveBeenCalledWith('e');
+      expect(eventsQb.where).toHaveBeenCalledWith('e.hotelId = :hotelId', { hotelId: HOTEL_ID });
+      expect(eventsQb.andWhere).toHaveBeenCalledWith('e.status IN (:...statuses)', {
+        statuses: ['published', 'completed'],
+      });
     });
 
-    it('2. includes an event exactly at the lower boundary (fromDate 00:00)', async () => {
-      eventsRepo.find.mockResolvedValue([makeEvent({ id: 'e-lower', startAtLocal: '2026-01-10 00:00' })]);
+    it('2. passes the lower boundary (fromDate 00:00) as the exact :from param', async () => {
+      await service.events(HOTEL_ID, dto, now);
 
-      const res = await service.events(HOTEL_ID, dto, now);
-
-      expect(res.events.map((e) => e.eventId)).toEqual(['e-lower']);
+      expect(eventsQb.andWhere).toHaveBeenCalledWith(
+        'e.startAtLocal >= :from AND e.startAtLocal <= :to',
+        { from: '2026-01-10 00:00', to: '2026-01-12 23:59' },
+      );
     });
 
-    it('3. includes an event exactly at the upper boundary (toDate 23:59)', async () => {
-      eventsRepo.find.mockResolvedValue([makeEvent({ id: 'e-upper', startAtLocal: '2026-01-12 23:59' })]);
+    it('3. passes the upper boundary (toDate 23:59) as the exact :to param for a different resolved range', async () => {
+      const narrowDto = { preset: 'custom', from: '2026-01-02', to: '2026-01-05' } as any;
 
-      const res = await service.events(HOTEL_ID, dto, now);
+      await service.events(HOTEL_ID, narrowDto, now);
 
-      expect(res.events.map((e) => e.eventId)).toEqual(['e-upper']);
+      expect(eventsQb.andWhere).toHaveBeenCalledWith(
+        'e.startAtLocal >= :from AND e.startAtLocal <= :to',
+        { from: '2026-01-02 00:00', to: '2026-01-05 23:59' },
+      );
     });
 
-    it('4. excludes an event just outside each boundary', async () => {
-      eventsRepo.find.mockResolvedValue([
-        makeEvent({ id: 'e-before', startAtLocal: '2026-01-09 23:59' }),
-        makeEvent({ id: 'e-after', startAtLocal: '2026-01-13 00:00' }),
+    it('4. events() returns exactly what the query builder resolves — no additional in-memory startAtLocal filtering on top', async () => {
+      eventsQb.getMany.mockResolvedValue([
+        makeEvent({ id: 'e-outside-if-app-filtered', startAtLocal: '2099-01-01 00:00' }),
       ]);
 
       const res = await service.events(HOTEL_ID, dto, now);
 
-      expect(res.events).toEqual([]);
+      // The service trusts the query's own filtering entirely; it must not
+      // re-check/re-exclude rows the (mocked) query already returned.
+      expect(res.events.map((e) => e.eventId)).toEqual(['e-outside-if-app-filtered']);
+    });
+
+    it('4b. Epic 22 final review, I4 — the bookings fetch carries an explicit hotelId predicate alongside eventId In(...)', async () => {
+      eventsQb.getMany.mockResolvedValue([makeEvent({ id: 'e1' })]);
+
+      await service.events(HOTEL_ID, dto, now);
+
+      const callArg = bookingsRepo.find.mock.calls[0][0];
+      expect(callArg.where.hotelId).toBe(HOTEL_ID);
+      expect(callArg.where.eventId).toBeDefined();
     });
 
     it('5. a draft-status event is excluded entirely even if its startAtLocal is in range (the repo query itself filters status, proven by test 1); a cancelled event likewise never reaches the candidates list', async () => {
@@ -373,7 +414,7 @@ describe('ReportsRevenueService (Story 22.3)', () => {
       // the where clause asserted in test 1 (status IN [published, completed]).
       // Simulate the DB correctly excluding draft/cancelled by simply not
       // returning them, proving the aggregation doesn't need to re-filter.
-      eventsRepo.find.mockResolvedValue([makeEvent({ id: 'e-published', status: 'published' })]);
+      eventsQb.getMany.mockResolvedValue([makeEvent({ id: 'e-published', status: 'published' })]);
 
       const res = await service.events(HOTEL_ID, dto, now);
 
@@ -381,7 +422,7 @@ describe('ReportsRevenueService (Story 22.3)', () => {
     });
 
     it('6. booked sums partySize of status=booked bookings only', async () => {
-      eventsRepo.find.mockResolvedValue([makeEvent()]);
+      eventsQb.getMany.mockResolvedValue([makeEvent()]);
       bookingsRepo.find.mockResolvedValue([
         makeBooking({ id: 'b1', status: 'booked', partySize: 2 }),
         makeBooking({ id: 'b2', status: 'booked', partySize: 3 }),
@@ -394,7 +435,7 @@ describe('ReportsRevenueService (Story 22.3)', () => {
     });
 
     it('7. revenue excludes included bookings', async () => {
-      eventsRepo.find.mockResolvedValue([makeEvent()]);
+      eventsQb.getMany.mockResolvedValue([makeEvent()]);
       bookingsRepo.find.mockResolvedValue([
         makeBooking({ id: 'b1', status: 'booked', included: false, totalAmount: 100 }),
         makeBooking({ id: 'b2', status: 'booked', included: true, totalAmount: 999, unitPrice: 0 }),
@@ -406,7 +447,7 @@ describe('ReportsRevenueService (Story 22.3)', () => {
     });
 
     it('8. paidSeats/freeSeats/includedSeats partition a 3-way split correctly (unitPrice 0 + included:false is freeSeats, not paidSeats or includedSeats)', async () => {
-      eventsRepo.find.mockResolvedValue([makeEvent()]);
+      eventsQb.getMany.mockResolvedValue([makeEvent()]);
       bookingsRepo.find.mockResolvedValue([
         makeBooking({ id: 'b-paid', status: 'booked', included: false, unitPrice: 50, partySize: 1 }),
         makeBooking({ id: 'b-free', status: 'booked', included: false, unitPrice: 0, totalAmount: 0, partySize: 2 }),
@@ -421,7 +462,7 @@ describe('ReportsRevenueService (Story 22.3)', () => {
     });
 
     it('9. cancellationRatePct is a ratio over ALL bookings (booked + cancelled), not just active ones', async () => {
-      eventsRepo.find.mockResolvedValue([makeEvent()]);
+      eventsQb.getMany.mockResolvedValue([makeEvent()]);
       bookingsRepo.find.mockResolvedValue([
         makeBooking({ id: 'b1', status: 'booked' }),
         makeBooking({ id: 'b2', status: 'cancelled' }),
@@ -435,7 +476,7 @@ describe('ReportsRevenueService (Story 22.3)', () => {
     });
 
     it("10. a booking's createdAt far outside the period doesn't matter — only the event's startAtLocal gates inclusion", async () => {
-      eventsRepo.find.mockResolvedValue([makeEvent({ startAtLocal: '2026-01-11 18:00' })]);
+      eventsQb.getMany.mockResolvedValue([makeEvent({ startAtLocal: '2026-01-11 18:00' })]);
       bookingsRepo.find.mockResolvedValue([
         makeBooking({ id: 'b1', status: 'booked', partySize: 4, createdAt: new Date('2019-06-01T00:00:00Z') }),
       ]);
@@ -446,7 +487,7 @@ describe('ReportsRevenueService (Story 22.3)', () => {
     });
 
     it('11. totals aggregate revenue/booked/cancellationRatePct across all in-period events', async () => {
-      eventsRepo.find.mockResolvedValue([
+      eventsQb.getMany.mockResolvedValue([
         makeEvent({ id: 'e1', startAtLocal: '2026-01-10 10:00' }),
         makeEvent({ id: 'e2', startAtLocal: '2026-01-11 10:00' }),
       ]);
@@ -488,7 +529,7 @@ describe('ReportsRevenueService (Story 22.3)', () => {
           ? Promise.resolve([makeOrder({ id: 'o1', totalAmount: 40 }), makeOrder({ id: 'o2', totalAmount: 60 })])
           : Promise.resolve([]),
       );
-      eventsRepo.find.mockResolvedValue([makeEvent({ startAtLocal: '2026-01-11 10:00' })]);
+      eventsQb.getMany.mockResolvedValue([makeEvent({ startAtLocal: '2026-01-11 10:00' })]);
       bookingsRepo.find.mockResolvedValue([
         makeBooking({ id: 'b1', status: 'booked', included: false, totalAmount: 30 }),
       ]);
@@ -513,7 +554,7 @@ describe('ReportsRevenueService (Story 22.3)', () => {
             ])
           : Promise.resolve([]),
       );
-      eventsRepo.find.mockResolvedValue([makeEvent({ startAtLocal: '2026-01-11 10:00' })]);
+      eventsQb.getMany.mockResolvedValue([makeEvent({ startAtLocal: '2026-01-11 10:00' })]);
       bookingsRepo.find.mockResolvedValue([
         makeBooking({ id: 'b-cash', status: 'booked', paymentMethod: 'cash', totalAmount: 10 }),
         makeBooking({ id: 'b-rc-settled', status: 'booked', paymentMethod: 'room_charge', totalAmount: 15, settledAt: new Date() }),
@@ -608,7 +649,7 @@ describe('ReportsRevenueService (Story 22.3)', () => {
           ? Promise.resolve([makeOrder({ id: 'o1', totalAmount: 25, deliveredAt: new Date('2026-01-11T10:00:00Z') })])
           : Promise.resolve([]),
       );
-      eventsRepo.find.mockResolvedValue([makeEvent({ startAtLocal: '2026-01-11 18:00' })]);
+      eventsQb.getMany.mockResolvedValue([makeEvent({ startAtLocal: '2026-01-11 18:00' })]);
       bookingsRepo.find.mockResolvedValue([
         makeBooking({ id: 'b1', status: 'booked', included: false, totalAmount: 15 }),
       ]);
@@ -627,7 +668,7 @@ describe('ReportsRevenueService (Story 22.3)', () => {
             ])
           : Promise.resolve([]),
       );
-      eventsRepo.find.mockResolvedValue([makeEvent({ startAtLocal: '2026-01-11 10:00' })]);
+      eventsQb.getMany.mockResolvedValue([makeEvent({ startAtLocal: '2026-01-11 10:00' })]);
       bookingsRepo.find.mockResolvedValue([
         makeBooking({ id: 'b-cash', status: 'booked', paymentMethod: 'cash', totalAmount: 10 }),
         makeBooking({ id: 'b-rc', status: 'booked', paymentMethod: 'room_charge', totalAmount: 5 }),
