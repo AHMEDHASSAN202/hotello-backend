@@ -1,6 +1,7 @@
 import { NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { In } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { EventBooking } from '../events/event-booking.entity';
 import { EventSettlementSource } from '../events/event-settlement-source';
@@ -29,6 +30,7 @@ const makeFnbOrder = (o: Partial<FnbOrder> = {}): FnbOrder =>
     totalAmount: 100,
     settledAt: null,
     settledById: null,
+    createdAt: new Date('2026-01-01T00:00:00Z'),
     ...o,
   }) as FnbOrder;
 
@@ -42,6 +44,7 @@ const makeBooking = (o: Partial<EventBooking> = {}): EventBooking =>
     totalAmount: 50,
     settledAt: null,
     settledById: null,
+    createdAt: new Date('2026-01-01T00:00:00Z'),
     ...o,
   }) as EventBooking;
 
@@ -240,6 +243,170 @@ describe('StaySettlementService (Story 21.6 AC2)', () => {
       );
       expect(fnbOrdersRepo.find).not.toHaveBeenCalled();
       expect(eventBookingsRepo.find).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('unsettledByStay / unsettledStayIds (Story 22.4 AC1/AC4)', () => {
+    it('matches unsettledTotal\'s total/byKey for the same stay ("computed two ways")', async () => {
+      fnbOrdersRepo.find.mockResolvedValue([
+        makeFnbOrder({ id: 'fnb-1', totalAmount: 100 }),
+        makeFnbOrder({ id: 'fnb-2', totalAmount: 60.5 }),
+      ]);
+      eventBookingsRepo.find.mockResolvedValue([
+        makeBooking({ id: 'booking-1', totalAmount: 40 }),
+      ]);
+
+      const viaTotal = await service.unsettledTotal(actor, STAY_ID);
+      const viaByStay = await service.unsettledByStay(HOTEL_ID, [STAY_ID]);
+      const summary = viaByStay.get(STAY_ID);
+
+      expect(summary).toBeDefined();
+      expect(summary!.total).toBe(viaTotal.total);
+      expect(summary!.byKey).toEqual(viaTotal.byKey);
+      expect(viaTotal.total).toBe(200.5);
+      expect(viaTotal.byKey).toEqual({ fnb: 160.5, events: 40 });
+    });
+
+    it('oldestUnsettledAt is the minimum createdAt across both sources', async () => {
+      fnbOrdersRepo.find.mockResolvedValue([
+        makeFnbOrder({
+          id: 'fnb-1',
+          totalAmount: 100,
+          createdAt: new Date('2026-01-01T00:00:00Z'),
+        }),
+      ]);
+      eventBookingsRepo.find.mockResolvedValue([
+        makeBooking({
+          id: 'booking-1',
+          totalAmount: 40,
+          createdAt: new Date('2026-02-01T00:00:00Z'),
+        }),
+      ]);
+
+      const result = await service.unsettledByStay(HOTEL_ID, [STAY_ID]);
+
+      expect(result.get(STAY_ID)!.oldestUnsettledAt).toEqual(
+        new Date('2026-01-01T00:00:00Z'),
+      );
+    });
+
+    it('returns one entry per stay across multiple stays', async () => {
+      fnbOrdersRepo.find.mockResolvedValue([
+        makeFnbOrder({
+          id: 'fnb-1',
+          stayId: 'stay-1',
+          totalAmount: 100,
+          createdAt: new Date('2026-01-01T00:00:00Z'),
+        }),
+        makeFnbOrder({
+          id: 'fnb-2',
+          stayId: 'stay-2',
+          totalAmount: 30,
+          createdAt: new Date('2026-01-05T00:00:00Z'),
+        }),
+      ]);
+      eventBookingsRepo.find.mockResolvedValue([
+        makeBooking({
+          id: 'booking-1',
+          stayId: 'stay-1',
+          totalAmount: 40,
+          createdAt: new Date('2026-01-02T00:00:00Z'),
+        }),
+      ]);
+
+      const result = await service.unsettledByStay(HOTEL_ID);
+
+      expect(result.size).toBe(2);
+      expect(result.get('stay-1')).toEqual({
+        total: 140,
+        byKey: { fnb: 100, events: 40 },
+        oldestUnsettledAt: new Date('2026-01-01T00:00:00Z'),
+      });
+      expect(result.get('stay-2')).toEqual({
+        total: 30,
+        byKey: { fnb: 30 },
+        oldestUnsettledAt: new Date('2026-01-05T00:00:00Z'),
+      });
+    });
+
+    it('excludes a stay whose records are all ineligible (does not appear with total: 0)', async () => {
+      fnbOrdersRepo.find.mockResolvedValue([
+        makeFnbOrder({
+          id: 'fnb-cash',
+          stayId: 'stay-cash',
+          paymentMethod: 'cash',
+          totalAmount: 999,
+        }),
+      ]);
+      eventBookingsRepo.find.mockResolvedValue([
+        makeBooking({
+          id: 'booking-settled',
+          stayId: 'stay-cash',
+          settledAt: new Date('2026-01-01T00:00:00Z'),
+          settledById: 'user-1',
+          totalAmount: 999,
+        }),
+      ]);
+
+      const result = await service.unsettledByStay(HOTEL_ID);
+
+      expect(result.has('stay-cash')).toBe(false);
+      expect(result.size).toBe(0);
+    });
+
+    it('returns an empty Map / empty Set for an empty hotel', async () => {
+      fnbOrdersRepo.find.mockResolvedValue([]);
+      eventBookingsRepo.find.mockResolvedValue([]);
+
+      const byStay = await service.unsettledByStay(HOTEL_ID);
+      const stayIds = await service.unsettledStayIds(HOTEL_ID);
+
+      expect(byStay.size).toBe(0);
+      expect(stayIds.size).toBe(0);
+    });
+
+    it('unsettledStayIds returns exactly the keys of unsettledByStay', async () => {
+      fnbOrdersRepo.find.mockResolvedValue([
+        makeFnbOrder({ id: 'fnb-1', stayId: 'stay-1', totalAmount: 100 }),
+        makeFnbOrder({ id: 'fnb-2', stayId: 'stay-2', totalAmount: 30 }),
+      ]);
+      eventBookingsRepo.find.mockResolvedValue([
+        makeBooking({ id: 'booking-1', stayId: 'stay-3', totalAmount: 40 }),
+      ]);
+
+      const byStay = await service.unsettledByStay(HOTEL_ID);
+      const stayIds = await service.unsettledStayIds(HOTEL_ID);
+
+      expect([...stayIds].sort()).toEqual([...byStay.keys()].sort());
+    });
+
+    it('forwards stayIds to each source as where.stayId = In(stayIds)', async () => {
+      await service.unsettledByStay(HOTEL_ID, ['stay-1', 'stay-2']);
+
+      expect(fnbOrdersRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            stayId: In(['stay-1', 'stay-2']),
+          }),
+        }),
+      );
+      expect(eventBookingsRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            stayId: In(['stay-1', 'stay-2']),
+          }),
+        }),
+      );
+    });
+
+    it('does NOT call stays.findStayInHotel (no single-stay chokepoint in a bulk query)', async () => {
+      fnbOrdersRepo.find.mockResolvedValue([
+        makeFnbOrder({ id: 'fnb-1', totalAmount: 100 }),
+      ]);
+
+      await service.unsettledByStay(HOTEL_ID);
+
+      expect(stays.findStayInHotel).not.toHaveBeenCalled();
     });
   });
 });

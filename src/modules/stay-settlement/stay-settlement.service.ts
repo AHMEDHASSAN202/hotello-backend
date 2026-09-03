@@ -19,6 +19,12 @@ export interface StayUnsettledView {
   byKey: Record<string, number>;
 }
 
+export interface StayUnsettledSummary {
+  total: number;
+  byKey: Record<string, number>;
+  oldestUnsettledAt: Date;
+}
+
 /**
  * Story 21.6 AC2 — the stay-checkout drawer's combined view: one unsettled
  * total and one settle action across every `SettlementSource` (today: F&B
@@ -110,5 +116,54 @@ export class StaySettlementService {
         remaining.reduce((total, lines) => total + sumLines(lines), 0),
       ),
     };
+  }
+
+  /**
+   * Hotel-wide counterpart to `unsettledTotal` — no single-stay chokepoint
+   * (there is no "not found" concept for a bulk query), so this does NOT call
+   * `findStayInHotel`. Every source's eligibility rule is exactly the one it
+   * already owns (`findUnsettledByStay`) — nothing here re-implements that.
+   */
+  async unsettledByStay(
+    hotelId: string,
+    stayIds?: string[],
+  ): Promise<Map<string, StayUnsettledSummary>> {
+    const perSource = await Promise.all(
+      this.sources.map((source) => source.findUnsettledByStay(hotelId, stayIds)),
+    );
+
+    const result = new Map<string, StayUnsettledSummary>();
+    this.sources.forEach((source, i) => {
+      const byStay = perSource[i];
+      for (const [stayId, lines] of byStay) {
+        if (lines.length === 0) continue;
+        const subtotal = sumLines(lines);
+        const oldest = lines.reduce(
+          (min, line) => (line.createdAt < min ? line.createdAt : min),
+          lines[0].createdAt,
+        );
+        const existing = result.get(stayId);
+        if (existing) {
+          existing.total = round2(existing.total + subtotal);
+          existing.byKey[source.key] = subtotal;
+          if (oldest < existing.oldestUnsettledAt) {
+            existing.oldestUnsettledAt = oldest;
+          }
+        } else {
+          result.set(stayId, {
+            total: subtotal,
+            byKey: { [source.key]: subtotal },
+            oldestUnsettledAt: oldest,
+          });
+        }
+      }
+    });
+    return result;
+  }
+
+  /** Thin wrapper — the set of stays with any unsettled balance in the hotel. */
+  async unsettledStayIds(hotelId: string): Promise<Set<string>> {
+    const byStay = await this.unsettledByStay(hotelId);
+    return new Set(byStay.keys());
   }
 }
