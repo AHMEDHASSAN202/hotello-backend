@@ -88,3 +88,52 @@ export interface HousekeepingReport {
   dndNow: number;
   dataSince?: string; // 'YYYY-MM-DD' — absent if data covers the whole period
 }
+
+// ---------------------------------------------------------- Story 22.3
+
+export interface DiningReport {
+  period: ReportPeriodView;
+  currency: string;
+  revenueByDay: { date: string; revenue: number; orders: number }[];
+  ordersCount: number;
+  revenueTotal: number;
+  avgOrderValue: number | null; // over paid (totalAmount > 0) delivered orders only
+  topItems: { itemId: string; names: Record<string, string>; qty: number; revenue: number }[];
+  includedConsumption: { itemId: string; names: Record<string, string>; qty: number }[]; // NEVER revenue
+  byZone: { destinationType: 'room' | 'location'; locationKey: string | null; names: Record<string, string> | null; revenue: number; orders: number }[];
+  paymentSplit: { cash: number; roomCharge: number };
+  cancellations: { count: number; reasons: { reason: string; count: number }[] };
+  basis: 'delivered_only';
+}
+
+export interface EventPerformance {
+  eventId: string;
+  titles: Record<string, string>;
+  startAtLocal: string;
+  capacity: number | null;
+  booked: number;
+  revenue: number;
+  paidSeats: number;
+  freeSeats: number;
+  includedSeats: number;
+  cancellationRatePct: number;
+}
+
+export interface EventsReport {
+  period: ReportPeriodView;
+  currency: string;
+  events: EventPerformance[];
+  totals: { revenue: number; booked: number; cancellationRatePct: number };
+  basis: 'events_starting_in_period';
+}
+
+export interface TotalsReport {
+  period: ReportPeriodView;
+  currency: string;
+  byDay: { date: string; dining: number; events: number; total: number }[];
+  byMethod: { cash: number; roomCharge: number };
+  grandTotal: number;
+  collected: number;
+  outstanding: number;
+  basis: 'delivered_booked';
+}
