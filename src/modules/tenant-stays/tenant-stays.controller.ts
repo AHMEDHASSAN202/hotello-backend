@@ -13,6 +13,7 @@ import {
 import { CurrentTenantUser } from '../../common/decorators/current-tenant-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { TenantScope } from '../../common/decorators/tenant-scope.decorator';
+import { StaySettlementService } from '../stay-settlement/stay-settlement.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { ChangeRoomDto } from './dto/change-room.dto';
 import { CreateStayDto } from './dto/create-stay.dto';
@@ -28,15 +29,22 @@ import { TenantStaysService } from './tenant-stays.service';
 @TenantScope()
 @Controller('tenant/stays')
 export class TenantStaysController {
-  constructor(private readonly staysService: TenantStaysService) {}
+  constructor(
+    private readonly staysService: TenantStaysService,
+    private readonly staySettlement: StaySettlementService,
+  ) {}
 
   @Get()
   @RequirePermissions('stays.read')
-  list(
+  async list(
     @CurrentTenantUser() user: TenantUser,
     @Query() query: ListStaysQueryDto,
   ) {
-    return this.staysService.list(user, query);
+    // Story 22.4 AC4 — fetched unconditionally on every list call (not only
+    // when hasBalance is requested): the balance decoration must appear on
+    // any row that has one, independent of whether the filter is active.
+    const balances = await this.staySettlement.unsettledByStay(user.hotelId);
+    return this.staysService.list(user, query, balances);
   }
 
   @Post()

@@ -28,6 +28,7 @@ import { PosterPdfQueryDto } from './dto/poster-pdf.dto';
 import { QrFormatQueryDto } from './dto/qr-format-query.dto';
 import { UpdateRoomDto } from './dto/update-room.dto';
 import { RoomsPdfService } from './pdf/rooms-pdf.service';
+import { StaySettlementService } from '../stay-settlement/stay-settlement.service';
 import { TenantRoomsService } from './tenant-rooms.service';
 import { IMPORT_MAX_BYTES } from './xlsx/rooms-xlsx.constants';
 import { RoomsXlsxService } from './xlsx/rooms-xlsx.service';
@@ -61,18 +62,24 @@ export class TenantRoomsController {
     private readonly roomsService: TenantRoomsService,
     private readonly roomsPdfService: RoomsPdfService,
     private readonly roomsXlsxService: RoomsXlsxService,
+    private readonly staySettlement: StaySettlementService,
   ) {}
 
   @Get()
   @RequirePermissions('rooms.read')
-  list(
+  async list(
     @CurrentTenantUser() user: TenantUser,
     @Query() query: ListRoomsQueryDto,
   ) {
+    // Story 22.4 AC4 — fetched unconditionally on every list call, same as
+    // occupancy decoration always running: the badge must appear on any row
+    // with a balance regardless of whether the filter is active.
+    const balances = await this.staySettlement.unsettledByStay(user.hotelId);
     return this.roomsService.list(
       user.hotelId,
       query,
       canReadStays(user),
+      balances,
     );
   }
 

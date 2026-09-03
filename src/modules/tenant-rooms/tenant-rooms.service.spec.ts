@@ -325,6 +325,172 @@ describe('TenantRoomsService', () => {
     });
   });
 
+  describe('hasBalance filter + decoration (Story 22.4 AC4)', () => {
+    beforeEach(() => {
+      hotelsRepo.findOne.mockResolvedValue({ id: HOTEL_ID, roomsCount: 12 });
+      subscriptions.getForHotel.mockResolvedValue({
+        current: { plan: { maxRooms: 50 } },
+      });
+      roomTypesRepo.find.mockResolvedValue([
+        { id: 'rt-1', nameEn: 'Standard', nameAr: 'قياسية' },
+      ]);
+    });
+
+    const balanceEntry = (total: number) => ({
+      total,
+      byKey: {},
+      oldestUnsettledAt: new Date(),
+    });
+
+    // Distinguishes the balance-translation query (`where.id`) from the
+    // occupancy batch-load (`where.roomId`) — both hit staysRepo.find with
+    // status: 'active', so they must be told apart, not just sequenced.
+    const mockStaysFindByShape = (
+      byId: Array<{ id: string; roomId: string }>,
+      byRoomId: Array<{ roomId: string; id: string; guestName: string; checkOutDate: string }> = [],
+    ) => {
+      staysRepo.find.mockImplementation(async ({ where }: any) => {
+        if (where?.id) return byId;
+        if (where?.roomId) return byRoomId;
+        return [];
+      });
+    };
+
+    it('1. decorates only the room whose active stay is in the balances map', async () => {
+      qb.getCount.mockResolvedValue(2);
+      qb.getMany.mockResolvedValue([
+        makeRoom({ id: 'room-1' }),
+        makeRoom({ id: 'room-2' }),
+      ]);
+      mockStaysFindByShape([{ id: 'stay-1', roomId: 'room-1' }]);
+      const balances = new Map([['stay-1', balanceEntry(75)]]);
+
+      const result = await service.list(
+        HOTEL_ID,
+        {} as ListRoomsQueryDto,
+        false,
+        balances,
+      );
+
+      const room1 = result.data.find((r: any) => r.id === 'room-1')!;
+      const room2 = result.data.find((r: any) => r.id === 'room-2')!;
+      expect(room1.unsettledTotal).toBe(75);
+      expect('unsettledTotal' in room2).toBe(false);
+    });
+
+    it('2. hasBalance:true filters qb by the TRANSLATED room ids, not the raw stay ids', async () => {
+      qb.getCount.mockResolvedValue(1);
+      qb.getMany.mockResolvedValue([makeRoom({ id: 'room-1' })]);
+      mockStaysFindByShape([{ id: 'stay-1', roomId: 'room-1' }]);
+      const balances = new Map([['stay-1', balanceEntry(30)]]);
+
+      await service.list(HOTEL_ID, { hasBalance: true } as ListRoomsQueryDto, false, balances);
+
+      expect(qb.andWhere).toHaveBeenCalledWith('r.id IN (:...balanceRoomIds)', {
+        balanceRoomIds: ['room-1'],
+      });
+    });
+
+    it('3. hasBalance:true with an empty translated room-id set short-circuits without querying', async () => {
+      mockStaysFindByShape([]); // no active stay matches any balance-map key
+      const balances = new Map([['stay-orphan', balanceEntry(10)]]);
+
+      const result = await service.list(
+        HOTEL_ID,
+        { hasBalance: true } as ListRoomsQueryDto,
+        false,
+        balances,
+      );
+
+      expect(result).toEqual({
+        data: [],
+        total: 0,
+        page: 1,
+        pageSize: 50,
+        usage: { used: 12, max: 50 },
+      });
+      expect(qb.getCount).not.toHaveBeenCalled();
+      expect(qb.getMany).not.toHaveBeenCalled();
+    });
+
+    it('4. an empty (but present) balances map runs no translation query and decorates nothing', async () => {
+      qb.getCount.mockResolvedValue(1);
+      qb.getMany.mockResolvedValue([makeRoom({ id: 'room-1' })]);
+
+      const result = await service.list(
+        HOTEL_ID,
+        {} as ListRoomsQueryDto,
+        false,
+        new Map(),
+      );
+
+      expect(staysRepo.find).not.toHaveBeenCalled();
+      expect('unsettledTotal' in result.data[0]).toBe(false);
+    });
+
+    it('5. balances undefined behaves exactly as before this task — no translation query, no decoration', async () => {
+      qb.getCount.mockResolvedValue(1);
+      qb.getMany.mockResolvedValue([makeRoom({ id: 'room-1' })]);
+
+      const result = await service.list(HOTEL_ID, {} as ListRoomsQueryDto, false, undefined);
+
+      expect(staysRepo.find).not.toHaveBeenCalled();
+      expect('unsettledTotal' in result.data[0]).toBe(false);
+
+      // hasBalance:true with balances undefined is the same short-circuit as
+      // case 3's empty result.
+      qb.getCount.mockClear();
+      qb.getMany.mockClear();
+      const filtered = await service.list(
+        HOTEL_ID,
+        { hasBalance: true } as ListRoomsQueryDto,
+        false,
+        undefined,
+      );
+      expect(filtered).toEqual({
+        data: [],
+        total: 0,
+        page: 1,
+        pageSize: 50,
+        usage: { used: 12, max: 50 },
+      });
+      expect(qb.getCount).not.toHaveBeenCalled();
+      expect(qb.getMany).not.toHaveBeenCalled();
+    });
+
+    it('translation and occupancy batch-loads both run and stay independent when includeOccupancy + balances are both active', async () => {
+      qb.getCount.mockResolvedValue(1);
+      qb.getMany.mockResolvedValue([makeRoom({ id: 'room-1' })]);
+      mockStaysFindByShape(
+        [{ id: 'stay-1', roomId: 'room-1' }],
+        [
+          {
+            id: 'stay-1',
+            roomId: 'room-1',
+            guestName: 'Ahmed Ali',
+            checkOutDate: '2026-09-10',
+          },
+        ],
+      );
+      const balances = new Map([['stay-1', balanceEntry(60)]]);
+
+      const result = await service.list(
+        HOTEL_ID,
+        {} as ListRoomsQueryDto,
+        true,
+        balances,
+      );
+
+      expect(staysRepo.find).toHaveBeenCalledTimes(2);
+      expect(result.data[0].unsettledTotal).toBe(60);
+      expect(result.data[0].currentStay).toEqual({
+        id: 'stay-1',
+        guestName: 'Ahmed Ali',
+        checkOutDate: '2026-09-10',
+      });
+    });
+  });
+
   describe('listAllForExport (11.7)', () => {
     it('AC1 — scopes by hotelId, applies the same filters as list(), and never skip/take (exports everything matching)', async () => {
       qb.getMany.mockResolvedValue([makeRoom()]);

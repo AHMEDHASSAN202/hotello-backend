@@ -32,6 +32,7 @@ import {
 import { QrFormat, QrResult, RoomQrService } from './room-qr.service';
 import { COUNTABLE_ROOM_STATUSES, Room, RoomStatus } from './room.entity';
 import { RoomType } from './room-type.entity';
+import type { StayUnsettledSummary } from '../stay-settlement/stay-settlement.service';
 import { Stay } from '../tenant-stays/stay.entity';
 import { parseImport } from './xlsx/parse-import';
 import { IMPORT_XLSX_MIME_TYPES } from './xlsx/rooms-xlsx.constants';
@@ -62,6 +63,8 @@ export interface RoomView {
    * housekeeping-style roles).
    */
   currentStay?: { id: string; guestName: string; checkOutDate: string } | null;
+  /** Present only when the caller requested balance data (Story 22.4 AC4). */
+  unsettledTotal?: number;
 }
 
 /** Detail response (Story 11.5 AC4) — `RoomView` plus the derived guest URL. */
@@ -142,6 +145,7 @@ export class TenantRoomsService {
     hotelId: string,
     query: ListRoomsQueryDto,
     includeOccupancy = false,
+    balances?: Map<string, StayUnsettledSummary>,
   ) {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 50;
@@ -161,6 +165,42 @@ export class TenantRoomsService {
     // batch-load roomType for just that page below.
     const qb = this.roomsRepo.createQueryBuilder('r');
     this.applyRoomFilters(qb, hotelId, query);
+
+    // Story 22.4 AC4 — translate stay-keyed balances into room-keyed
+    // balances via the room's CURRENT active stay: one batch query, only
+    // when there's anything to translate (balances is fetched unconditionally
+    // by the controller, so this guard also skips the query on hotels with
+    // no outstanding balances at all).
+    let roomBalanceFor: Map<string, number> | undefined;
+    if (balances && balances.size > 0) {
+      const balanceStays = await this.staysRepo.find({
+        where: { id: In([...balances.keys()]), hotelId, status: 'active' },
+        select: ['id', 'roomId'],
+      });
+      roomBalanceFor = new Map(
+        balanceStays.map((s) => [s.roomId, balances.get(s.id)!.total]),
+      );
+    }
+
+    if (query.hasBalance) {
+      const roomIds = roomBalanceFor ? [...roomBalanceFor.keys()] : [];
+      if (roomIds.length === 0) {
+        // Short-circuit: an empty IN clause is a SQL error, not an empty
+        // result — and there is nothing to match anyway.
+        const hotel = await this.hotelsRepo.findOne({ where: { id: hotelId } });
+        return {
+          data: [],
+          total: 0,
+          page,
+          pageSize,
+          usage: {
+            used: hotel?.roomsCount ?? 0,
+            max: await this.roomsLimit(hotelId),
+          },
+        };
+      }
+      qb.andWhere('r.id IN (:...balanceRoomIds)', { balanceRoomIds: roomIds });
+    }
 
     // The total count is taken before orderBy/skip/take are applied — cheap
     // and keeps the count query minimal regardless of the pagination path.
@@ -205,6 +245,10 @@ export class TenantRoomsService {
         });
         if (activeStays) {
           view.currentStay = this.toCurrentStay(activeStays.get(room.id));
+        }
+        const balance = roomBalanceFor?.get(room.id);
+        if (balance !== undefined) {
+          view.unsettledTotal = balance;
         }
         return view;
       }),

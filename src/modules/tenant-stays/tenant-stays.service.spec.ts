@@ -333,6 +333,127 @@ describe('TenantStaysService', () => {
     });
   });
 
+  describe('hasBalance filter + decoration (Story 22.4 AC4)', () => {
+    it('1. decorates only the stay present in the balances map (active view)', async () => {
+      roomsRepo.find.mockResolvedValue([
+        { id: 'r-1', roomNumber: '101', floor: 1, status: 'active' },
+        { id: 'r-2', roomNumber: '102', floor: 1, status: 'active' },
+      ]);
+      staysRepo.find.mockResolvedValue([
+        { id: 's1', roomId: 'r-1', guestName: 'A', status: 'active', checkOutDate: futureDate(1) },
+        { id: 's2', roomId: 'r-2', guestName: 'B', status: 'active', checkOutDate: futureDate(1) },
+      ]);
+      const balances = new Map([
+        ['s1', { total: 42.5, byKey: {}, oldestUnsettledAt: new Date() }],
+      ]);
+
+      const res = await service.list(makeActor(), { view: 'active' } as any, balances);
+
+      const s1Row = res.data.find((r: any) => r.id === 's1')!;
+      const s2Row = res.data.find((r: any) => r.id === 's2')!;
+      expect(s1Row.unsettledTotal).toEqual(42.5);
+      expect('unsettledTotal' in s2Row).toBe(false);
+    });
+
+    it('2. hasBalance:true keeps only stays present in the balances map (active view)', async () => {
+      roomsRepo.find.mockResolvedValue([
+        { id: 'r-1', roomNumber: '101', floor: 1, status: 'active' },
+        { id: 'r-2', roomNumber: '102', floor: 1, status: 'active' },
+      ]);
+      staysRepo.find.mockResolvedValue([
+        { id: 's1', roomId: 'r-1', guestName: 'A', status: 'active', checkOutDate: futureDate(1) },
+        { id: 's2', roomId: 'r-2', guestName: 'B', status: 'active', checkOutDate: futureDate(1) },
+      ]);
+      const balances = new Map([
+        ['s1', { total: 42.5, byKey: {}, oldestUnsettledAt: new Date() }],
+      ]);
+
+      const res = await service.list(
+        makeActor(),
+        { view: 'active', hasBalance: true } as any,
+        balances,
+      );
+
+      expect(res.data.map((r: any) => r.id)).toEqual(['s1']);
+      expect(res.total).toEqual(1);
+    });
+
+    it('3. hasBalance:true with no balances map at all returns empty, not a throw', async () => {
+      roomsRepo.find.mockResolvedValue([
+        { id: 'r-1', roomNumber: '101', floor: 1, status: 'active' },
+      ]);
+      staysRepo.find.mockResolvedValue([
+        { id: 's1', roomId: 'r-1', guestName: 'A', status: 'active', checkOutDate: futureDate(1) },
+      ]);
+
+      const res = await service.list(
+        makeActor(),
+        { view: 'active', hasBalance: true } as any,
+        undefined,
+      );
+
+      expect(res.data).toEqual([]);
+      expect(res.total).toEqual(0);
+    });
+
+    it('4. history view: hasBalance:true applies the IN clause pre-pagination, empty map short-circuits without querying', async () => {
+      const balances = new Map([
+        ['s1', { total: 10, byKey: {}, oldestUnsettledAt: new Date() }],
+        ['s2', { total: 20, byKey: {}, oldestUnsettledAt: new Date() }],
+      ]);
+      qb.getManyAndCount.mockResolvedValue([[], 0]);
+
+      const res = await service.list(
+        makeActor(),
+        { view: 'history', hasBalance: true, page: 1, pageSize: 20 } as any,
+        balances,
+      );
+
+      expect(qb.andWhere).toHaveBeenCalledWith('s.id IN (:...balanceStayIds)', {
+        balanceStayIds: ['s1', 's2'],
+      });
+      expect(res.total).toEqual(0);
+
+      // Separately: an empty balances map short-circuits before the query
+      // builder's getManyAndCount is ever invoked (avoids an empty IN clause).
+      qb.getManyAndCount.mockClear();
+      const emptyRes = await service.list(
+        makeActor(),
+        { view: 'history', hasBalance: true, page: 1, pageSize: 20 } as any,
+        new Map(),
+      );
+      expect(emptyRes).toEqual({ data: [], total: 0, page: 1, pageSize: 20 });
+      expect(qb.getManyAndCount).not.toHaveBeenCalled();
+    });
+
+    it('5. history view: decoration applies to matching rows even without the hasBalance filter', async () => {
+      qb.getManyAndCount.mockResolvedValue([
+        [
+          { id: 's1', roomId: 'r-110', guestName: 'Past Guest', status: 'checked_out', checkoutType: 'manual' },
+          { id: 's2', roomId: 'r-110', guestName: 'Other Guest', status: 'checked_out', checkoutType: 'manual' },
+        ],
+        2,
+      ]);
+      roomsRepo.find.mockResolvedValue([
+        { id: 'r-110', roomNumber: '110', floor: 1 },
+      ]);
+      const balances = new Map([
+        ['s1', { total: 15, byKey: {}, oldestUnsettledAt: new Date() }],
+      ]);
+
+      const res = await service.list(
+        makeActor(),
+        { view: 'history', page: 1, pageSize: 20 } as any,
+        balances,
+      );
+
+      const s1Row = res.data.find((r: any) => r.id === 's1')!;
+      const s2Row = res.data.find((r: any) => r.id === 's2')!;
+      expect(s1Row.unsettledTotal).toEqual(15);
+      expect('unsettledTotal' in s2Row).toBe(false);
+    });
+  });
+
   describe('availableRooms (13.1 AC1)', () => {
     it('returns active rooms without an active stay, naturally ordered', async () => {
       roomsRepo.find.mockResolvedValue([

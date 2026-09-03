@@ -18,6 +18,7 @@ import {
   safeEmit,
 } from '../notifications/notification-events';
 import { Room } from '../tenant-rooms/room.entity';
+import type { StayUnsettledSummary } from '../stay-settlement/stay-settlement.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { ChangeRoomDto } from './dto/change-room.dto';
 import { CreateStayDto } from './dto/create-stay.dto';
@@ -51,6 +52,8 @@ export interface StayView {
   checkoutType: string | null;
   checkedOutAt: Date | null;
   createdAt: Date;
+  /** Present only when the caller requested balance data (Story 22.4 AC4). */
+  unsettledTotal?: number;
 }
 
 export interface AvailableRoom {
@@ -200,9 +203,13 @@ export class TenantStaysService {
   // Lists & detail (13.2)
   // ------------------------------------------------------------------
 
-  async list(actor: TenantUser, query: ListStaysQueryDto) {
-    if (query.view === 'history') return this.listHistory(actor, query);
-    return this.listActive(actor, query);
+  async list(
+    actor: TenantUser,
+    query: ListStaysQueryDto,
+    balances?: Map<string, StayUnsettledSummary>,
+  ) {
+    if (query.view === 'history') return this.listHistory(actor, query, balances);
+    return this.listActive(actor, query, balances);
   }
 
   /**
@@ -210,7 +217,11 @@ export class TenantStaysService {
    * one pass, batch-loads rooms, and filters/sorts app-side in room natural
    * order (13.2 AC1).
    */
-  private async listActive(actor: TenantUser, query: ListStaysQueryDto) {
+  private async listActive(
+    actor: TenantUser,
+    query: ListStaysQueryDto,
+    balances?: Map<string, StayUnsettledSummary>,
+  ) {
     const [stays, hotel] = await Promise.all([
       this.staysRepo.find({
         where: { hotelId: actor.hotelId, status: 'active' },
@@ -220,7 +231,7 @@ export class TenantStaysService {
     const rooms = await this.loadRoomsByIds(stays.map((s) => s.roomId));
 
     const term = query.search?.trim().toUpperCase();
-    const filtered = stays.filter((stay) => {
+    let filtered = stays.filter((stay) => {
       const room = rooms.get(stay.roomId);
       if (!room) return false;
       if (query.floor !== undefined && room.floor !== query.floor) return false;
@@ -230,6 +241,12 @@ export class TenantStaysService {
         room.roomNumber.toUpperCase().includes(term)
       );
     });
+    // Story 22.4 AC4 — the "has balance" filter, driven by the same
+    // StaySettlementService.unsettledByStay computation as the balances
+    // report (one source of truth).
+    if (query.hasBalance) {
+      filtered = filtered.filter((stay) => balances?.has(stay.id));
+    }
 
     filtered.sort((a, b) =>
       naturalRoomCompare(rooms.get(a.roomId)!, rooms.get(b.roomId)!),
@@ -237,7 +254,7 @@ export class TenantStaysService {
 
     return {
       data: filtered.map((stay) =>
-        this.toView(stay, rooms.get(stay.roomId)!, hotel),
+        this.withBalance(this.toView(stay, rooms.get(stay.roomId)!, hotel), balances),
       ),
       total: filtered.length,
     };
@@ -248,7 +265,11 @@ export class TenantStaysService {
    * newest checkout first. Join-free + batch-load (repo pagination law).
    * Room-number search goes through a subquery instead of a join.
    */
-  private async listHistory(actor: TenantUser, query: ListStaysQueryDto) {
+  private async listHistory(
+    actor: TenantUser,
+    query: ListStaysQueryDto,
+    balances?: Map<string, StayUnsettledSummary>,
+  ) {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 20;
     const qb = this.staysRepo
@@ -267,6 +288,18 @@ export class TenantStaysService {
       );
     }
 
+    // Story 22.4 AC4 — filter applies pre-pagination (inside the query
+    // builder, before skip/take), so pagination/count reflect the filtered
+    // set. An empty balances map short-circuits before an empty IN clause
+    // ever reaches Postgres.
+    if (query.hasBalance) {
+      const ids = balances ? [...balances.keys()] : [];
+      if (ids.length === 0) {
+        return { data: [], total: 0, page, pageSize };
+      }
+      qb.andWhere('s.id IN (:...balanceStayIds)', { balanceStayIds: ids });
+    }
+
     const [stays, total] = await qb
       .orderBy('s.checkedOutAt', 'DESC', 'NULLS LAST')
       .addOrderBy('s.createdAt', 'DESC')
@@ -276,11 +309,22 @@ export class TenantStaysService {
 
     const rooms = await this.loadRoomsByIds(stays.map((s) => s.roomId));
     return {
-      data: stays.map((stay) => this.toView(stay, rooms.get(stay.roomId)!)),
+      data: stays.map((stay) =>
+        this.withBalance(this.toView(stay, rooms.get(stay.roomId)!), balances),
+      ),
       total,
       page,
       pageSize,
     };
+  }
+
+  /** Story 22.4 AC4 — decorates a view with its balance total, if any. */
+  private withBalance(
+    view: StayView,
+    balances?: Map<string, StayUnsettledSummary>,
+  ): StayView {
+    const summary = balances?.get(view.id);
+    return summary ? { ...view, unsettledTotal: summary.total } : view;
   }
 
   async detail(actor: TenantUser, id: string): Promise<StayView> {
