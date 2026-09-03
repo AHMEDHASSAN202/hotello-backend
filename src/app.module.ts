@@ -39,6 +39,7 @@ import { EventsModule } from './modules/events/events.module';
 import { StaySettlementModule } from './modules/stay-settlement/stay-settlement.module';
 import { TenantStaffModule } from './modules/tenant-staff/tenant-staff.module';
 import { TenantUsersModule } from './modules/tenant-users/tenant-users.module';
+import { ReportsModule } from './modules/reports/reports.module';
 
 @Module({
   imports: [
@@ -86,6 +87,7 @@ import { TenantUsersModule } from './modules/tenant-users/tenant-users.module';
     BrandingModule,
     TenantStaffModule,
     TenantUsersModule,
+    ReportsModule,
   ],
   providers: [
     // Injected into JwtAuthGuard so tenant-scoped routes authenticate with the
