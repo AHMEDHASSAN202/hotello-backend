@@ -122,9 +122,17 @@
 
 - **Revenue scoping (implements note 4):** an explicit third permission key,
   `reports.revenue`, distinct from `reports.read`. Manager holds all three
-  reports keys; Front Desk holds `reports.read` only. Enforced service-side
-  (not as a route-level guard) so the Overview dashboard can omit its revenue
-  section for non-revenue holders instead of 403ing the whole endpoint.
+  reports keys; Front Desk holds `reports.read` only. Never a route-level
+  guard decorator — enforced in application code close to each endpoint, so
+  the check can fit each response's shape: `ReportsOverviewService` does it
+  service-side (an explicit `includeRevenue` parameter) because the Overview
+  dashboard needs a partial payload — everything except the `revenue` key —
+  for non-revenue holders, rather than 403ing the whole endpoint; the
+  single-purpose revenue reports (`dining`/`events`/`totals`, whose entire
+  response IS revenue data) gate at the controller instead, via a small
+  `assertRevenueAccess` helper that 403s with `REPORTS_REVENUE_FORBIDDEN`
+  before the service is ever called — simpler for an all-or-nothing response
+  and keeps `ReportsRevenueService` itself permission-agnostic.
 - **No plans backfill for `analytics`** (diverges from every prior module
   epic, which backfilled `enabledModules` on existing plans). `analytics` is
   the paid upsell — Super Admin enables it per plan through the existing
