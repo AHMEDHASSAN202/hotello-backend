@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { EventBooking } from '../events/event-booking.entity';
 import { Event } from '../events/event.entity';
 import { EventsModule } from '../events/events.module';
@@ -18,10 +19,12 @@ import { StayRoomChange } from '../tenant-stays/stay-room-change.entity';
 import { Stay } from '../tenant-stays/stay.entity';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { ReportsBalancesService } from './reports-balances.service';
+import { ReportsExportService } from './reports-export.service';
 import { ReportsOperationalService } from './reports-operational.service';
 import { ReportsOverviewService } from './reports-overview.service';
 import { ReportsRevenueService } from './reports-revenue.service';
 import { ReportsController } from './reports.controller';
+import { ReportsXlsxService } from './xlsx/reports-xlsx.service';
 
 @Module({
   imports: [
@@ -44,8 +47,16 @@ import { ReportsController } from './reports.controller';
     FnbModule,
     EventsModule,
     RequestsModule,
+    AuditLogsModule,
   ],
   controllers: [ReportsController],
-  providers: [ReportsBalancesService, ReportsOperationalService, ReportsRevenueService, ReportsOverviewService],
+  providers: [
+    ReportsBalancesService,
+    ReportsOperationalService,
+    ReportsRevenueService,
+    ReportsOverviewService,
+    ReportsXlsxService,
+    ReportsExportService,
+  ],
 })
 export class ReportsModule {}

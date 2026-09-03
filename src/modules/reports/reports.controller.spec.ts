@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { ReportPeriodDto } from './dto/report-period.dto';
 import { ReportsBalancesService } from './reports-balances.service';
+import { ReportsExportService } from './reports-export.service';
 import { ReportsOperationalService } from './reports-operational.service';
 import { ReportsOverviewService } from './reports-overview.service';
 import { ReportsRevenueService } from './reports-revenue.service';
@@ -24,12 +25,14 @@ describe('ReportsController (Story 22.4)', () => {
   let operational: { guests: jest.Mock; requests: jest.Mock; housekeeping: jest.Mock };
   let revenue: { dining: jest.Mock; events: jest.Mock; totals: jest.Mock };
   let overview: { overview: jest.Mock };
+  let exportService: { export: jest.Mock };
 
   beforeEach(async () => {
     balances = { balances: jest.fn(), leakage: jest.fn() };
     operational = { guests: jest.fn(), requests: jest.fn(), housekeeping: jest.fn() };
     revenue = { dining: jest.fn(), events: jest.fn(), totals: jest.fn() };
     overview = { overview: jest.fn() };
+    exportService = { export: jest.fn() };
 
     const moduleRef = await Test.createTestingModule({
       controllers: [ReportsController],
@@ -38,6 +41,7 @@ describe('ReportsController (Story 22.4)', () => {
         { provide: ReportsOperationalService, useValue: operational },
         { provide: ReportsRevenueService, useValue: revenue },
         { provide: ReportsOverviewService, useValue: overview },
+        { provide: ReportsExportService, useValue: exportService },
       ],
     }).compile();
     controller = moduleRef.get(ReportsController);
@@ -64,6 +68,7 @@ describe('ReportsController — Tasks B3a-d endpoints (Story 22.6 AC2)', () => {
   let operational: { guests: jest.Mock; requests: jest.Mock; housekeeping: jest.Mock };
   let revenue: { dining: jest.Mock; events: jest.Mock; totals: jest.Mock };
   let overview: { overview: jest.Mock };
+  let exportService: { export: jest.Mock };
   const query: ReportPeriodDto = { preset: 'last7' } as ReportPeriodDto;
 
   beforeEach(async () => {
@@ -71,6 +76,7 @@ describe('ReportsController — Tasks B3a-d endpoints (Story 22.6 AC2)', () => {
     operational = { guests: jest.fn(), requests: jest.fn(), housekeeping: jest.fn() };
     revenue = { dining: jest.fn(), events: jest.fn(), totals: jest.fn() };
     overview = { overview: jest.fn() };
+    exportService = { export: jest.fn() };
 
     const moduleRef = await Test.createTestingModule({
       controllers: [ReportsController],
@@ -79,6 +85,7 @@ describe('ReportsController — Tasks B3a-d endpoints (Story 22.6 AC2)', () => {
         { provide: ReportsOperationalService, useValue: operational },
         { provide: ReportsRevenueService, useValue: revenue },
         { provide: ReportsOverviewService, useValue: overview },
+        { provide: ReportsExportService, useValue: exportService },
       ],
     }).compile();
     controller = moduleRef.get(ReportsController);
@@ -164,5 +171,50 @@ describe('ReportsController — Tasks B3a-d endpoints (Story 22.6 AC2)', () => {
       }
       expect(getMock()).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('ReportsController — export route (Story 22.5)', () => {
+  let controller: ReportsController;
+  let exportService: { export: jest.Mock };
+  const query: ReportPeriodDto = { preset: 'last7' } as ReportPeriodDto;
+
+  beforeEach(async () => {
+    exportService = { export: jest.fn() };
+
+    const moduleRef = await Test.createTestingModule({
+      controllers: [ReportsController],
+      providers: [
+        { provide: ReportsBalancesService, useValue: { balances: jest.fn(), leakage: jest.fn() } },
+        { provide: ReportsOperationalService, useValue: { guests: jest.fn(), requests: jest.fn(), housekeeping: jest.fn() } },
+        { provide: ReportsRevenueService, useValue: { dining: jest.fn(), events: jest.fn(), totals: jest.fn() } },
+        { provide: ReportsOverviewService, useValue: { overview: jest.fn() } },
+        { provide: ReportsExportService, useValue: exportService },
+      ],
+    }).compile();
+    controller = moduleRef.get(ReportsController);
+  });
+
+  it('GET :report/export calls exportService.export(user, report, query) and writes the buffer/headers to the response', async () => {
+    const buffer = Buffer.from('xlsx-bytes');
+    exportService.export.mockResolvedValue({
+      buffer,
+      filename: 'acme-overview-2026-03-01-2026-03-07.xlsx',
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    const res = { setHeader: jest.fn(), send: jest.fn() };
+
+    await controller.exportReport(user, 'overview', query, res as any);
+
+    expect(exportService.export).toHaveBeenCalledWith(user, 'overview', query);
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Content-Disposition',
+      'attachment; filename="acme-overview-2026-03-01-2026-03-07.xlsx"',
+    );
+    expect(res.send).toHaveBeenCalledWith(buffer);
   });
 });

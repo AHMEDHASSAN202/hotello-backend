@@ -1,4 +1,5 @@
-import { Controller, ForbiddenException, Get, Query } from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Param, Query, Res } from '@nestjs/common';
+import { Response } from 'express';
 import { CurrentTenantUser } from '../../common/decorators/current-tenant-user.decorator';
 import { RequireModule } from '../../common/decorators/require-module.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
@@ -7,6 +8,7 @@ import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { ReportPeriodDto } from './dto/report-period.dto';
 import { canReadRevenue } from './reports-access';
 import { ReportsBalancesService } from './reports-balances.service';
+import { ReportsExportService } from './reports-export.service';
 import { ReportsOperationalService } from './reports-operational.service';
 import { ReportsOverviewService } from './reports-overview.service';
 import { ReportsRevenueService } from './reports-revenue.service';
@@ -33,6 +35,7 @@ export class ReportsController {
     private readonly operational: ReportsOperationalService,
     private readonly revenue: ReportsRevenueService,
     private readonly overview: ReportsOverviewService,
+    private readonly exportService: ReportsExportService,
   ) {}
 
   @Get('balances')
@@ -114,6 +117,20 @@ export class ReportsController {
   ) {
     this.assertRevenueAccess(user);
     return this.revenue.totals(user.hotelId, query);
+  }
+
+  @Get(':report/export')
+  @RequirePermissions('reports.export')
+  async exportReport(
+    @CurrentTenantUser() user: TenantUser,
+    @Param('report') report: string,
+    @Query() query: ReportPeriodDto,
+    @Res() res: Response,
+  ) {
+    const { buffer, filename, contentType } = await this.exportService.export(user, report, query);
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
   }
 
   private assertRevenueAccess(user: TenantUser): void {
