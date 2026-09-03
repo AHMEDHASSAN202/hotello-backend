@@ -31,6 +31,14 @@ export interface ExportResult {
   buffer: Buffer;
   filename: string;
   contentType: string;
+  /**
+   * Spec 22.5 AC4 — the number of data rows the export actually contains,
+   * carried into the `report.exported` audit log. For an xlsx report this
+   * is the sum of every sheet's row count (a multi-sheet report has no
+   * single canonical "row"); for a CSV feed it's the row count already
+   * computed for the ROW_CAP check.
+   */
+  rowCount: number;
 }
 
 /**
@@ -93,6 +101,8 @@ export class ReportsExportService {
         format: result.contentType.includes('csv') ? 'csv' : 'xlsx',
         from: resolved.fromDate,
         to: resolved.toDate,
+        // Spec 22.5 AC4.
+        rowCount: result.rowCount,
       },
     });
 
@@ -152,10 +162,14 @@ export class ReportsExportService {
       }
     }
     const buffer = await this.xlsx.build(hotel, { from: resolved.fromDate, to: resolved.toDate }, new Date(), basisLine, sheets);
+    // Spec 22.5 AC4 — total data rows across every sheet (a multi-sheet
+    // report has no single canonical "row").
+    const rowCount = sheets.reduce((sum, sheet) => sum + sheet.rows.length, 0);
     return {
       buffer,
       filename: this.buildFilename(hotel.slug, report, resolved.fromDate, resolved.toDate, 'xlsx'),
       contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      rowCount,
     };
   }
 
@@ -230,6 +244,8 @@ export class ReportsExportService {
       buffer: Buffer.from(csv, 'utf-8'),
       filename: this.buildFilename(hotel.slug, feed, resolved.fromDate, resolved.toDate, 'csv'),
       contentType: 'text/csv; charset=utf-8',
+      // Spec 22.5 AC4.
+      rowCount: rows.length,
     };
   }
 

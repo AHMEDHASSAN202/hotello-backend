@@ -224,6 +224,30 @@ describe('ReportsExportService (Story 22.5)', () => {
       );
     });
 
+    it('Epic 22 final review, I6 — logs rowCount for an xlsx report (sum of every sheet\'s row count)', async () => {
+      await service.export(makeUser(), 'overview', CUSTOM_DTO);
+
+      // overviewSheets() emits one sheet with 15 fixed metric rows for a
+      // hotel with no revenue access (the `overview.overview` fixture above
+      // has no `revenue` key).
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({ metadata: expect.objectContaining({ rowCount: 15 }) }),
+      );
+    });
+
+    it('Epic 22 final review, I6 — logs rowCount for a CSV feed export (the row count already used for the ROW_CAP check)', async () => {
+      staysRepo.find.mockResolvedValue([
+        { id: 's1', roomId: 'r1', guestName: 'A', checkInDate: '2026-03-01', checkOutDate: '2026-03-02', status: 'checked_out', stayType: 'room_only', language: 'en', guestsCount: 1 },
+        { id: 's2', roomId: 'r2', guestName: 'B', checkInDate: '2026-03-01', checkOutDate: '2026-03-03', status: 'checked_out', stayType: 'room_only', language: 'en', guestsCount: 2 },
+      ]);
+
+      await service.export(makeUser(), 'stays-feed', CUSTOM_DTO);
+
+      expect(auditLogs.log).toHaveBeenCalledWith(
+        expect.objectContaining({ metadata: expect.objectContaining({ rowCount: 2 }) }),
+      );
+    });
+
     it('does NOT log when a 403 was thrown before reaching that point', async () => {
       await expect(service.export(makeUser(['reports.read']), 'dining', CUSTOM_DTO)).rejects.toThrow();
 
