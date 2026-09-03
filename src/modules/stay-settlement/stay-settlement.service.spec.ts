@@ -20,8 +20,27 @@ const actor = {
   name: 'Front Desk',
 } as unknown as TenantUser;
 
-const makeFnbOrder = (o: Partial<FnbOrder> = {}): FnbOrder =>
-  ({
+// `FnbOrder.createdAt` / `EventBooking.createdAt` are naive `timestamp`
+// columns; FnbSettlementSource/EventSettlementSource (exercised for real
+// here, only the repos are mocked) recover the true instant via
+// fromNaive() (Epic 22 final review, C1). Simulates what pg actually
+// returns for a naive column: a Date whose LOCAL (host-TZ) wall-clock
+// digits equal the intended UTC-wall value — the exact inverse of
+// fromNaive, same pattern as stay-time.spec.ts and the fnb/event
+// settlement-source specs.
+const simulateNaiveRead = (d: Date): Date =>
+  new Date(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate(),
+    d.getUTCHours(),
+    d.getUTCMinutes(),
+    d.getUTCSeconds(),
+    d.getUTCMilliseconds(),
+  );
+
+const makeFnbOrder = (o: Partial<FnbOrder> = {}): FnbOrder => {
+  const merged = {
     id: 'fnb-1',
     hotelId: HOTEL_ID,
     stayId: STAY_ID,
@@ -32,10 +51,12 @@ const makeFnbOrder = (o: Partial<FnbOrder> = {}): FnbOrder =>
     settledById: null,
     createdAt: new Date('2026-01-01T00:00:00Z'),
     ...o,
-  }) as FnbOrder;
+  } as FnbOrder;
+  return { ...merged, createdAt: simulateNaiveRead(merged.createdAt) };
+};
 
-const makeBooking = (o: Partial<EventBooking> = {}): EventBooking =>
-  ({
+const makeBooking = (o: Partial<EventBooking> = {}): EventBooking => {
+  const merged = {
     id: 'booking-1',
     hotelId: HOTEL_ID,
     stayId: STAY_ID,
@@ -46,7 +67,9 @@ const makeBooking = (o: Partial<EventBooking> = {}): EventBooking =>
     settledById: null,
     createdAt: new Date('2026-01-01T00:00:00Z'),
     ...o,
-  }) as EventBooking;
+  } as EventBooking;
+  return { ...merged, createdAt: simulateNaiveRead(merged.createdAt) };
+};
 
 describe('StaySettlementService (Story 21.6 AC2)', () => {
   let service: StaySettlementService;
