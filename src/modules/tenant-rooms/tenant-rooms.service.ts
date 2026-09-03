@@ -168,11 +168,14 @@ export class TenantRoomsService {
 
     // Story 22.4 AC4 — translate stay-keyed balances into room-keyed
     // balances via the room's CURRENT active stay: one batch query, only
-    // when there's anything to translate (balances is fetched unconditionally
-    // by the controller, so this guard also skips the query on hotels with
-    // no outstanding balances at all).
+    // when there's anything to translate. Epic 22 final review, I2 — gated
+    // behind `includeOccupancy` (== the controller's `canReadStays(user)`),
+    // the SAME boolean that gates `currentStay`: a Housekeeping-role actor
+    // (rooms.read+update, no stays.read) must not see balances any more
+    // than it sees occupancy. Enforced here too (not just by the controller
+    // skipping the fetch) so the service is correct on its own.
     let roomBalanceFor: Map<string, number> | undefined;
-    if (balances && balances.size > 0) {
+    if (includeOccupancy && balances && balances.size > 0) {
       const balanceStays = await this.staysRepo.find({
         where: { id: In([...balances.keys()]), hotelId, status: 'active' },
         select: ['id', 'roomId'],
@@ -182,7 +185,10 @@ export class TenantRoomsService {
       );
     }
 
-    if (query.hasBalance) {
+    // Epic 22 final review, I2 — same gate: without stays.read, `hasBalance`
+    // is silently ignored (not treated as "filter matched zero rows"), same
+    // as the field simply not existing for that actor.
+    if (includeOccupancy && query.hasBalance) {
       const roomIds = roomBalanceFor ? [...roomBalanceFor.keys()] : [];
       if (roomIds.length === 0) {
         // Short-circuit: an empty IN clause is a SQL error, not an empty

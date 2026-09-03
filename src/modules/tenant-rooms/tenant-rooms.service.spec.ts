@@ -365,10 +365,12 @@ describe('TenantRoomsService', () => {
       mockStaysFindByShape([{ id: 'stay-1', roomId: 'room-1' }]);
       const balances = new Map([['stay-1', balanceEntry(75)]]);
 
+      // includeOccupancy: true — this actor holds stays.read (Epic 22 final
+      // review, I2: balances ride the SAME gate as occupancy).
       const result = await service.list(
         HOTEL_ID,
         {} as ListRoomsQueryDto,
-        false,
+        true,
         balances,
       );
 
@@ -384,7 +386,7 @@ describe('TenantRoomsService', () => {
       mockStaysFindByShape([{ id: 'stay-1', roomId: 'room-1' }]);
       const balances = new Map([['stay-1', balanceEntry(30)]]);
 
-      await service.list(HOTEL_ID, { hasBalance: true } as ListRoomsQueryDto, false, balances);
+      await service.list(HOTEL_ID, { hasBalance: true } as ListRoomsQueryDto, true, balances);
 
       expect(qb.andWhere).toHaveBeenCalledWith('r.id IN (:...balanceRoomIds)', {
         balanceRoomIds: ['room-1'],
@@ -398,7 +400,7 @@ describe('TenantRoomsService', () => {
       const result = await service.list(
         HOTEL_ID,
         { hasBalance: true } as ListRoomsQueryDto,
-        false,
+        true,
         balances,
       );
 
@@ -432,19 +434,24 @@ describe('TenantRoomsService', () => {
       qb.getCount.mockResolvedValue(1);
       qb.getMany.mockResolvedValue([makeRoom({ id: 'room-1' })]);
 
+      // includeOccupancy: false here — this sub-case is purely about the
+      // `balances` param being undefined, independent of the occupancy
+      // gate; `true` would also trigger the (unrelated) occupancy
+      // staysRepo.find batch-load and pollute this assertion.
       const result = await service.list(HOTEL_ID, {} as ListRoomsQueryDto, false, undefined);
 
       expect(staysRepo.find).not.toHaveBeenCalled();
       expect('unsettledTotal' in result.data[0]).toBe(false);
 
-      // hasBalance:true with balances undefined is the same short-circuit as
-      // case 3's empty result.
+      // hasBalance:true with balances undefined, for a stays.read-holding
+      // actor, is the same short-circuit as case 3's empty result (returns
+      // before occupancy loading is ever reached).
       qb.getCount.mockClear();
       qb.getMany.mockClear();
       const filtered = await service.list(
         HOTEL_ID,
         { hasBalance: true } as ListRoomsQueryDto,
-        false,
+        true,
         undefined,
       );
       expect(filtered).toEqual({
@@ -456,6 +463,43 @@ describe('TenantRoomsService', () => {
       });
       expect(qb.getCount).not.toHaveBeenCalled();
       expect(qb.getMany).not.toHaveBeenCalled();
+    });
+
+    it('6. Epic 22 final review, I2 — includeOccupancy: false (no stays.read) never decorates unsettledTotal NOR applies hasBalance, even with real balance data for the room', async () => {
+      qb.getCount.mockResolvedValue(1);
+      qb.getMany.mockResolvedValue([makeRoom({ id: 'room-1' })]);
+      mockStaysFindByShape([{ id: 'stay-1', roomId: 'room-1' }]);
+      // A real, non-empty balance exists for this room's active stay.
+      const balances = new Map([['stay-1', balanceEntry(999)]]);
+
+      // Plain decoration path: no unsettledTotal on any row, no translation
+      // query at all (mirrors how occupancy is skipped, not computed then
+      // discarded).
+      const result = await service.list(HOTEL_ID, {} as ListRoomsQueryDto, false, balances);
+      expect(staysRepo.find).not.toHaveBeenCalled();
+      expect('unsettledTotal' in result.data[0]).toBe(false);
+
+      // Filter path: hasBalance:true is silently IGNORED (not treated as
+      // "filter matched zero rows") — the actor simply gets the normal,
+      // unfiltered list, same as if the field didn't exist for them.
+      qb.getCount.mockClear();
+      qb.getMany.mockClear();
+      staysRepo.find.mockClear();
+      qb.getCount.mockResolvedValue(1);
+      qb.getMany.mockResolvedValue([makeRoom({ id: 'room-1' })]);
+      const filtered = await service.list(
+        HOTEL_ID,
+        { hasBalance: true } as ListRoomsQueryDto,
+        false,
+        balances,
+      );
+      expect(staysRepo.find).not.toHaveBeenCalled();
+      expect(qb.andWhere).not.toHaveBeenCalledWith(
+        'r.id IN (:...balanceRoomIds)',
+        expect.anything(),
+      );
+      expect(filtered.data).toHaveLength(1);
+      expect('unsettledTotal' in filtered.data[0]).toBe(false);
     });
 
     it('translation and occupancy batch-loads both run and stay independent when includeOccupancy + balances are both active', async () => {

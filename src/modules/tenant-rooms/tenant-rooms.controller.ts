@@ -71,14 +71,21 @@ export class TenantRoomsController {
     @CurrentTenantUser() user: TenantUser,
     @Query() query: ListRoomsQueryDto,
   ) {
-    // Story 22.4 AC4 — fetched unconditionally on every list call, same as
-    // occupancy decoration always running: the badge must appear on any row
-    // with a balance regardless of whether the filter is active.
-    const balances = await this.staySettlement.unsettledByStay(user.hotelId);
+    const includeOccupancy = canReadStays(user);
+    // Epic 22 final review, I2 — balances (the `hasBalance` filter AND the
+    // `unsettledTotal` decoration) ride the SAME `stays.read` gate as
+    // occupancy/currentStay. A Housekeeping-role actor holds
+    // rooms.read+rooms.update but NOT stays.read, and must not see room
+    // balances either — that permission boundary existed before this epic
+    // and must not silently widen. Skip the fetch entirely rather than
+    // fetch-then-discard.
+    const balances = includeOccupancy
+      ? await this.staySettlement.unsettledByStay(user.hotelId)
+      : undefined;
     return this.roomsService.list(
       user.hotelId,
       query,
-      canReadStays(user),
+      includeOccupancy,
       balances,
     );
   }
