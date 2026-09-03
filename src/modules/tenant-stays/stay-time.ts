@@ -65,6 +65,33 @@ export function naiveUtc(value: string | Date): Date {
   return iso as unknown as Date;
 }
 
+/**
+ * Inverse of `naiveUtc`'s write-side convention, for the READ side. pg
+ * parses a naive `timestamp` column's returned value by treating its
+ * wall-clock components as host-LOCAL and converting to a UTC-shifted
+ * Date — so `d.getTime()` is wrong by the host's UTC offset, but `d`'s
+ * LOCAL getters (getFullYear/getMonth/.../getMilliseconds) still hold the
+ * ORIGINAL UTC-wall components (matching naiveUtc's write convention:
+ * storage is UTC wall time). Re-read them as UTC to recover the true
+ * instant. Verified live against the dev DB (Epic 22 final review, C1) —
+ * `Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(),
+ * d.getMinutes(), d.getSeconds(), d.getMilliseconds())` reproduces the
+ * exact original naive value regardless of host timezone.
+ */
+export function fromNaive(d: Date): Date {
+  return new Date(
+    Date.UTC(
+      d.getFullYear(),
+      d.getMonth(),
+      d.getDate(),
+      d.getHours(),
+      d.getMinutes(),
+      d.getSeconds(),
+      d.getMilliseconds(),
+    ),
+  );
+}
+
 export function minutesOf(time: string): number {
   const [hours, minutes] = time.split(':').map((v) => parseInt(v, 10));
   return hours * 60 + minutes;

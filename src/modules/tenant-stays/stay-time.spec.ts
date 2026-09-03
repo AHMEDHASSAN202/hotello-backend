@@ -1,5 +1,6 @@
 import {
   daysBetween,
+  fromNaive,
   hotelLocalParts,
   isStayOverdue,
   minutesOf,
@@ -62,6 +63,65 @@ describe('stay-time (13.4 AC3 — timezone edges)', () => {
       expect(daysBetween('2026-08-20', '2026-08-23')).toEqual(3);
       expect(daysBetween('2026-08-23', '2026-08-20')).toEqual(-3);
       expect(daysBetween('2026-08-20', '2026-08-20')).toEqual(0);
+    });
+  });
+
+  describe('fromNaive (Epic 22 final review, C1 — read-side naive timestamp fix)', () => {
+    const originalTz = process.env.TZ;
+
+    afterEach(() => {
+      process.env.TZ = originalTz;
+    });
+
+    it.each([
+      ['UTC', 0],
+      ['Africa/Cairo', 180],
+      ['America/New_York', -240],
+      ['Asia/Dubai', 240],
+      ['Pacific/Kiritimati', 840],
+    ])(
+      'recovers the original UTC-wall instant when the host runs as %s',
+      (tz) => {
+        process.env.TZ = tz;
+        // Wall-clock components as they were written to the naive column
+        // (naiveUtc's convention: storage is UTC wall time).
+        const wall = {
+          y: 2026,
+          mo: 7, // August (0-indexed)
+          d: 25,
+          h: 12,
+          mi: 28,
+          s: 36,
+          ms: 5,
+        };
+        // Simulates pg's mis-parse: it hands back a Date built from the
+        // wall-clock components read as HOST-LOCAL (exactly what the local
+        // `new Date(y, m, d, ...)` constructor does under `process.env.TZ`).
+        const pgReturned = new Date(
+          wall.y,
+          wall.mo,
+          wall.d,
+          wall.h,
+          wall.mi,
+          wall.s,
+          wall.ms,
+        );
+
+        const recovered = fromNaive(pgReturned);
+
+        const expected = new Date(
+          Date.UTC(wall.y, wall.mo, wall.d, wall.h, wall.mi, wall.s, wall.ms),
+        );
+        expect(recovered.getTime()).toBe(expected.getTime());
+        expect(recovered.toISOString()).toBe('2026-08-25T12:28:36.005Z');
+      },
+    );
+
+    it('round-trips a value with zero milliseconds and a midnight boundary', () => {
+      process.env.TZ = 'America/New_York';
+      const pgReturned = new Date(2026, 0, 1, 0, 0, 0, 0);
+      const recovered = fromNaive(pgReturned);
+      expect(recovered.toISOString()).toBe('2026-01-01T00:00:00.000Z');
     });
   });
 
