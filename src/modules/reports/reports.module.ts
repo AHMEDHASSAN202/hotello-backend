@@ -11,6 +11,7 @@ import { HousekeepingEvent } from '../housekeeping/housekeeping-event.entity';
 import { HousekeepingModule } from '../housekeeping/housekeeping.module';
 import { RequestCategory } from '../requests/request-category.entity';
 import { GuestRequest } from '../requests/request.entity';
+import { RequestsModule } from '../requests/requests.module';
 import { StaySettlementModule } from '../stay-settlement/stay-settlement.module';
 import { Room } from '../tenant-rooms/room.entity';
 import { StayRoomChange } from '../tenant-stays/stay-room-change.entity';
@@ -18,6 +19,7 @@ import { Stay } from '../tenant-stays/stay.entity';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { ReportsBalancesService } from './reports-balances.service';
 import { ReportsOperationalService } from './reports-operational.service';
+import { ReportsOverviewService } from './reports-overview.service';
 import { ReportsRevenueService } from './reports-revenue.service';
 import { ReportsController } from './reports.controller';
 
@@ -41,8 +43,9 @@ import { ReportsController } from './reports.controller';
     HousekeepingModule,
     FnbModule,
     EventsModule,
+    RequestsModule,
   ],
   controllers: [ReportsController],
-  providers: [ReportsBalancesService, ReportsOperationalService, ReportsRevenueService],
+  providers: [ReportsBalancesService, ReportsOperationalService, ReportsRevenueService, ReportsOverviewService],
 })
 export class ReportsModule {}

@@ -142,3 +142,44 @@ export interface TotalsReport {
   outstanding: number;
   basis: 'delivered_booked';
 }
+
+// ---------------------------------------------------------- Story 22.1
+
+/**
+ * The Overview dashboard — pure composition of the operational/revenue/
+ * housekeeping/requests reports, never a re-derivation of their metrics.
+ * `revenue` is ABSENT (not `undefined`) when the caller doesn't hold
+ * `reports.revenue` (Story 22.6 AC2) — the service decides this via an
+ * explicit boolean parameter, never by checking permissions itself.
+ */
+export interface OverviewReport {
+  period: ReportPeriodView;
+  currency: string;
+  occupancy: {
+    occupiedNow: number;
+    totalRooms: number;
+    pct: number;
+    arrivalsToday: number;
+    departuresToday: number;
+    inHouseGuests: number;
+    stayTypeBreakdown: Record<string, number>;
+  };
+  service: {
+    received: MetricWithDelta;
+    completed: MetricWithDelta;
+    openNow: number;
+    avgCompletionMinutes: MetricWithDelta;
+    slaBreachRatePct: MetricWithDelta;
+    topItems: { itemId: string; names: Record<string, string>; count: number }[]; // max 5
+  };
+  housekeeping: { cleanedToday: number; needingCleaning: number; inProgress: number; dnd: number };
+  revenue?: {
+    dining: MetricWithDelta;
+    events: MetricWithDelta;
+    total: MetricWithDelta;
+    cash: number;
+    roomCharge: number;
+    unsettledTotal: number;
+    basis: 'delivered_booked';
+  };
+}

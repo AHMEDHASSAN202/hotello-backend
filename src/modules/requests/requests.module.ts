@@ -50,5 +50,6 @@ import { TenantRequestsService } from './tenant-requests.service';
     TenantRequestsService,
     TenantRequestCatalogService,
   ],
+  exports: [TenantRequestsService],
 })
 export class RequestsModule {}
