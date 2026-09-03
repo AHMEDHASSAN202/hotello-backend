@@ -8,6 +8,7 @@ import {
 } from '../stay-settlement/settlement-source.interface';
 import { FnbOrderStatus } from './fnb.constants';
 import { FnbOrder } from './fnb-order.entity';
+import { fromNaive } from '../tenant-stays/stay-time';
 
 /**
  * Story 21.6 AC2 — the ONE implementation of "which fnb orders are
@@ -93,7 +94,12 @@ export class FnbSettlementSource implements SettlementSource {
       const line: UnsettledStayLine = {
         id: order.id,
         totalAmount: order.totalAmount,
-        createdAt: order.createdAt,
+        // `createdAt` is a naive `timestamp` column (UTC wall time); pg
+        // mis-parses it as host-local. fromNaive() recovers the true
+        // instant (Epic 22 final review, C1) so downstream consumers
+        // (StaySettlementService.oldestUnsettledAt, ReportsRevenueService
+        // outstanding window) compare against the correct instant.
+        createdAt: fromNaive(order.createdAt),
       };
       const lines = map.get(order.stayId);
       if (lines) lines.push(line);
