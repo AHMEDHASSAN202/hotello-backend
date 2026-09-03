@@ -30,5 +30,6 @@ import { StaySettlementService } from './stay-settlement.service';
       inject: [FnbSettlementSource, EventSettlementSource],
     },
   ],
+  exports: [StaySettlementService],
 })
 export class StaySettlementModule {}
