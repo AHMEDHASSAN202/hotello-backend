@@ -234,3 +234,18 @@ under the "vs previous period" comparison, noted above as a forward-looking
 observation for whichever future task revisits performance at meaningfully
 larger scale (multi-hundred-room hotels or multi-year history) — not
 something the pilot hotel's expected volume will approach.
+
+## Frontend status (added post-backend-perf-report)
+
+The Epic 22 frontend (hotello-hotel-frontend) shipped across Tasks F1a-F3:
+Overview dashboard, all seven report tabs (guests/services/housekeeping/
+dining/events/totals/balances), xlsx/CSV exports, the analytics upsell
+sample-data preview, and revenue-permission scoping in the UI. Task F3
+wired an `ExportButton` into every tab (plus raw-data CSV feed buttons on
+guests/services/dining/events) against the real `:report/export` contract
+verified here — the `400 REPORT_EXPORT_ROW_LIMIT` shape and the balances
+export's period-independent data path both matched this report's
+implementation exactly, so no frontend workaround was needed. Combined
+with the performance numbers above, the epic is ready for pilot-hotel use;
+the only open item is the forward-looking `overview` delta-comparison cost
+noted above, which remains a later-scale concern, not a blocker.
