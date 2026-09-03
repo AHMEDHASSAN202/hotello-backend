@@ -136,15 +136,27 @@ describe('EventSettlementSource.findUnsettledByStay (Story 22.4 AC1/AC4)', () =>
     );
   });
 
-  it('carries createdAt through unchanged', async () => {
-    const createdAt = new Date('2026-03-15T12:30:00.000Z');
-    bookingsRepo.find.mockResolvedValue([
-      makeBooking({ id: 'booking-1', createdAt }),
-    ]);
+  it('applies fromNaive() to recover the true instant (Epic 22 final review, C1)', async () => {
+    const originalTz = process.env.TZ;
+    process.env.TZ = 'Africa/Cairo';
+    try {
+      // Simulates what pg actually returns for a naive `timestamp` column:
+      // the wall-clock digits as written (UTC wall time), parsed as
+      // host-local by the driver — i.e. constructed with the local Date
+      // constructor, not an ISO-with-Z string.
+      const pgReturned = new Date(2026, 2, 15, 12, 30, 0, 0);
+      bookingsRepo.find.mockResolvedValue([
+        makeBooking({ id: 'booking-1', createdAt: pgReturned }),
+      ]);
 
-    const map = await source.findUnsettledByStay(HOTEL_ID, [STAY_ID]);
+      const map = await source.findUnsettledByStay(HOTEL_ID, [STAY_ID]);
 
-    expect(map.get(STAY_ID)?.[0].createdAt).toBe(createdAt);
+      expect(map.get(STAY_ID)?.[0].createdAt.toISOString()).toBe(
+        '2026-03-15T12:30:00.000Z',
+      );
+    } finally {
+      process.env.TZ = originalTz;
+    }
   });
 
   it('hotelId isolation: the repo query is scoped by hotelId', async () => {

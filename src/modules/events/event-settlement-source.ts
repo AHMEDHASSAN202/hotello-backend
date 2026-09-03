@@ -7,6 +7,7 @@ import {
   UnsettledStayLine,
 } from '../stay-settlement/settlement-source.interface';
 import { EventBooking } from './event-booking.entity';
+import { fromNaive } from '../tenant-stays/stay-time';
 
 /**
  * Story 21.6 AC2 — the events side of the shared settlement interface,
@@ -83,7 +84,12 @@ export class EventSettlementSource implements SettlementSource {
       const line: UnsettledStayLine = {
         id: booking.id,
         totalAmount: booking.totalAmount,
-        createdAt: booking.createdAt,
+        // `createdAt` is a naive `timestamp` column (UTC wall time); pg
+        // mis-parses it as host-local. fromNaive() recovers the true
+        // instant (Epic 22 final review, C1) so downstream consumers
+        // (StaySettlementService.oldestUnsettledAt, ReportsRevenueService
+        // outstanding window) compare against the correct instant.
+        createdAt: fromNaive(booking.createdAt),
       };
       const lines = map.get(booking.stayId);
       if (lines) lines.push(line);
