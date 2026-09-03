@@ -100,6 +100,42 @@ function addMinutes(d: Date, minutes: number): Date {
   return new Date(d.getTime() + minutes * 60_000);
 }
 
+/**
+ * Epic 22 final review, C1 — this script backdates `createdAt` on naive
+ * `timestamp` columns (Hotel/Stay/GuestRequest/FnbOrder, all default
+ * `@CreateDateColumn()`) instead of letting the DB auto-populate them, so it
+ * must reproduce the storage convention those columns expect: UTC wall time.
+ *
+ * Handing TypeORM a `Date` object (or even an ISO string — TypeORM's
+ * `preparePersistentValue` re-parses strings back into a `Date` via dayjs
+ * before it reaches the pg driver, so `naiveUtc()`'s "pass a string" trick
+ * does NOT survive the entity-property/insert path, only raw QueryBuilder
+ * WHERE-clause params) makes the pg driver serialize it via `date.getHours()`
+ * etc — i.e. HOST-LOCAL wall-clock digits, not the intended UTC ones. On a
+ * UTC host that's a no-op, which is exactly why this was invisible before:
+ * the seed + report-read round-trip is self-consistent on any ONE host, but
+ * silently wrong the moment either side runs under a different TZ.
+ *
+ * The fix: build the `Date` object so its LOCAL getters already equal the
+ * intended UTC digits. The pg driver then serializes those (correct) digits
+ * regardless of host timezone, and the read-side `fromNaive()` (which
+ * re-reads a naive column's LOCAL getters as UTC) recovers the original
+ * instant exactly. Verified empirically against the dev DB (port 5433):
+ * write via this helper -> stored wall-clock == intended UTC digits ->
+ * `fromNaive()` on read == original instant, independent of host TZ.
+ */
+function toNaiveColumnValue(d: Date): Date {
+  return new Date(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate(),
+    d.getUTCHours(),
+    d.getUTCMinutes(),
+    d.getUTCSeconds(),
+    d.getUTCMilliseconds(),
+  );
+}
+
 function randomCodeHash(): string {
   return crypto.randomBytes(32).toString('hex');
 }
@@ -221,7 +257,7 @@ async function main() {
       roomChargeEnabled: true,
       declaredRoomsCount: NUM_ROOMS,
       roomsCount: NUM_ROOMS,
-      createdAt: hotelCreatedAt,
+      createdAt: toNaiveColumnValue(hotelCreatedAt),
     }),
   );
   console.log(`Created hotel "${HOTEL_SLUG}" (${hotel.id})`);
@@ -421,7 +457,7 @@ async function main() {
       checkoutType: isActive ? null : 'manual',
       checkedOutAt,
       checkedOutById: isActive ? null : frontDesk.id,
-      createdAt: s.createdAt,
+      createdAt: toNaiveColumnValue(s.createdAt),
     });
   });
   await staysRepo.insert(stayEntities);
@@ -482,7 +518,10 @@ async function main() {
         optionValue: item.optionType === 'quantity' ? String(randInt(1, 3)) : item.optionType === 'time' ? '10:00' : null,
         slaTargetMinutes,
         dueAt,
-        createdAt,
+        // GuestRequest.createdAt is naive; dueAt/startedAt/completedAt/
+        // cancelledAt below are timestamptz and keep using the true
+        // `createdAt` instant for their arithmetic.
+        createdAt: toNaiveColumnValue(createdAt),
         status: 'new',
       });
 
@@ -644,7 +683,9 @@ async function main() {
         status,
         slaTargetMinutes: menu.prepSlaMinutes,
         dueAt,
-        createdAt,
+        // FnbOrder.createdAt is naive; deliveredAt/startedAt/etc below are
+        // timestamptz and keep using the true `createdAt` instant.
+        createdAt: toNaiveColumnValue(createdAt),
       });
 
       if (status === 'delivered') {
