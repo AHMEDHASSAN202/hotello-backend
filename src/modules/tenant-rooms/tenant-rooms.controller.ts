@@ -28,7 +28,6 @@ import { PosterPdfQueryDto } from './dto/poster-pdf.dto';
 import { QrFormatQueryDto } from './dto/qr-format-query.dto';
 import { UpdateRoomDto } from './dto/update-room.dto';
 import { RoomsPdfService } from './pdf/rooms-pdf.service';
-import { StaySettlementService } from '../stay-settlement/stay-settlement.service';
 import { TenantRoomsService } from './tenant-rooms.service';
 import { IMPORT_MAX_BYTES } from './xlsx/rooms-xlsx.constants';
 import { RoomsXlsxService } from './xlsx/rooms-xlsx.service';
@@ -62,7 +61,6 @@ export class TenantRoomsController {
     private readonly roomsService: TenantRoomsService,
     private readonly roomsPdfService: RoomsPdfService,
     private readonly roomsXlsxService: RoomsXlsxService,
-    private readonly staySettlement: StaySettlementService,
   ) {}
 
   @Get()
@@ -71,23 +69,16 @@ export class TenantRoomsController {
     @CurrentTenantUser() user: TenantUser,
     @Query() query: ListRoomsQueryDto,
   ) {
-    const includeOccupancy = canReadStays(user);
-    // Epic 22 final review, I2 — balances (the `hasBalance` filter AND the
-    // `unsettledTotal` decoration) ride the SAME `stays.read` gate as
-    // occupancy/currentStay. A Housekeeping-role actor holds
+    // Epic 22 final review, I2 + I3 — balances (the `hasBalance` filter AND
+    // the `unsettledTotal` decoration) ride the SAME `stays.read` gate as
+    // occupancy/currentStay (a Housekeeping-role actor holds
     // rooms.read+rooms.update but NOT stays.read, and must not see room
-    // balances either — that permission boundary existed before this epic
-    // and must not silently widen. Skip the fetch entirely rather than
-    // fetch-then-discard.
-    const balances = includeOccupancy
-      ? await this.staySettlement.unsettledByStay(user.hotelId)
-      : undefined;
-    return this.roomsService.list(
-      user.hotelId,
-      query,
-      includeOccupancy,
-      balances,
-    );
+    // balances either), and the service now scopes the hotel-wide-history
+    // fetch to just the current page's stay ids instead of fetching it
+    // unconditionally on every list() call. Both concerns now live entirely
+    // in TenantRoomsService.list(), which owns the StaySettlementService
+    // call itself.
+    return this.roomsService.list(user.hotelId, query, canReadStays(user));
   }
 
   @Post()

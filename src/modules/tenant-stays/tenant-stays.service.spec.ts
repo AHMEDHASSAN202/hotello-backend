@@ -12,6 +12,7 @@ import { Hotel } from '../hotels/hotel.entity';
 import { TenantUrlsService } from '../hotels/tenant-urls.service';
 import { HousekeepingService } from '../housekeeping/housekeeping.service';
 import { Room } from '../tenant-rooms/room.entity';
+import { StaySettlementService } from '../stay-settlement/stay-settlement.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { CreateStayDto } from './dto/create-stay.dto';
 import { StayCodeService } from './stay-code.service';
@@ -70,6 +71,7 @@ describe('TenantStaysService', () => {
   let events: { emitAsync: jest.Mock };
   let housekeeping: { onRoomVacated: jest.Mock };
   let dataSource: { transaction: jest.Mock };
+  let staySettlement: { unsettledStayIds: jest.Mock; unsettledByStay: jest.Mock };
   let manager: { getRepository: jest.Mock };
   let managerHotel: Record<string, jest.Mock>;
   let managerRooms: Record<string, jest.Mock>;
@@ -102,6 +104,10 @@ describe('TenantStaysService', () => {
     };
     events = { emitAsync: jest.fn() };
     housekeeping = { onRoomVacated: jest.fn().mockResolvedValue(undefined) };
+    staySettlement = {
+      unsettledStayIds: jest.fn().mockResolvedValue(new Set()),
+      unsettledByStay: jest.fn().mockResolvedValue(new Map()),
+    };
 
     managerHotel = {
       findOne: jest.fn().mockResolvedValue({ ...HOTEL }),
@@ -138,6 +144,7 @@ describe('TenantStaysService', () => {
         { provide: TenantUrlsService, useValue: tenantUrls },
         { provide: EventEmitter2, useValue: events },
         { provide: HousekeepingService, useValue: housekeeping },
+        { provide: StaySettlementService, useValue: staySettlement },
       ],
     }).compile();
     service = moduleRef.get(TenantStaysService);
@@ -333,8 +340,8 @@ describe('TenantStaysService', () => {
     });
   });
 
-  describe('hasBalance filter + decoration (Story 22.4 AC4)', () => {
-    it('1. decorates only the stay present in the balances map (active view)', async () => {
+  describe('hasBalance filter + decoration (Story 22.4 AC4; restructured Epic 22 final review I3)', () => {
+    it('1. decorates only the stay present in the balances map (active view), scoped to exactly this hotel\'s active stay ids', async () => {
       roomsRepo.find.mockResolvedValue([
         { id: 'r-1', roomNumber: '101', floor: 1, status: 'active' },
         { id: 'r-2', roomNumber: '102', floor: 1, status: 'active' },
@@ -343,12 +350,16 @@ describe('TenantStaysService', () => {
         { id: 's1', roomId: 'r-1', guestName: 'A', status: 'active', checkOutDate: futureDate(1) },
         { id: 's2', roomId: 'r-2', guestName: 'B', status: 'active', checkOutDate: futureDate(1) },
       ]);
-      const balances = new Map([
-        ['s1', { total: 42.5, byKey: {}, oldestUnsettledAt: new Date() }],
-      ]);
+      staySettlement.unsettledByStay.mockResolvedValue(
+        new Map([['s1', { total: 42.5, byKey: {}, oldestUnsettledAt: new Date() }]]),
+      );
 
-      const res = await service.list(makeActor(), { view: 'active' } as any, balances);
+      const res = await service.list(makeActor(), { view: 'active' } as any);
 
+      // Epic 22 final review, I3 — scoped to this hotel's active stay ids
+      // (already tightly bounded by room count), not the whole hotel's
+      // F&B/event history.
+      expect(staySettlement.unsettledByStay).toHaveBeenCalledWith(HOTEL_ID, ['s1', 's2']);
       const s1Row = res.data.find((r: any) => r.id === 's1')!;
       const s2Row = res.data.find((r: any) => r.id === 's2')!;
       expect(s1Row.unsettledTotal).toEqual(42.5);
@@ -364,69 +375,63 @@ describe('TenantStaysService', () => {
         { id: 's1', roomId: 'r-1', guestName: 'A', status: 'active', checkOutDate: futureDate(1) },
         { id: 's2', roomId: 'r-2', guestName: 'B', status: 'active', checkOutDate: futureDate(1) },
       ]);
-      const balances = new Map([
-        ['s1', { total: 42.5, byKey: {}, oldestUnsettledAt: new Date() }],
-      ]);
-
-      const res = await service.list(
-        makeActor(),
-        { view: 'active', hasBalance: true } as any,
-        balances,
+      staySettlement.unsettledByStay.mockResolvedValue(
+        new Map([['s1', { total: 42.5, byKey: {}, oldestUnsettledAt: new Date() }]]),
       );
+
+      const res = await service.list(makeActor(), { view: 'active', hasBalance: true } as any);
 
       expect(res.data.map((r: any) => r.id)).toEqual(['s1']);
       expect(res.total).toEqual(1);
     });
 
-    it('3. hasBalance:true with no balances map at all returns empty, not a throw', async () => {
+    it('3. hasBalance:true when no stay has a balance (active view) returns empty, not a throw', async () => {
       roomsRepo.find.mockResolvedValue([
         { id: 'r-1', roomNumber: '101', floor: 1, status: 'active' },
       ]);
       staysRepo.find.mockResolvedValue([
         { id: 's1', roomId: 'r-1', guestName: 'A', status: 'active', checkOutDate: futureDate(1) },
       ]);
+      staySettlement.unsettledByStay.mockResolvedValue(new Map());
 
-      const res = await service.list(
-        makeActor(),
-        { view: 'active', hasBalance: true } as any,
-        undefined,
-      );
+      const res = await service.list(makeActor(), { view: 'active', hasBalance: true } as any);
 
       expect(res.data).toEqual([]);
       expect(res.total).toEqual(0);
     });
 
-    it('4. history view: hasBalance:true applies the IN clause pre-pagination, empty map short-circuits without querying', async () => {
-      const balances = new Map([
-        ['s1', { total: 10, byKey: {}, oldestUnsettledAt: new Date() }],
-        ['s2', { total: 20, byKey: {}, oldestUnsettledAt: new Date() }],
-      ]);
+    it('4. history view: hasBalance:true applies the IN clause pre-pagination via the light ID-only unsettledStayIds() lookup, empty set short-circuits without querying the page', async () => {
+      staySettlement.unsettledStayIds.mockResolvedValue(new Set(['s1', 's2']));
       qb.getManyAndCount.mockResolvedValue([[], 0]);
 
-      const res = await service.list(
-        makeActor(),
-        { view: 'history', hasBalance: true, page: 1, pageSize: 20 } as any,
-        balances,
-      );
+      const res = await service.list(makeActor(), {
+        view: 'history',
+        hasBalance: true,
+        page: 1,
+        pageSize: 20,
+      } as any);
 
+      expect(staySettlement.unsettledStayIds).toHaveBeenCalledWith(HOTEL_ID);
       expect(qb.andWhere).toHaveBeenCalledWith('s.id IN (:...balanceStayIds)', {
         balanceStayIds: ['s1', 's2'],
       });
       expect(res.total).toEqual(0);
 
-      // Separately: an empty balances map short-circuits before the query
+      // Separately: an empty id set short-circuits before the query
       // builder's getManyAndCount is ever invoked (avoids an empty IN clause).
+      staySettlement.unsettledStayIds.mockResolvedValue(new Set());
       qb.getManyAndCount.mockClear();
-      const emptyRes = await service.list(
-        makeActor(),
-        { view: 'history', hasBalance: true, page: 1, pageSize: 20 } as any,
-        new Map(),
-      );
+      const emptyRes = await service.list(makeActor(), {
+        view: 'history',
+        hasBalance: true,
+        page: 1,
+        pageSize: 20,
+      } as any);
       expect(emptyRes).toEqual({ data: [], total: 0, page: 1, pageSize: 20 });
       expect(qb.getManyAndCount).not.toHaveBeenCalled();
     });
 
-    it('5. history view: decoration applies to matching rows even without the hasBalance filter', async () => {
+    it('5. history view: decoration applies to matching rows even without the hasBalance filter, scoped to just this page\'s stay ids', async () => {
       qb.getManyAndCount.mockResolvedValue([
         [
           { id: 's1', roomId: 'r-110', guestName: 'Past Guest', status: 'checked_out', checkoutType: 'manual' },
@@ -437,16 +442,22 @@ describe('TenantStaysService', () => {
       roomsRepo.find.mockResolvedValue([
         { id: 'r-110', roomNumber: '110', floor: 1 },
       ]);
-      const balances = new Map([
-        ['s1', { total: 15, byKey: {}, oldestUnsettledAt: new Date() }],
-      ]);
-
-      const res = await service.list(
-        makeActor(),
-        { view: 'history', page: 1, pageSize: 20 } as any,
-        balances,
+      staySettlement.unsettledByStay.mockResolvedValue(
+        new Map([['s1', { total: 15, byKey: {}, oldestUnsettledAt: new Date() }]]),
       );
 
+      const res = await service.list(makeActor(), {
+        view: 'history',
+        page: 1,
+        pageSize: 20,
+      } as any);
+
+      // Epic 22 final review, I3 — decoration is scoped to just THIS
+      // PAGE's stay ids, not a hotel-wide lookup, and `unsettledStayIds()`
+      // (the filter-only lookup) is never called since hasBalance wasn't
+      // requested.
+      expect(staySettlement.unsettledByStay).toHaveBeenCalledWith(HOTEL_ID, ['s1', 's2']);
+      expect(staySettlement.unsettledStayIds).not.toHaveBeenCalled();
       const s1Row = res.data.find((r: any) => r.id === 's1')!;
       const s2Row = res.data.find((r: any) => r.id === 's2')!;
       expect(s1Row.unsettledTotal).toEqual(15);

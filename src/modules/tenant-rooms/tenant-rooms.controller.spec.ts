@@ -1,6 +1,5 @@
 import { Test } from '@nestjs/testing';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
-import { StaySettlementService } from '../stay-settlement/stay-settlement.service';
 import { ListRoomsQueryDto } from './dto/list-rooms-query.dto';
 import { RoomsPdfService } from './pdf/rooms-pdf.service';
 import { TenantRoomsController } from './tenant-rooms.controller';
@@ -21,14 +20,19 @@ const housekeepingUser = {
   role: { permissions: ['rooms.read', 'rooms.update'] },
 } as unknown as TenantUser;
 
-describe('TenantRoomsController (Story 22.4 AC4)', () => {
+/**
+ * Epic 22 final review, I2 + I3 — the balance fetch/scoping this controller
+ * used to own moved entirely into TenantRoomsService.list() (see its spec),
+ * so all this controller has left to prove is that it derives
+ * `includeOccupancy` (== `canReadStays(user)`) correctly and passes it
+ * straight through, with no StaySettlementService involvement at all.
+ */
+describe('TenantRoomsController (Story 22.4 AC4; restructured Epic 22 final review I2/I3)', () => {
   let controller: TenantRoomsController;
   let roomsService: { list: jest.Mock };
-  let staySettlement: { unsettledByStay: jest.Mock };
 
   beforeEach(async () => {
     roomsService = { list: jest.fn().mockResolvedValue({ data: [], total: 0 }) };
-    staySettlement = { unsettledByStay: jest.fn() };
 
     const moduleRef = await Test.createTestingModule({
       controllers: [TenantRoomsController],
@@ -36,29 +40,24 @@ describe('TenantRoomsController (Story 22.4 AC4)', () => {
         { provide: TenantRoomsService, useValue: roomsService },
         { provide: RoomsPdfService, useValue: {} },
         { provide: RoomsXlsxService, useValue: {} },
-        { provide: StaySettlementService, useValue: staySettlement },
       ],
     }).compile();
     controller = moduleRef.get(TenantRoomsController);
   });
 
-  it('fetches the balances map for a stays.read actor, then forwards it into roomsService.list', async () => {
-    const balances = new Map([['stay-1', { total: 10, byKey: {}, oldestUnsettledAt: new Date() }]]);
-    staySettlement.unsettledByStay.mockResolvedValue(balances);
+  it('a stays.read actor: includeOccupancy resolves true and is forwarded to roomsService.list', async () => {
     const query: ListRoomsQueryDto = {} as ListRoomsQueryDto;
 
     await controller.list(user, query);
 
-    expect(staySettlement.unsettledByStay).toHaveBeenCalledWith('hotel-1');
-    expect(roomsService.list).toHaveBeenCalledWith('hotel-1', query, true, balances);
+    expect(roomsService.list).toHaveBeenCalledWith('hotel-1', query, true);
   });
 
-  it('Epic 22 final review, I2 — a stays.read-less actor (e.g. Housekeeping) never fetches balances at all', async () => {
+  it('Epic 22 final review, I2 — a stays.read-less actor (e.g. Housekeeping) resolves includeOccupancy: false', async () => {
     const query: ListRoomsQueryDto = {} as ListRoomsQueryDto;
 
     await controller.list(housekeepingUser, query);
 
-    expect(staySettlement.unsettledByStay).not.toHaveBeenCalled();
-    expect(roomsService.list).toHaveBeenCalledWith('hotel-1', query, false, undefined);
+    expect(roomsService.list).toHaveBeenCalledWith('hotel-1', query, false);
   });
 });

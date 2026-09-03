@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { forwardRef, Inject, Injectable } from '@nestjs/common';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { TenantStaysService } from '../tenant-stays/tenant-stays.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
@@ -39,6 +39,17 @@ export class StaySettlementService {
   constructor(
     @Inject(SETTLEMENT_SOURCES)
     private readonly sources: SettlementSource[],
+    // Epic 22 final review, I3 — `@Inject(forwardRef(...))` is required
+    // here (plain injection is no longer safe): TenantRoomsService and
+    // TenantStaysService now both inject StaySettlementService (to scope
+    // their balance decoration to page-sized stay ids instead of
+    // hotel-wide), which extends the pre-existing
+    // StaySettlementService -> TenantStaysService -> HousekeepingService ->
+    // TenantRoomsService require chain into a cycle that loops back here.
+    // Verified empirically that plain injection intermittently bakes
+    // `undefined` into THIS param's `design:paramtypes` depending on which
+    // file happens to load first across the whole test suite.
+    @Inject(forwardRef(() => TenantStaysService))
     private readonly stays: TenantStaysService,
     private readonly auditLogs: AuditLogsService,
   ) {}

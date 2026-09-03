@@ -15,6 +15,7 @@ import { RoomQrService } from './room-qr.service';
 import { RoomRowInput } from './room-rows';
 import { Room } from './room.entity';
 import { RoomType } from './room-type.entity';
+import { StaySettlementService } from '../stay-settlement/stay-settlement.service';
 import { Stay } from '../tenant-stays/stay.entity';
 import { NATURAL_ROOM_ORDER, TenantRoomsService } from './tenant-rooms.service';
 import { parseImport } from './xlsx/parse-import';
@@ -53,6 +54,7 @@ describe('TenantRoomsService', () => {
   let auditLogs: { log: jest.Mock };
   let tenantUrls: { buildGuestUrl: jest.Mock };
   let roomQr: { generate: jest.Mock };
+  let staySettlement: { unsettledStayIds: jest.Mock; unsettledByStay: jest.Mock };
   let qb: Record<string, jest.Mock>;
 
   // Transaction manager wiring for createRoom (11.3) — configurable countable
@@ -117,6 +119,10 @@ describe('TenantRoomsService', () => {
         contentType: 'image/png',
       })),
     };
+    staySettlement = {
+      unsettledStayIds: jest.fn().mockResolvedValue(new Set()),
+      unsettledByStay: jest.fn().mockResolvedValue(new Map()),
+    };
     mockedParseImport.mockReset();
 
     countable = 0;
@@ -169,6 +175,7 @@ describe('TenantRoomsService', () => {
         { provide: AuditLogsService, useValue: auditLogs },
         { provide: TenantUrlsService, useValue: tenantUrls },
         { provide: RoomQrService, useValue: roomQr },
+        { provide: StaySettlementService, useValue: staySettlement },
       ],
     }).compile();
     service = moduleRef.get(TenantRoomsService);
@@ -325,7 +332,7 @@ describe('TenantRoomsService', () => {
     });
   });
 
-  describe('hasBalance filter + decoration (Story 22.4 AC4)', () => {
+  describe('hasBalance filter + decoration (Story 22.4 AC4; restructured Epic 22 final review I2/I3)', () => {
     beforeEach(() => {
       hotelsRepo.findOne.mockResolvedValue({ id: HOTEL_ID, roomsCount: 12 });
       subscriptions.getForHotel.mockResolvedValue({
@@ -342,67 +349,73 @@ describe('TenantRoomsService', () => {
       oldestUnsettledAt: new Date(),
     });
 
-    // Distinguishes the balance-translation query (`where.id`) from the
-    // occupancy batch-load (`where.roomId`) — both hit staysRepo.find with
-    // status: 'active', so they must be told apart, not just sequenced.
-    const mockStaysFindByShape = (
-      byId: Array<{ id: string; roomId: string }>,
-      byRoomId: Array<{ roomId: string; id: string; guestName: string; checkOutDate: string }> = [],
-    ) => {
-      staysRepo.find.mockImplementation(async ({ where }: any) => {
-        if (where?.id) return byId;
-        if (where?.roomId) return byRoomId;
-        return [];
-      });
-    };
-
-    it('1. decorates only the room whose active stay is in the balances map', async () => {
+    it('1. decorates only the room whose active stay is in the page-scoped balances map', async () => {
       qb.getCount.mockResolvedValue(2);
       qb.getMany.mockResolvedValue([
         makeRoom({ id: 'room-1' }),
         makeRoom({ id: 'room-2' }),
       ]);
-      mockStaysFindByShape([{ id: 'stay-1', roomId: 'room-1' }]);
-      const balances = new Map([['stay-1', balanceEntry(75)]]);
+      // Occupancy batch-load (the only staysRepo.find call left — no
+      // separate translation query needed any more).
+      staysRepo.find.mockResolvedValue([
+        { id: 'stay-1', roomId: 'room-1', guestName: 'G1', checkOutDate: '2026-09-10' },
+        { id: 'stay-2', roomId: 'room-2', guestName: 'G2', checkOutDate: '2026-09-11' },
+      ]);
+      staySettlement.unsettledByStay.mockResolvedValue(
+        new Map([['stay-1', balanceEntry(75)]]),
+      );
 
       // includeOccupancy: true — this actor holds stays.read (Epic 22 final
       // review, I2: balances ride the SAME gate as occupancy).
-      const result = await service.list(
-        HOTEL_ID,
-        {} as ListRoomsQueryDto,
-        true,
-        balances,
-      );
+      const result = await service.list(HOTEL_ID, {} as ListRoomsQueryDto, true);
 
+      // I3 — scoped to just this page's active stay ids, not the whole hotel.
+      expect(staySettlement.unsettledByStay).toHaveBeenCalledWith(HOTEL_ID, [
+        'stay-1',
+        'stay-2',
+      ]);
       const room1 = result.data.find((r: any) => r.id === 'room-1')!;
       const room2 = result.data.find((r: any) => r.id === 'room-2')!;
       expect(room1.unsettledTotal).toBe(75);
       expect('unsettledTotal' in room2).toBe(false);
     });
 
-    it('2. hasBalance:true filters qb by the TRANSLATED room ids, not the raw stay ids', async () => {
+    it('2. hasBalance:true filters qb by room ids TRANSLATED from unsettledStayIds() (the light ID-only lookup), not the raw stay ids', async () => {
       qb.getCount.mockResolvedValue(1);
       qb.getMany.mockResolvedValue([makeRoom({ id: 'room-1' })]);
-      mockStaysFindByShape([{ id: 'stay-1', roomId: 'room-1' }]);
-      const balances = new Map([['stay-1', balanceEntry(30)]]);
+      staySettlement.unsettledStayIds.mockResolvedValue(new Set(['stay-1']));
+      staysRepo.find.mockResolvedValue([{ id: 'stay-1', roomId: 'room-1' }]);
 
-      await service.list(HOTEL_ID, { hasBalance: true } as ListRoomsQueryDto, true, balances);
+      await service.list(HOTEL_ID, { hasBalance: true } as ListRoomsQueryDto, true);
 
+      expect(staySettlement.unsettledStayIds).toHaveBeenCalledWith(HOTEL_ID);
       expect(qb.andWhere).toHaveBeenCalledWith('r.id IN (:...balanceRoomIds)', {
         balanceRoomIds: ['room-1'],
       });
     });
 
-    it('3. hasBalance:true with an empty translated room-id set short-circuits without querying', async () => {
-      mockStaysFindByShape([]); // no active stay matches any balance-map key
-      const balances = new Map([['stay-orphan', balanceEntry(10)]]);
+    it('3a. hasBalance:true with unsettledStayIds() returning an empty set short-circuits WITHOUT a translation query or the page query', async () => {
+      staySettlement.unsettledStayIds.mockResolvedValue(new Set());
 
-      const result = await service.list(
-        HOTEL_ID,
-        { hasBalance: true } as ListRoomsQueryDto,
-        true,
-        balances,
-      );
+      const result = await service.list(HOTEL_ID, { hasBalance: true } as ListRoomsQueryDto, true);
+
+      expect(staysRepo.find).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        data: [],
+        total: 0,
+        page: 1,
+        pageSize: 50,
+        usage: { used: 12, max: 50 },
+      });
+      expect(qb.getCount).not.toHaveBeenCalled();
+      expect(qb.getMany).not.toHaveBeenCalled();
+    });
+
+    it('3b. hasBalance:true with an empty translated room-id set (no active stay matches) short-circuits without querying the page', async () => {
+      staySettlement.unsettledStayIds.mockResolvedValue(new Set(['stay-orphan']));
+      staysRepo.find.mockResolvedValue([]); // no active stay matches any balance-id
+
+      const result = await service.list(HOTEL_ID, { hasBalance: true } as ListRoomsQueryDto, true);
 
       expect(result).toEqual({
         data: [],
@@ -415,67 +428,42 @@ describe('TenantRoomsService', () => {
       expect(qb.getMany).not.toHaveBeenCalled();
     });
 
-    it('4. an empty (but present) balances map runs no translation query and decorates nothing', async () => {
+    it('4. no active stays on the page means no balance call runs at all (I3 — no fetch-then-discard), and nothing decorates', async () => {
       qb.getCount.mockResolvedValue(1);
       qb.getMany.mockResolvedValue([makeRoom({ id: 'room-1' })]);
+      staysRepo.find.mockResolvedValue([]); // no active stay for this room
 
-      const result = await service.list(
-        HOTEL_ID,
-        {} as ListRoomsQueryDto,
-        false,
-        new Map(),
-      );
+      const result = await service.list(HOTEL_ID, {} as ListRoomsQueryDto, true);
 
-      expect(staysRepo.find).not.toHaveBeenCalled();
+      expect(staySettlement.unsettledByStay).not.toHaveBeenCalled();
       expect('unsettledTotal' in result.data[0]).toBe(false);
     });
 
-    it('5. balances undefined behaves exactly as before this task — no translation query, no decoration', async () => {
+    it('5. includeOccupancy: false means occupancy AND balances are both skipped entirely — no stays queries, no settlement calls', async () => {
       qb.getCount.mockResolvedValue(1);
       qb.getMany.mockResolvedValue([makeRoom({ id: 'room-1' })]);
 
-      // includeOccupancy: false here — this sub-case is purely about the
-      // `balances` param being undefined, independent of the occupancy
-      // gate; `true` would also trigger the (unrelated) occupancy
-      // staysRepo.find batch-load and pollute this assertion.
-      const result = await service.list(HOTEL_ID, {} as ListRoomsQueryDto, false, undefined);
+      const result = await service.list(HOTEL_ID, {} as ListRoomsQueryDto, false);
 
       expect(staysRepo.find).not.toHaveBeenCalled();
+      expect(staySettlement.unsettledByStay).not.toHaveBeenCalled();
       expect('unsettledTotal' in result.data[0]).toBe(false);
-
-      // hasBalance:true with balances undefined, for a stays.read-holding
-      // actor, is the same short-circuit as case 3's empty result (returns
-      // before occupancy loading is ever reached).
-      qb.getCount.mockClear();
-      qb.getMany.mockClear();
-      const filtered = await service.list(
-        HOTEL_ID,
-        { hasBalance: true } as ListRoomsQueryDto,
-        true,
-        undefined,
-      );
-      expect(filtered).toEqual({
-        data: [],
-        total: 0,
-        page: 1,
-        pageSize: 50,
-        usage: { used: 12, max: 50 },
-      });
-      expect(qb.getCount).not.toHaveBeenCalled();
-      expect(qb.getMany).not.toHaveBeenCalled();
     });
 
-    it('6. Epic 22 final review, I2 — includeOccupancy: false (no stays.read) never decorates unsettledTotal NOR applies hasBalance, even with real balance data for the room', async () => {
+    it('6. Epic 22 final review, I2 — includeOccupancy: false (no stays.read) never queries or applies balances, even when real balance data exists hotel-wide', async () => {
       qb.getCount.mockResolvedValue(1);
       qb.getMany.mockResolvedValue([makeRoom({ id: 'room-1' })]);
-      mockStaysFindByShape([{ id: 'stay-1', roomId: 'room-1' }]);
-      // A real, non-empty balance exists for this room's active stay.
-      const balances = new Map([['stay-1', balanceEntry(999)]]);
+      staySettlement.unsettledStayIds.mockResolvedValue(new Set(['stay-1']));
+      staySettlement.unsettledByStay.mockResolvedValue(
+        new Map([['stay-1', balanceEntry(999)]]),
+      );
+      staysRepo.find.mockResolvedValue([{ id: 'stay-1', roomId: 'room-1' }]);
 
-      // Plain decoration path: no unsettledTotal on any row, no translation
-      // query at all (mirrors how occupancy is skipped, not computed then
+      // Plain decoration path: no unsettledTotal, no settlement/stays calls
+      // at all (mirrors how occupancy is skipped, not computed then
       // discarded).
-      const result = await service.list(HOTEL_ID, {} as ListRoomsQueryDto, false, balances);
+      const result = await service.list(HOTEL_ID, {} as ListRoomsQueryDto, false);
+      expect(staySettlement.unsettledByStay).not.toHaveBeenCalled();
       expect(staysRepo.find).not.toHaveBeenCalled();
       expect('unsettledTotal' in result.data[0]).toBe(false);
 
@@ -484,16 +472,14 @@ describe('TenantRoomsService', () => {
       // unfiltered list, same as if the field didn't exist for them.
       qb.getCount.mockClear();
       qb.getMany.mockClear();
-      staysRepo.find.mockClear();
       qb.getCount.mockResolvedValue(1);
       qb.getMany.mockResolvedValue([makeRoom({ id: 'room-1' })]);
       const filtered = await service.list(
         HOTEL_ID,
         { hasBalance: true } as ListRoomsQueryDto,
         false,
-        balances,
       );
-      expect(staysRepo.find).not.toHaveBeenCalled();
+      expect(staySettlement.unsettledStayIds).not.toHaveBeenCalled();
       expect(qb.andWhere).not.toHaveBeenCalledWith(
         'r.id IN (:...balanceRoomIds)',
         expect.anything(),
@@ -502,30 +488,20 @@ describe('TenantRoomsService', () => {
       expect('unsettledTotal' in filtered.data[0]).toBe(false);
     });
 
-    it('translation and occupancy batch-loads both run and stay independent when includeOccupancy + balances are both active', async () => {
+    it('7. decoration and occupancy share the SAME single staysRepo.find call — no separate translation query (I3 elimination of the redundant lookup)', async () => {
       qb.getCount.mockResolvedValue(1);
       qb.getMany.mockResolvedValue([makeRoom({ id: 'room-1' })]);
-      mockStaysFindByShape(
-        [{ id: 'stay-1', roomId: 'room-1' }],
-        [
-          {
-            id: 'stay-1',
-            roomId: 'room-1',
-            guestName: 'Ahmed Ali',
-            checkOutDate: '2026-09-10',
-          },
-        ],
-      );
-      const balances = new Map([['stay-1', balanceEntry(60)]]);
-
-      const result = await service.list(
-        HOTEL_ID,
-        {} as ListRoomsQueryDto,
-        true,
-        balances,
+      staysRepo.find.mockResolvedValue([
+        { id: 'stay-1', roomId: 'room-1', guestName: 'Ahmed Ali', checkOutDate: '2026-09-10' },
+      ]);
+      staySettlement.unsettledByStay.mockResolvedValue(
+        new Map([['stay-1', balanceEntry(60)]]),
       );
 
-      expect(staysRepo.find).toHaveBeenCalledTimes(2);
+      const result = await service.list(HOTEL_ID, {} as ListRoomsQueryDto, true);
+
+      expect(staysRepo.find).toHaveBeenCalledTimes(1);
+      expect(staySettlement.unsettledByStay).toHaveBeenCalledWith(HOTEL_ID, ['stay-1']);
       expect(result.data[0].unsettledTotal).toBe(60);
       expect(result.data[0].currentStay).toEqual({
         id: 'stay-1',

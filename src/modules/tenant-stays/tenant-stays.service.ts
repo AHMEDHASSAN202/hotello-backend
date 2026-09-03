@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   ConflictException,
+  forwardRef,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -18,7 +20,7 @@ import {
   safeEmit,
 } from '../notifications/notification-events';
 import { Room } from '../tenant-rooms/room.entity';
-import type { StayUnsettledSummary } from '../stay-settlement/stay-settlement.service';
+import { StaySettlementService, StayUnsettledSummary } from '../stay-settlement/stay-settlement.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { ChangeRoomDto } from './dto/change-room.dto';
 import { CreateStayDto } from './dto/create-stay.dto';
@@ -105,7 +107,26 @@ export class TenantStaysService {
     private readonly stayCodes: StayCodeService,
     private readonly tenantUrls: TenantUrlsService,
     private readonly events: EventEmitter2,
+    // Epic 22 final review, I3 — `@Inject(forwardRef(...))` is required
+    // here too (not just on `staySettlement` below), a side-effect of
+    // widening the cycle: HousekeepingService imports NATURAL_ROOM_ORDER
+    // (a value) from TenantRoomsService, which now (see below) injects
+    // StaySettlementService, which injects TenantStaysService (this file)
+    // — closing a 4-file loop: TenantStaysService -> HousekeepingService ->
+    // TenantRoomsService -> StaySettlementService -> TenantStaysService.
+    // Verified empirically that plain injection of `housekeeping` bakes
+    // `undefined` into ITS `design:paramtypes` slot when a spec file's
+    // import order makes HousekeepingService the chain's entry point.
+    @Inject(forwardRef(() => HousekeepingService))
     private readonly housekeeping: HousekeepingService,
+    // Epic 22 final review, I3 — owns the balance fetch itself now (see
+    // list()/listActive()/listHistory() below), scoped to just the
+    // relevant stay ids instead of the controller fetching hotel-wide data
+    // unconditionally. Same forwardRef() requirement as `housekeeping`
+    // above — this is the edge that directly closes the loop back to
+    // StaySettlementService.
+    @Inject(forwardRef(() => StaySettlementService))
+    private readonly staySettlement: StaySettlementService,
   ) {}
 
   // ------------------------------------------------------------------
@@ -203,13 +224,9 @@ export class TenantStaysService {
   // Lists & detail (13.2)
   // ------------------------------------------------------------------
 
-  async list(
-    actor: TenantUser,
-    query: ListStaysQueryDto,
-    balances?: Map<string, StayUnsettledSummary>,
-  ) {
-    if (query.view === 'history') return this.listHistory(actor, query, balances);
-    return this.listActive(actor, query, balances);
+  async list(actor: TenantUser, query: ListStaysQueryDto) {
+    if (query.view === 'history') return this.listHistory(actor, query);
+    return this.listActive(actor, query);
   }
 
   /**
@@ -217,11 +234,7 @@ export class TenantStaysService {
    * one pass, batch-loads rooms, and filters/sorts app-side in room natural
    * order (13.2 AC1).
    */
-  private async listActive(
-    actor: TenantUser,
-    query: ListStaysQueryDto,
-    balances?: Map<string, StayUnsettledSummary>,
-  ) {
+  private async listActive(actor: TenantUser, query: ListStaysQueryDto) {
     const [stays, hotel] = await Promise.all([
       this.staysRepo.find({
         where: { hotelId: actor.hotelId, status: 'active' },
@@ -229,6 +242,20 @@ export class TenantStaysService {
       this.loadHotel(actor.hotelId),
     ]);
     const rooms = await this.loadRoomsByIds(stays.map((s) => s.roomId));
+
+    // Epic 22 final review, I3 — scoped to exactly this hotel's ACTIVE
+    // stays (already tightly bounded by room count) instead of every F&B
+    // order/event booking the hotel has EVER created. `listActive` returns
+    // every active stay in one pass (no pagination), so "active stays" IS
+    // already the full relevant scope — no separate page-vs-filter split
+    // needed here, unlike listHistory below.
+    const balances =
+      stays.length > 0
+        ? await this.staySettlement.unsettledByStay(
+            actor.hotelId,
+            stays.map((s) => s.id),
+          )
+        : new Map<string, StayUnsettledSummary>();
 
     const term = query.search?.trim().toUpperCase();
     let filtered = stays.filter((stay) => {
@@ -245,7 +272,7 @@ export class TenantStaysService {
     // StaySettlementService.unsettledByStay computation as the balances
     // report (one source of truth).
     if (query.hasBalance) {
-      filtered = filtered.filter((stay) => balances?.has(stay.id));
+      filtered = filtered.filter((stay) => balances.has(stay.id));
     }
 
     filtered.sort((a, b) =>
@@ -265,11 +292,7 @@ export class TenantStaysService {
    * newest checkout first. Join-free + batch-load (repo pagination law).
    * Room-number search goes through a subquery instead of a join.
    */
-  private async listHistory(
-    actor: TenantUser,
-    query: ListStaysQueryDto,
-    balances?: Map<string, StayUnsettledSummary>,
-  ) {
+  private async listHistory(actor: TenantUser, query: ListStaysQueryDto) {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 20;
     const qb = this.staysRepo
@@ -290,14 +313,22 @@ export class TenantStaysService {
 
     // Story 22.4 AC4 — filter applies pre-pagination (inside the query
     // builder, before skip/take), so pagination/count reflect the filtered
-    // set. An empty balances map short-circuits before an empty IN clause
-    // ever reaches Postgres.
+    // set. Epic 22 final review, I2/I3 — this hotel-wide lookup (needed
+    // because the filter decides which rows even MAKE the page) now runs
+    // ONLY when the filter is actually requested, and uses the ID-only
+    // `unsettledStayIds()` rather than the full per-stay-totals
+    // `unsettledByStay()`, since the filter only needs to know which stays
+    // qualify — their amounts are computed separately below, scoped to
+    // just the resulting page. An empty id set short-circuits before an
+    // empty IN clause ever reaches Postgres.
     if (query.hasBalance) {
-      const ids = balances ? [...balances.keys()] : [];
-      if (ids.length === 0) {
+      const unsettledIds = await this.staySettlement.unsettledStayIds(actor.hotelId);
+      if (unsettledIds.size === 0) {
         return { data: [], total: 0, page, pageSize };
       }
-      qb.andWhere('s.id IN (:...balanceStayIds)', { balanceStayIds: ids });
+      qb.andWhere('s.id IN (:...balanceStayIds)', {
+        balanceStayIds: [...unsettledIds],
+      });
     }
 
     const [stays, total] = await qb
@@ -308,6 +339,17 @@ export class TenantStaysService {
       .getManyAndCount();
 
     const rooms = await this.loadRoomsByIds(stays.map((s) => s.roomId));
+
+    // Epic 22 final review, I3 — decoration scoped to just THIS PAGE's
+    // stay ids, not the whole hotel's F&B/event history.
+    const balances =
+      stays.length > 0
+        ? await this.staySettlement.unsettledByStay(
+            actor.hotelId,
+            stays.map((s) => s.id),
+          )
+        : new Map<string, StayUnsettledSummary>();
+
     return {
       data: stays.map((stay) =>
         this.withBalance(this.toView(stay, rooms.get(stay.roomId)!), balances),

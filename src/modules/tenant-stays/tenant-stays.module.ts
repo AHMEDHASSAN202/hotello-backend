@@ -20,10 +20,11 @@ import { TenantStaysService } from './tenant-stays.service';
     TenantUrlsModule,
     // Epic 20 — one-way dependency for the vacate hook (note 3).
     HousekeepingModule,
-    // Epic 22 (B2d) — the controller injects StaySettlementService for the
-    // hasBalance filter/decoration. StaySettlementModule already imports
-    // this module (for TenantStaysService.findStayInHotel), so this edge
-    // creates a direct 2-module cycle; forwardRef() on both sides breaks it.
+    // Epic 22 (B2d; scoping restructured in the final review, I3) —
+    // TenantStaysService injects StaySettlementService for the hasBalance
+    // filter/decoration. StaySettlementModule already imports this module
+    // (for TenantStaysService.findStayInHotel), so this edge creates a
+    // direct 2-module cycle; forwardRef() on both sides breaks it.
     forwardRef(() => StaySettlementModule),
   ],
   controllers: [TenantStaysController],

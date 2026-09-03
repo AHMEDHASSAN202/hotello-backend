@@ -13,7 +13,6 @@ import {
 import { CurrentTenantUser } from '../../common/decorators/current-tenant-user.decorator';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { TenantScope } from '../../common/decorators/tenant-scope.decorator';
-import { StaySettlementService } from '../stay-settlement/stay-settlement.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { ChangeRoomDto } from './dto/change-room.dto';
 import { CreateStayDto } from './dto/create-stay.dto';
@@ -29,10 +28,7 @@ import { TenantStaysService } from './tenant-stays.service';
 @TenantScope()
 @Controller('tenant/stays')
 export class TenantStaysController {
-  constructor(
-    private readonly staysService: TenantStaysService,
-    private readonly staySettlement: StaySettlementService,
-  ) {}
+  constructor(private readonly staysService: TenantStaysService) {}
 
   @Get()
   @RequirePermissions('stays.read')
@@ -40,11 +36,11 @@ export class TenantStaysController {
     @CurrentTenantUser() user: TenantUser,
     @Query() query: ListStaysQueryDto,
   ) {
-    // Story 22.4 AC4 — fetched unconditionally on every list call (not only
-    // when hasBalance is requested): the balance decoration must appear on
-    // any row that has one, independent of whether the filter is active.
-    const balances = await this.staySettlement.unsettledByStay(user.hotelId);
-    return this.staysService.list(user, query, balances);
+    // Epic 22 final review, I3 — the balance fetch (decoration + hasBalance
+    // filter) now lives entirely in TenantStaysService.list(), scoped to
+    // the relevant stay ids instead of fetched unconditionally hotel-wide
+    // here on every list call.
+    return this.staysService.list(user, query);
   }
 
   @Post()
