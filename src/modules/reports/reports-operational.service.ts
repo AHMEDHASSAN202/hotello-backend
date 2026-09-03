@@ -6,7 +6,7 @@ import { HousekeepingEvent } from '../housekeeping/housekeeping-event.entity';
 import { Hotel } from '../hotels/hotel.entity';
 import { RequestCategory } from '../requests/request-category.entity';
 import { GuestRequest } from '../requests/request.entity';
-import { daysBetween, hotelLocalParts, naiveUtc } from '../tenant-stays/stay-time';
+import { daysBetween, fromNaive, hotelLocalParts, naiveUtc } from '../tenant-stays/stay-time';
 import { Stay } from '../tenant-stays/stay.entity';
 import { StayRoomChange } from '../tenant-stays/stay-room-change.entity';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
@@ -171,7 +171,11 @@ export class ReportsOperationalService {
     let overallCompletionMinutesSum = 0;
 
     for (const r of rows) {
-      const local = hotelLocalParts(timezone, r.createdAt);
+      // `createdAt` is a naive `timestamp` column (UTC wall time); pg
+      // mis-parses it as host-local. fromNaive() recovers the true instant
+      // (Epic 22 final review, C1) before any day-bucketing or duration math.
+      const createdAt = fromNaive(r.createdAt);
+      const local = hotelLocalParts(timezone, createdAt);
       volumeByDayMap.set(local.date, (volumeByDayMap.get(local.date) ?? 0) + 1);
       busiestHours[Math.floor(local.minutes / 60)] += 1;
 
@@ -191,7 +195,7 @@ export class ReportsOperationalService {
           cat.breaches += 1;
           overallBreaches += 1;
         }
-        const minutes = (r.completedAt.getTime() - r.createdAt.getTime()) / 60000;
+        const minutes = (r.completedAt.getTime() - createdAt.getTime()) / 60000;
         cat.completionMinutesSum += minutes;
         cat.completionCount += 1;
         overallCompletionMinutesSum += minutes;

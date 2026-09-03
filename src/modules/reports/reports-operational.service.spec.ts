@@ -41,8 +41,25 @@ const makeStay = (o: Partial<Stay> = {}): Stay =>
     ...o,
   }) as Stay;
 
-const makeRequest = (o: Partial<GuestRequest> = {}): GuestRequest =>
-  ({
+// `GuestRequest.createdAt` is a naive `timestamp` column; the service
+// recovers the true instant via `fromNaive()` (Epic 22 final review, C1).
+// Simulates what pg actually hands back for a naive column: a Date whose
+// LOCAL (host-TZ) wall-clock digits equal the intended UTC-wall value —
+// the exact inverse of `fromNaive`, same pattern as stay-time.spec.ts and
+// the fnb/event settlement-source specs.
+const simulateNaiveRead = (d: Date): Date =>
+  new Date(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate(),
+    d.getUTCHours(),
+    d.getUTCMinutes(),
+    d.getUTCSeconds(),
+    d.getUTCMilliseconds(),
+  );
+
+const makeRequest = (o: Partial<GuestRequest> = {}): GuestRequest => {
+  const merged = {
     id: 'req-1',
     hotelId: HOTEL_ID,
     categoryId: 'cat-1',
@@ -54,7 +71,11 @@ const makeRequest = (o: Partial<GuestRequest> = {}): GuestRequest =>
     completedAt: null,
     cancelledReason: null,
     ...o,
-  }) as GuestRequest;
+  } as GuestRequest;
+  // Wrap only createdAt (naive) — dueAt/completedAt are real timestamptz
+  // and must stay as the true instants the test authored.
+  return { ...merged, createdAt: simulateNaiveRead(merged.createdAt) };
+};
 
 const makeEvent = (o: Partial<HousekeepingEvent> = {}): HousekeepingEvent =>
   ({
@@ -500,6 +521,49 @@ describe('ReportsOperationalService (Story 22.2)', () => {
       const guestsReport = await service.guests(HOTEL_ID, { preset: 'today' } as any, new Date('2026-01-10T09:00:00Z'));
       expect(guestsReport.arrivals.value).toBe(directArrivals);
       expect(guestsReport.departures.value).toBe(directDepartures);
+    });
+
+    it('17. applies fromNaive() to createdAt before bucketing/duration math (Epic 22 final review, C1) — a wrong (non-fromNaive) read would land this row on the previous local day and inflate completion minutes by the host UTC offset', async () => {
+      // Africa/Cairo is UTC+2 in January. Intended true instant: 2026-01-10
+      // 00:30 Cairo-local (= 2026-01-09T22:30:00Z). makeRequest's
+      // simulateNaiveRead() stores this the way pg actually returns a naive
+      // column: a Date whose LOCAL wall-clock digits are the ORIGINAL
+      // UTC-wall value (2026-01-10T00:30:00 read as local), i.e. an instant
+      // 2 hours EARLIER (2026-01-09T20:30:00Z) than the true one.
+      //
+      // Without fromNaive(), the service would bucket/measure against that
+      // raw (2 hours too early) value directly:
+      //   - hotelLocalParts(TZ, raw) -> Cairo local 22:30 on the 9th ->
+      //     WRONG day bucket '2026-01-09' (correct is '2026-01-10').
+      //   - completion minutes vs a completedAt 10 minutes after the true
+      //     instant would read as 130 minutes ('1-2h' bucket) instead of
+      //     the correct 10 minutes ('<15m' bucket).
+      // fromNaive() must recover the true instant so both land correctly.
+      const trueCreatedAt = new Date('2026-01-09T22:30:00Z'); // 2026-01-10 00:30 Cairo-local
+      const trueCompletedAt = new Date(trueCreatedAt.getTime() + 10 * 60000); // +10 min, real timestamptz
+      requestsRepo.find.mockResolvedValue([
+        makeRequest({
+          id: 'boundary-1',
+          categoryId: 'cat-1',
+          status: 'done',
+          createdAt: trueCreatedAt,
+          dueAt: new Date(trueCreatedAt.getTime() + 60 * 60000),
+          completedAt: trueCompletedAt,
+        }),
+      ]);
+
+      const res = await service.requests(HOTEL_ID, dto, now);
+
+      // Correct local date bucket (not the previous day the un-fixed
+      // 2-hour-earlier raw value would fall into).
+      expect(res.volumeByDay).toEqual([{ date: '2026-01-10', count: 1 }]);
+      // Correct local hour (00:xx -> bucket 0), not 22.
+      expect(res.busiestHours[0]).toBe(1);
+      expect(res.busiestHours[22]).toBe(0);
+      // Correct completion bucket ('<15m'), not '1-2h'.
+      const buckets = Object.fromEntries(res.completionBuckets.map((b) => [b.label, b.count]));
+      expect(buckets['<15m']).toBe(1);
+      expect(buckets['1-2h']).toBe(0);
     });
   });
 
