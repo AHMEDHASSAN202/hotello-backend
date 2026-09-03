@@ -1,8 +1,9 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { Hotel } from '../hotels/hotel.entity';
 import { TenantUrlsModule } from '../hotels/tenant-urls.module';
+import { StaySettlementModule } from '../stay-settlement/stay-settlement.module';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 import { PdfRendererService } from './pdf/pdf-renderer.service';
 import { RoomsPdfService } from './pdf/rooms-pdf.service';
@@ -27,6 +28,11 @@ import { RoomsXlsxService } from './xlsx/rooms-xlsx.service';
     // imports this module (for `RoomTypesService`, onboarding's default room
     // types), so importing `HotelsModule` back here would be a cycle.
     TenantUrlsModule,
+    // Epic 22 (B2d) — the controller injects StaySettlementService for the
+    // hasBalance filter/decoration. StaySettlementModule -> FnbModule ->
+    // TenantRoomsModule is an indirect cycle back to here; forwardRef() on
+    // this edge (both sides) defers resolution enough to break it.
+    forwardRef(() => StaySettlementModule),
   ],
   // RoomTypesController first: `tenant/room-types` must never fall through
   // TenantRoomsController's `tenant/rooms/:id` wildcard.

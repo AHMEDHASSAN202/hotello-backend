@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { Hotel } from '../hotels/hotel.entity';
@@ -52,7 +52,17 @@ import { TenantFnbOrdersService } from './tenant-fnb-orders.service';
     RenditionsModule,
     // Epic 11 machinery reused wholesale: Playwright renderer + QR service
     // (exported by TenantRoomsModule) and the guest-URL builder.
-    TenantRoomsModule,
+    // Epic 22 (B2d) correction: TenantRoomsModule now imports
+    // StaySettlementModule, which imports this module — a plain top-level
+    // `import { TenantRoomsModule } from ...` here closes a 3-file JS
+    // require cycle (TenantRoomsModule -> StaySettlementModule -> FnbModule
+    // -> TenantRoomsModule) that resolves this array element to `undefined`
+    // (Nest's exact error named index [5] of this array). forwardRef()
+    // defers the property read to Nest's later instantiation pass, by which
+    // time the class binding is defined — required despite the brief's "do
+    // not touch FnbModule" guidance, per its own instruction to follow
+    // Nest's diagnostic when it points elsewhere.
+    forwardRef(() => TenantRoomsModule),
     TenantUrlsModule,
     // Settlement + the stay drawer's orders list resolve stays through the
     // cross-tenant 404 chokepoint (TenantStaysService.findStayInHotel).
