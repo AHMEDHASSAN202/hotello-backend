@@ -25,6 +25,7 @@ import { ListStaysQueryDto } from './dto/list-stays-query.dto';
 import { UpdateStayDto } from './dto/update-stay.dto';
 import { UpdateStaySettingsDto } from './dto/update-stay-settings.dto';
 import { StayCodeService } from './stay-code.service';
+import { StayRoomChange } from './stay-room-change.entity';
 import { Stay } from './stay.entity';
 import { daysBetween, hotelLocalParts } from './stay-time';
 
@@ -94,6 +95,8 @@ export class TenantStaysService {
     @InjectRepository(Stay) private readonly staysRepo: Repository<Stay>,
     @InjectRepository(Room) private readonly roomsRepo: Repository<Room>,
     @InjectRepository(Hotel) private readonly hotelsRepo: Repository<Hotel>,
+    @InjectRepository(StayRoomChange)
+    private readonly roomChangesRepo: Repository<StayRoomChange>,
     private readonly dataSource: DataSource,
     private readonly auditLogs: AuditLogsService,
     private readonly stayCodes: StayCodeService,
@@ -466,6 +469,12 @@ export class TenantStaysService {
           to: moved.to.roomNumber,
         },
       });
+      await this.recordRoomChange(
+        actor.hotelId,
+        moved.stay.id,
+        moved.from?.id ?? null,
+        moved.to.id,
+      );
     }
     const hotel = await this.loadHotel(actor.hotelId);
     return this.toView(moved.stay, moved.to, hotel);
@@ -599,6 +608,34 @@ export class TenantStaysService {
   // ------------------------------------------------------------------
   // Shared internals
   // ------------------------------------------------------------------
+
+  /**
+   * Epic 22 — the analytics-source room-change row, alongside (never
+   * replacing) the `stay.room_changed` audit entry. Must never throw into the
+   * caller — a lost analytics row is acceptable, a failed room change is not.
+   */
+  private async recordRoomChange(
+    hotelId: string,
+    stayId: string,
+    fromRoomId: string | null,
+    toRoomId: string,
+  ): Promise<void> {
+    try {
+      await this.roomChangesRepo.insert({
+        hotelId,
+        stayId,
+        fromRoomId,
+        toRoomId,
+        occurredAt: new Date(),
+      });
+    } catch (err) {
+      this.logger.error(
+        `stay room-change record failed for stay ${stayId}: ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+    }
+  }
 
   /** 13.4 AC4 — `checked_out` is final; nothing on a dead stay mutates. */
   private assertActive(stay: Stay): void {

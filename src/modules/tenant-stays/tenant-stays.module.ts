@@ -7,13 +7,14 @@ import { HousekeepingModule } from '../housekeeping/housekeeping.module';
 import { Room } from '../tenant-rooms/room.entity';
 import { AutoCheckoutService } from './auto-checkout.service';
 import { StayCodeService } from './stay-code.service';
+import { StayRoomChange } from './stay-room-change.entity';
 import { Stay } from './stay.entity';
 import { TenantStaysController } from './tenant-stays.controller';
 import { TenantStaysService } from './tenant-stays.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Stay, Room, Hotel]),
+    TypeOrmModule.forFeature([Stay, Room, Hotel, StayRoomChange]),
     AuditLogsModule,
     TenantUrlsModule,
     // Epic 20 — one-way dependency for the vacate hook (note 3).

@@ -15,6 +15,7 @@ import { Room } from '../tenant-rooms/room.entity';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { CreateStayDto } from './dto/create-stay.dto';
 import { StayCodeService } from './stay-code.service';
+import { StayRoomChange } from './stay-room-change.entity';
 import { Stay } from './stay.entity';
 import { hotelLocalParts } from './stay-time';
 import { TenantStaysService, naturalRoomCompare } from './tenant-stays.service';
@@ -62,6 +63,7 @@ describe('TenantStaysService', () => {
   let staysRepo: Record<string, jest.Mock>;
   let roomsRepo: Record<string, jest.Mock>;
   let hotelsRepo: Record<string, jest.Mock>;
+  let roomChangesRepo: { insert: jest.Mock };
   let auditLogs: { log: jest.Mock };
   let stayCodes: Record<string, jest.Mock>;
   let tenantUrls: { buildGuestUrl: jest.Mock };
@@ -88,6 +90,7 @@ describe('TenantStaysService', () => {
     };
     roomsRepo = { find: jest.fn().mockResolvedValue([]) };
     hotelsRepo = { findOne: jest.fn().mockResolvedValue(HOTEL) };
+    roomChangesRepo = { insert: jest.fn().mockResolvedValue({}) };
     auditLogs = { log: jest.fn() };
     stayCodes = {
       issueUniqueCode: jest
@@ -128,6 +131,7 @@ describe('TenantStaysService', () => {
         { provide: getRepositoryToken(Stay), useValue: staysRepo },
         { provide: getRepositoryToken(Room), useValue: roomsRepo },
         { provide: getRepositoryToken(Hotel), useValue: hotelsRepo },
+        { provide: getRepositoryToken(StayRoomChange), useValue: roomChangesRepo },
         { provide: DataSource, useValue: dataSource },
         { provide: AuditLogsService, useValue: auditLogs },
         { provide: StayCodeService, useValue: stayCodes },
@@ -521,6 +525,15 @@ describe('TenantStaysService', () => {
           metadata: expect.objectContaining({ from: '101', to: '202' }),
         }),
       );
+      // Epic 22 — the analytics-source room-change row, alongside the audit.
+      expect(roomChangesRepo.insert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hotelId: HOTEL_ID,
+          stayId: 'stay-1',
+          fromRoomId: 'room-1',
+          toRoomId: 'room-2',
+        }),
+      );
       // Epic 20, 20.1 AC3 — the vacated room flags via the housekeeping hook.
       expect(housekeeping.onRoomVacated).toHaveBeenCalledWith(
         'room-1',
@@ -571,8 +584,9 @@ describe('TenantStaysService', () => {
       } as any);
       expect(res.roomNumber).toEqual('101');
       expect(auditLogs.log).not.toHaveBeenCalled();
-      // Same room = nothing vacated (20.1 AC3).
+      // Same room = nothing vacated (20.1 AC3), and no analytics row either.
       expect(housekeeping.onRoomVacated).not.toHaveBeenCalled();
+      expect(roomChangesRepo.insert).not.toHaveBeenCalled();
     });
   });
 
