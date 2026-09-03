@@ -7,6 +7,8 @@ import { Room } from '../tenant-rooms/room.entity';
 import { Stay } from '../tenant-stays/stay.entity';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { GuestHousekeepingController } from './guest-housekeeping.controller';
+import { HousekeepingEvent } from './housekeeping-event.entity';
+import { HousekeepingEventsService } from './housekeeping-events.service';
 import { HousekeepingSchedulerService } from './housekeeping-scheduler.service';
 import { HousekeepingService } from './housekeeping.service';
 import { TenantHousekeepingController } from './tenant-housekeeping.controller';
@@ -19,12 +21,16 @@ import { TenantHousekeepingController } from './tenant-housekeeping.controller';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Room, Stay, Hotel, TenantUser]),
+    TypeOrmModule.forFeature([Room, Stay, Hotel, TenantUser, HousekeepingEvent]),
     TenantAccessModule,
     AuditLogsModule,
   ],
   controllers: [TenantHousekeepingController, GuestHousekeepingController],
-  providers: [HousekeepingService, HousekeepingSchedulerService],
+  providers: [
+    HousekeepingService,
+    HousekeepingSchedulerService,
+    HousekeepingEventsService,
+  ],
   exports: [HousekeepingService],
 })
 export class HousekeepingModule {}

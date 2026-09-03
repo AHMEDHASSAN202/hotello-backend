@@ -28,6 +28,7 @@ import { FlagRoomDto } from './dto/flag-room.dto';
 import { InterruptRoomDto } from './dto/interrupt-room.dto';
 import { ListBoardQueryDto } from './dto/list-board-query.dto';
 import { UpdateHousekeepingSettingsDto } from './dto/update-housekeeping-settings.dto';
+import { HousekeepingEventsService } from './housekeeping-events.service';
 import {
   CleaningType,
   HousekeepingStatus,
@@ -90,6 +91,7 @@ export class HousekeepingService {
     private readonly usersRepo: Repository<TenantUser>,
     private readonly access: TenantAccessService,
     private readonly auditLogs: AuditLogsService,
+    private readonly housekeepingEvents: HousekeepingEventsService,
   ) {}
 
   /** Board / delta feed — always ships counts + serverTime (note 5). */
@@ -213,6 +215,14 @@ export class HousekeepingService {
       cleaningType: dto.cleaningType,
       reason: dto.reason?.trim() || null,
     });
+    await this.housekeepingEvents.record({
+      hotelId: saved.hotelId,
+      roomId: saved.id,
+      eventType: 'flagged',
+      cleaningType: dto.cleaningType,
+      actorId: user.id,
+      assignedToId: saved.housekeepingAssignedToId,
+    });
     return (await this.toViews([saved]))[0];
   }
 
@@ -229,6 +239,13 @@ export class HousekeepingService {
       actorType: 'tenant_user',
       reason: dto.reason?.trim() || null,
     });
+    await this.housekeepingEvents.record({
+      hotelId: saved.hotelId,
+      roomId: saved.id,
+      eventType: 'cleared',
+      actorId: user.id,
+      assignedToId: saved.housekeepingAssignedToId,
+    });
     return (await this.toViews([saved]))[0];
   }
 
@@ -244,6 +261,13 @@ export class HousekeepingService {
       actorType: 'tenant_user',
       autoAssigned: saved.housekeepingAssignedToId === user.id,
     });
+    await this.housekeepingEvents.record({
+      hotelId: saved.hotelId,
+      roomId: saved.id,
+      eventType: 'started',
+      actorId: user.id,
+      assignedToId: saved.housekeepingAssignedToId,
+    });
     return (await this.toViews([saved]))[0];
   }
 
@@ -251,6 +275,7 @@ export class HousekeepingService {
   async complete(user: TenantUser, id: string): Promise<HousekeepingRoomView> {
     const room = await this.findRoomInHotel(user.hotelId, id);
     const finishedType = room.cleaningType;
+    const completedById = room.housekeepingAssignedToId;
     this.apply(room, { type: 'complete' });
     room.lastCleanedAt = new Date();
     room.lastCleanedById = user.id;
@@ -259,6 +284,14 @@ export class HousekeepingService {
     await this.audit('housekeeping.completed', saved, user.id, {
       actorType: 'tenant_user',
       cleaningType: finishedType,
+    });
+    await this.housekeepingEvents.record({
+      hotelId: saved.hotelId,
+      roomId: saved.id,
+      eventType: 'completed',
+      cleaningType: finishedType,
+      actorId: user.id,
+      assignedToId: completedById,
     });
     return (await this.toViews([saved]))[0];
   }
@@ -275,6 +308,13 @@ export class HousekeepingService {
     await this.audit('housekeeping.interrupted', saved, user.id, {
       actorType: 'tenant_user',
       reason: dto.reason.trim(),
+    });
+    await this.housekeepingEvents.record({
+      hotelId: saved.hotelId,
+      roomId: saved.id,
+      eventType: 'interrupted',
+      actorId: user.id,
+      assignedToId: saved.housekeepingAssignedToId,
     });
     return (await this.toViews([saved]))[0];
   }
@@ -399,6 +439,14 @@ export class HousekeepingService {
         reason: 'room_vacated',
         from,
       });
+      await this.housekeepingEvents.record({
+        hotelId: saved.hotelId,
+        roomId: saved.id,
+        eventType: 'flagged',
+        cleaningType: 'checkout',
+        actorId,
+        assignedToId: saved.housekeepingAssignedToId,
+      });
     } catch (err) {
       this.logger.error(
         `housekeeping vacate hook failed for room ${roomId}: ${
@@ -451,6 +499,12 @@ export class HousekeepingService {
         null,
         { actorType: 'guest', stayId: stay.id },
       );
+      await this.housekeepingEvents.record({
+        hotelId: saved.hotelId,
+        roomId: saved.id,
+        eventType: active ? 'dnd_set' : 'dnd_cleared',
+        actorId: null, // guest-initiated, no tenant user
+      });
     }
     return { dndActive: saved.housekeepingStatus === 'dnd' };
   }

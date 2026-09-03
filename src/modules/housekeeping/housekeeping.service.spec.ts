@@ -6,6 +6,7 @@ import { Room } from '../tenant-rooms/room.entity';
 import { Stay } from '../tenant-stays/stay.entity';
 import { TenantAccessService } from '../tenant-access/tenant-access.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
+import { HousekeepingEventsService } from './housekeeping-events.service';
 import { HousekeepingService } from './housekeeping.service';
 
 const HOTEL_ID = 'hotel-1';
@@ -62,6 +63,7 @@ describe('HousekeepingService', () => {
   let usersRepo: Record<string, jest.Mock>;
   let access: { getAccessState: jest.Mock };
   let auditLogs: { log: jest.Mock };
+  let housekeepingEvents: { record: jest.Mock };
   let qb: Record<string, jest.Mock>;
 
   beforeEach(async () => {
@@ -90,6 +92,7 @@ describe('HousekeepingService', () => {
     };
     access = { getAccessState: jest.fn().mockResolvedValue(accessState()) };
     auditLogs = { log: jest.fn() };
+    housekeepingEvents = { record: jest.fn().mockResolvedValue(undefined) };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -100,6 +103,7 @@ describe('HousekeepingService', () => {
         { provide: getRepositoryToken(TenantUser), useValue: usersRepo },
         { provide: TenantAccessService, useValue: access },
         { provide: AuditLogsService, useValue: auditLogs },
+        { provide: HousekeepingEventsService, useValue: housekeepingEvents },
       ],
     }).compile();
     service = moduleRef.get(HousekeepingService);
@@ -543,6 +547,149 @@ describe('HousekeepingService', () => {
       expect(roomsRepo.findOne).toHaveBeenCalledWith({
         where: { id: 'room-7', hotelId: OTHER_HOTEL_ID },
       });
+    });
+  });
+
+  describe('housekeeping events (Story 22.2 AC1/AC3)', () => {
+    it('flagRoom records a flagged event with the dto cleaningType, actor and assignee', async () => {
+      roomsRepo.findOne.mockResolvedValue(
+        makeRoom({ housekeepingAssignedToId: 'user-2' }),
+      );
+      await service.flagRoom(makeActor(), 'room-1', {
+        cleaningType: 'checkout',
+        reason: 'Spill in 101',
+      });
+      expect(housekeepingEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'flagged',
+          cleaningType: 'checkout',
+          actorId: 'actor-1',
+          assignedToId: 'user-2',
+        }),
+      );
+    });
+
+    it('clearRoom records a cleared event', async () => {
+      roomsRepo.findOne.mockResolvedValue(
+        makeRoom({ housekeepingStatus: 'needs_cleaning', cleaningType: 'daily' }),
+      );
+      await service.clearRoom(makeActor(), 'room-1', {});
+      expect(housekeepingEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'cleared' }),
+      );
+    });
+
+    it('start records a started event with the auto-assigned actor (read AFTER auto-assign)', async () => {
+      roomsRepo.findOne.mockResolvedValue(
+        makeRoom({
+          housekeepingStatus: 'needs_cleaning',
+          cleaningType: 'daily',
+          housekeepingAssignedToId: null,
+        }),
+      );
+      await service.start(makeActor(), 'room-1');
+      expect(housekeepingEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'started',
+          assignedToId: 'actor-1',
+        }),
+      );
+    });
+
+    it('complete records a completed event with the PRE-complete cleaningType and assignee', async () => {
+      roomsRepo.findOne.mockResolvedValue(
+        makeRoom({
+          housekeepingStatus: 'in_progress',
+          cleaningType: 'checkout',
+          housekeepingAssignedToId: 'user-2',
+        }),
+      );
+      await service.complete(makeActor(), 'room-1');
+      // saved.housekeepingAssignedToId is null after complete() — the event
+      // must still carry the pre-complete assignee, not the post-save null.
+      expect(roomsRepo.save.mock.calls[0][0].housekeepingAssignedToId).toBeNull();
+      expect(housekeepingEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'completed',
+          cleaningType: 'checkout',
+          assignedToId: 'user-2',
+        }),
+      );
+    });
+
+    it('interrupt records an interrupted event', async () => {
+      roomsRepo.findOne.mockResolvedValue(
+        makeRoom({
+          housekeepingStatus: 'in_progress',
+          cleaningType: 'daily',
+          housekeepingAssignedToId: 'actor-1',
+        }),
+      );
+      await service.interrupt(makeActor(), 'room-1', { reason: 'Guest returned' });
+      expect(housekeepingEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'interrupted' }),
+      );
+    });
+
+    it('setDnd turning DND on records a dnd_set event with no actor', async () => {
+      roomsRepo.findOne.mockResolvedValue(
+        makeRoom({ housekeepingStatus: 'needs_cleaning', cleaningType: 'daily' }),
+      );
+      await service.setDnd(makeStay(), true);
+      expect(housekeepingEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'dnd_set', actorId: null }),
+      );
+    });
+
+    it('setDnd turning DND off records a dnd_cleared event', async () => {
+      roomsRepo.findOne.mockResolvedValue(
+        makeRoom({
+          housekeepingStatus: 'dnd',
+          cleaningType: 'checkout',
+          dndSetByStayId: 'stay-1',
+        }),
+      );
+      await service.setDnd(makeStay(), false);
+      expect(housekeepingEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'dnd_cleared' }),
+      );
+    });
+
+    it('setDnd no-op (state unchanged) does not record an event', async () => {
+      roomsRepo.findOne.mockResolvedValue(makeRoom());
+      await service.setDnd(makeStay(), false); // already off — matches the existing audit no-op test
+      expect(housekeepingEvents.record).not.toHaveBeenCalled();
+    });
+
+    it('onRoomVacated with a manual actor records a flagged/checkout event with that actor', async () => {
+      roomsRepo.findOne.mockResolvedValue(
+        makeRoom({ housekeepingAssignedToId: 'user-2' }),
+      );
+      await service.onRoomVacated('room-1', HOTEL_ID, 'actor-1');
+      expect(housekeepingEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'flagged',
+          cleaningType: 'checkout',
+          actorId: 'actor-1',
+          assignedToId: 'user-2',
+        }),
+      );
+    });
+
+    it('onRoomVacated with a null actor (system/auto) records actorId: null', async () => {
+      roomsRepo.findOne.mockResolvedValue(makeRoom());
+      await service.onRoomVacated('room-1', HOTEL_ID, null);
+      expect(housekeepingEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({ actorId: null }),
+      );
+    });
+
+    it('onRoomVacated still resolves without throwing when record() itself rejects', async () => {
+      roomsRepo.findOne.mockResolvedValue(makeRoom());
+      housekeepingEvents.record.mockRejectedValueOnce(new Error('boom'));
+      await expect(
+        service.onRoomVacated('room-1', HOTEL_ID, 'actor-1'),
+      ).resolves.toBeUndefined();
     });
   });
 });

@@ -7,6 +7,7 @@ import { Hotel } from '../hotels/hotel.entity';
 import { Room } from '../tenant-rooms/room.entity';
 import { hotelLocalParts, minutesOf } from '../tenant-stays/stay-time';
 import { Stay } from '../tenant-stays/stay.entity';
+import { HousekeepingEventsService } from './housekeeping-events.service';
 import { transition } from './housekeeping-transitions';
 
 /**
@@ -41,6 +42,7 @@ export class HousekeepingSchedulerService {
     @InjectRepository(Hotel)
     private readonly hotelsRepo: Repository<Hotel>,
     private readonly auditLogs: AuditLogsService,
+    private readonly housekeepingEvents: HousekeepingEventsService,
   ) {}
 
   @Cron(CronExpression.EVERY_5_MINUTES)
@@ -137,6 +139,21 @@ export class HousekeepingSchedulerService {
           housekeepingStatus: saved.housekeepingStatus,
         },
       });
+      await this.housekeepingEvents.record({
+        hotelId: hotel.id,
+        roomId: saved.id,
+        eventType: 'dnd_cleared',
+        actorId: null,
+      });
+      if (reFlagged) {
+        await this.housekeepingEvents.record({
+          hotelId: hotel.id,
+          roomId: saved.id,
+          eventType: 'flagged',
+          cleaningType: 'daily',
+          actorId: null,
+        });
+      }
     }
 
     // 20.1 AC4 — flag occupied clean rooms for daily service. Rooms already
@@ -175,6 +192,13 @@ export class HousekeepingSchedulerService {
           reason: 'daily_service_hour',
           housekeepingStatus: saved.housekeepingStatus,
         },
+      });
+      await this.housekeepingEvents.record({
+        hotelId: hotel.id,
+        roomId: saved.id,
+        eventType: 'flagged',
+        cleaningType: 'daily',
+        actorId: null,
       });
     }
     return { flagged, released };

@@ -4,6 +4,7 @@ import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
 import { Room } from '../tenant-rooms/room.entity';
 import { Stay } from '../tenant-stays/stay.entity';
+import { HousekeepingEventsService } from './housekeeping-events.service';
 import { HousekeepingSchedulerService } from './housekeeping-scheduler.service';
 
 const cairoHotel = (o: Record<string, unknown> = {}) => ({
@@ -39,12 +40,14 @@ describe('HousekeepingSchedulerService', () => {
   let staysRepo: { find: jest.Mock };
   let hotelsRepo: { find: jest.Mock };
   let auditLogs: { log: jest.Mock };
+  let housekeepingEvents: { record: jest.Mock };
 
   beforeEach(async () => {
     roomsRepo = { find: jest.fn().mockResolvedValue([]), save: jest.fn(async (r) => r) };
     staysRepo = { find: jest.fn().mockResolvedValue([]) };
     hotelsRepo = { find: jest.fn().mockResolvedValue([cairoHotel()]) };
     auditLogs = { log: jest.fn() };
+    housekeepingEvents = { record: jest.fn().mockResolvedValue(undefined) };
     const moduleRef = await Test.createTestingModule({
       providers: [
         HousekeepingSchedulerService,
@@ -52,6 +55,7 @@ describe('HousekeepingSchedulerService', () => {
         { provide: getRepositoryToken(Stay), useValue: staysRepo },
         { provide: getRepositoryToken(Hotel), useValue: hotelsRepo },
         { provide: AuditLogsService, useValue: auditLogs },
+        { provide: HousekeepingEventsService, useValue: housekeepingEvents },
       ],
     }).compile();
     service = moduleRef.get(HousekeepingSchedulerService);
@@ -261,6 +265,66 @@ describe('HousekeepingSchedulerService', () => {
       expect(hotelsRepo.find).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({ status: expect.anything() }),
+        }),
+      );
+    });
+  });
+
+  describe('housekeeping events (Story 22.2 AC1)', () => {
+    it('daily-flag loop records a flagged/daily event with no actor', async () => {
+      staysRepo.find.mockResolvedValue([{ roomId: 'room-1' }]);
+      mockRooms([], [makeRoom()]);
+
+      await service.runDailyService(PAST_HOUR);
+
+      expect(housekeepingEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'flagged',
+          cleaningType: 'daily',
+          actorId: null,
+        }),
+      );
+    });
+
+    it('DND-release loop records a dnd_cleared event when not re-flagged', async () => {
+      staysRepo.find.mockResolvedValue([]); // vacant — no re-flag
+      mockRooms(
+        [makeRoom({ housekeepingStatus: 'dnd', lastDailyFlaggedOn: '2026-08-28' })],
+        [],
+      );
+
+      await service.runDailyService(PAST_HOUR);
+
+      expect(housekeepingEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'dnd_cleared', actorId: null }),
+      );
+      expect(housekeepingEvents.record).toHaveBeenCalledTimes(1);
+    });
+
+    it('reFlagged case records BOTH a dnd_cleared and a flagged/daily event for the same room', async () => {
+      staysRepo.find.mockResolvedValue([{ roomId: 'room-1' }]);
+      mockRooms(
+        [
+          makeRoom({
+            housekeepingStatus: 'dnd',
+            dndSetByStayId: 'stay-1',
+            lastDailyFlaggedOn: '2026-08-28',
+          }),
+        ],
+        [],
+      );
+
+      await service.runDailyService(PAST_HOUR);
+
+      expect(housekeepingEvents.record).toHaveBeenCalledTimes(2);
+      expect(housekeepingEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'dnd_cleared', actorId: null }),
+      );
+      expect(housekeepingEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'flagged',
+          cleaningType: 'daily',
+          actorId: null,
         }),
       );
     });
