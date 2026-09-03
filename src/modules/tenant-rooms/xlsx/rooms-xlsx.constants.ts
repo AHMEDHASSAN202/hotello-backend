@@ -5,9 +5,13 @@
  * for the same pattern applied to the QR poster/cards PDFs.
  */
 
-/** Brand navy header fill / white header text — ARGB (exceljs fill/font format). */
-export const XLSX_NAVY_ARGB = 'FF0E2A47';
-export const XLSX_WHITE_ARGB = 'FFFFFFFF';
+/**
+ * Brand navy header fill / white header text — moved to the shared
+ * `common/xlsx/sheet-style` module (Task B4a) so Epic 22 reports reuse the
+ * same styling instead of duplicating it; re-exported here so existing
+ * imports from this file keep working unchanged.
+ */
+export { XLSX_NAVY_ARGB, XLSX_WHITE_ARGB } from '../../../common/xlsx/sheet-style';
 /** Grey used for the template's greyed-out example rows. */
 export const XLSX_EXAMPLE_GREY_ARGB = 'FF9AA0A6';
 

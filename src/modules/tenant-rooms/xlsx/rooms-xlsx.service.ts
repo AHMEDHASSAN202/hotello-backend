@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import ExcelJS from 'exceljs';
 import { Repository } from 'typeorm';
+import { freezeAndFilterHeader, styleHeaderRow } from '../../../common/xlsx/sheet-style';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { Hotel } from '../../hotels/hotel.entity';
 import { TenantUser } from '../../tenant-users/tenant-user.entity';
@@ -12,11 +13,9 @@ import { TenantRoomsService } from '../tenant-rooms.service';
 import {
   EXAMPLE_PREFIX,
   XLSX_EXAMPLE_GREY_ARGB,
-  XLSX_NAVY_ARGB,
   XLSX_STATUS_VALUES,
   XLSX_STRINGS,
   XlsxLanguageStrings,
-  XLSX_WHITE_ARGB,
 } from './rooms-xlsx.constants';
 
 type XlsxLang = 'ar' | 'en';
@@ -86,8 +85,7 @@ export class RoomsXlsxService {
       numberCell.numFmt = '@';
     }
 
-    sheet.views = [{ state: 'frozen', ySplit: 1 }];
-    sheet.autoFilter = 'A1:D1';
+    freezeAndFilterHeader(sheet, 'A1:D1');
 
     return workbook.xlsx.writeBuffer() as unknown as Buffer;
   }
@@ -119,8 +117,7 @@ export class RoomsXlsxService {
 
     this.writeExampleRows(sheet, typeNames);
 
-    sheet.views = [{ state: 'frozen', ySplit: 1 }];
-    sheet.autoFilter = 'A1:D1';
+    freezeAndFilterHeader(sheet, 'A1:D1');
 
     return workbook.xlsx.writeBuffer() as unknown as Buffer;
   }
@@ -176,10 +173,7 @@ export class RoomsXlsxService {
       strings.headers.type,
       strings.headers.status,
     ]);
-    row.eachCell((cell) => {
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: XLSX_NAVY_ARGB } };
-      cell.font = { color: { argb: XLSX_WHITE_ARGB }, bold: true };
-    });
+    styleHeaderRow(row);
   }
 
   /** AC2 — one note per header cell; the Room Number note also explains the `#` example rows. */
