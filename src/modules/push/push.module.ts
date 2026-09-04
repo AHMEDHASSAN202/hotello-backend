@@ -1,16 +1,19 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { Stay } from '../tenant-stays/stay.entity';
 import { PUSH_DRIVER } from './push.interface';
 import { LogPushDriver } from './log-push.driver';
 import { WebPushDriver } from './web-push.driver';
 import { PushSubscription } from './push-subscription.entity';
 import { PushDispatch } from './push-dispatch.entity';
 import { PushSubscriptionsService } from './push-subscriptions.service';
+import { PushDispatchService } from './push-dispatch.service';
+import { PushRetryService } from './push-retry.service';
 import { GuestPushController } from './guest-push.controller';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([PushSubscription, PushDispatch])],
+  imports: [TypeOrmModule.forFeature([PushSubscription, PushDispatch, Stay])],
   controllers: [GuestPushController],
   providers: [
     {
@@ -26,7 +29,9 @@ import { GuestPushController } from './guest-push.controller';
           : new LogPushDriver(),
     },
     PushSubscriptionsService,
+    PushDispatchService,
+    PushRetryService,
   ],
-  exports: [PUSH_DRIVER, PushSubscriptionsService],
+  exports: [PUSH_DRIVER, PushSubscriptionsService, PushDispatchService],
 })
 export class PushModule {}
