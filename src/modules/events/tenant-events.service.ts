@@ -483,6 +483,10 @@ export class TenantEventsService {
               audience: { stayIds: activeStayIds },
               // 23.3 AC3 — cancel notices are always-push, unconditionally.
               sendPush: true,
+              // guest-polish-v1 item A3 — a cancellation can't wait for quiet
+              // hours to end (e.g. a 23:00 cancellation of a 07:00 event), so
+              // it bypasses the push-quiet-hours hold like other priority sends.
+              priority: true,
             } as CreateAnnouncementDto,
             {
               source: 'event_cancel',

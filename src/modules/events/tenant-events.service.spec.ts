@@ -371,6 +371,16 @@ describe('TenantEventsService (Story 21.2)', () => {
       );
     });
 
+    it('event publish auto-announcement is NOT priority (only cancellations bypass quiet hours)', async () => {
+      eventsRepo.findOne.mockResolvedValue(futureDraft());
+      await service.publish(actor, 'event-1', {});
+      expect(announcements.create).toHaveBeenCalledWith(
+        actor,
+        expect.not.objectContaining({ priority: true }),
+        { source: 'event_publish', eventId: 'event-1' },
+      );
+    });
+
     it('announce: false publishes but creates no announcement', async () => {
       eventsRepo.findOne.mockResolvedValue(futureDraft());
       const result = await service.publish(actor, 'event-1', { announce: false });
@@ -527,6 +537,19 @@ describe('TenantEventsService (Story 21.2)', () => {
       expect(announcements.create).toHaveBeenCalledWith(
         actor,
         expect.objectContaining({ sendPush: true }),
+        expect.objectContaining({ source: 'event_cancel' }),
+      );
+    });
+
+    it('event cancel announcement is priority:true, bypassing quiet-hours push holds (guest-polish-v1 item A3)', async () => {
+      managerEvents.findOne.mockResolvedValue(makeEvent({ status: 'published' }));
+      managerBookings.find.mockResolvedValue([makeBooking({ id: 'b1', stayId: 'stay-1' })]);
+
+      await service.cancel(actor, 'event-1', { reason: 'Storm warning' });
+
+      expect(announcements.create).toHaveBeenCalledWith(
+        actor,
+        expect.objectContaining({ priority: true }),
         expect.objectContaining({ source: 'event_cancel' }),
       );
     });
