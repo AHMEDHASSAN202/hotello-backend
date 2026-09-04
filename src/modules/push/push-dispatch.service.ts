@@ -1,7 +1,14 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, LessThan, LessThanOrEqual, QueryFailedError, Repository } from 'typeorm';
+import {
+  EntityManager,
+  In,
+  LessThan,
+  LessThanOrEqual,
+  QueryFailedError,
+  Repository,
+} from 'typeorm';
 import { naiveUtc } from '../tenant-stays/stay-time';
 import { Stay } from '../tenant-stays/stay.entity';
 import { PushDispatch } from './push-dispatch.entity';
@@ -54,6 +61,19 @@ export class PushDispatchService {
    * `(topic, subscriptionId)` supersedes any still-pending row for that
    * pair — the supersede runs BEFORE the new row is inserted, so the new
    * row (not yet 'pending' in the DB) can never supersede itself (23.4 AC3).
+   *
+   * The supersede-UPDATE + INSERT for a topic'd input run inside one
+   * transaction, serialized by a Postgres advisory lock keyed on
+   * `(topic, subscriptionId)` (`pg_advisory_xact_lock`, auto-released at
+   * commit/rollback). Without this, two overlapping `enqueueAndSend` calls
+   * for the same topic+subscription (e.g. two rapid business transitions
+   * racing each other) could each run their supersede-UPDATE against a
+   * snapshot that doesn't yet include the other's still-uncommitted INSERT,
+   * and both would end up inserting a 'pending' row — a double-send that
+   * defeats collapse entirely. The lock forces the second caller to wait
+   * until the first's transaction (lock scope) has committed, so its
+   * UPDATE is guaranteed to see the first row.
+   *
    * Never throws: a render/DB explosion here must not fail the caller's
    * business transition (e.g. an order status update).
    */
@@ -62,30 +82,44 @@ export class PushDispatchService {
       const now = new Date();
       const saved: PushDispatch[] = [];
       for (const input of inputs) {
-        if (input.topic) {
-          await this.repo.update(
-            { topic: input.topic, subscriptionId: input.subscriptionId, status: 'pending' },
-            { status: 'superseded', nextAttemptAt: null },
-          );
-        }
-        const row = this.repo.create({
-          ...input,
-          status: 'pending',
-          attemptCount: 0,
-          // Grace window (email-outbox pattern): the caller (this method)
-          // dispatches the first attempt itself; the poller only rescues a
-          // row whose first attempt never got recorded (process died
-          // mid-send). A held row's nextAttemptAt IS its release time.
-          nextAttemptAt: input.deliverAfter ?? new Date(now.getTime() + this.retryBaseMs()),
-          lastError: null,
-          attempts: [],
-          sentAt: null,
-        });
+        let row: PushDispatch | null;
         try {
-          saved.push(await this.repo.save(row));
+          row = await this.repo.manager.transaction(async (manager: EntityManager) => {
+            const txRepo = manager.getRepository(PushDispatch);
+            if (input.topic) {
+              await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+                this.collapseLockKey(input.topic, input.subscriptionId),
+              ]);
+              await txRepo.update(
+                { topic: input.topic, subscriptionId: input.subscriptionId, status: 'pending' },
+                { status: 'superseded', nextAttemptAt: null },
+              );
+            }
+            const created = txRepo.create({
+              ...input,
+              status: 'pending',
+              attemptCount: 0,
+              // Grace window (email-outbox pattern): the caller (this
+              // method) dispatches the first attempt itself; the poller
+              // only rescues a row whose first attempt never got recorded
+              // (process died mid-send). A held row's nextAttemptAt IS its
+              // release time.
+              nextAttemptAt:
+                input.deliverAfter ?? new Date(now.getTime() + this.retryBaseMs()),
+              lastError: null,
+              attempts: [],
+              sentAt: null,
+            });
+            return txRepo.save(created);
+          });
         } catch (err) {
-          if (!this.isUniqueViolation(err)) throw err; // dedupe hit → silent no-op
+          if (this.isUniqueViolation(err)) {
+            row = null; // dedupe hit → silent no-op
+          } else {
+            throw err;
+          }
         }
+        if (row) saved.push(row);
       }
       const immediate = saved.filter((r) => !r.deliverAfter || r.deliverAfter <= now);
       for (let i = 0; i < immediate.length; i += SEND_CONCURRENCY) {
@@ -100,51 +134,92 @@ export class PushDispatchService {
     }
   }
 
+  private collapseLockKey(topic: string, subscriptionId: string): string {
+    return `${topic}:${subscriptionId}`;
+  }
+
   /**
-   * One delivery attempt. Never throws. 23.1 AC3 — stay validity gates
-   * EVERY attempt, including retries and released quiet-holds: a checked-out
-   * stay (or a hotel that went suspended) must never receive a queued push,
-   * even one that was already in-flight when checkout happened.
+   * One delivery attempt. Never throws — the WHOLE body is guarded, not just
+   * the driver call: `processDue()`'s loop has no try/catch of its own, and
+   * `PushRetryService`'s `@Cron` handler has no catch either, and this app
+   * has no global `unhandledRejection` handler (main.ts) — an exception
+   * escaping from anywhere in here (a stay/subscription lookup timeout, a
+   * failed prune-delete, even a failure to PERSIST a failure) would crash
+   * the whole backend process over what should be one push not sending.
+   *
+   * 23.1 AC3 — stay validity gates EVERY attempt, including retries and
+   * released quiet-holds: a checked-out stay (or a hotel that went
+   * suspended) must never receive a queued push, even one that was already
+   * in-flight when checkout happened.
    */
   async attemptSend(row: PushDispatch): Promise<void> {
     if (row.status !== 'pending') return;
 
-    const stay = await this.staysRepo.findOne({
-      where: { id: row.stayId },
-      relations: ['hotel'],
-    });
-    if (!stay || stay.status !== 'active' || !stay.hotel || stay.hotel.status !== 'active') {
-      return this.recordFailure(row, new Error('STAY_INACTIVE'), { terminal: true });
-    }
-
-    const sub = await this.subsRepo.findOne({ where: { id: row.subscriptionId } });
-    if (!sub) {
-      return this.recordFailure(row, new Error('SUBSCRIPTION_PRUNED'), { terminal: true });
-    }
-
     try {
-      await this.driver.send({
-        endpoint: sub.endpoint,
-        p256dh: sub.p256dh,
-        auth: sub.auth,
-        payload: JSON.stringify({
-          title: row.title,
-          body: row.body,
-          url: row.url,
-          tag: row.topic ?? undefined,
-        }),
-        ttlSeconds: row.ttlSeconds,
-        topic: row.topic ?? undefined,
+      const stay = await this.staysRepo.findOne({
+        where: { id: row.stayId },
+        relations: ['hotel'],
       });
-      await this.recordSuccess(row, sub);
-    } catch (err) {
-      if (err instanceof PushSendError && err.gone) {
-        // 404/410 — the endpoint is dead; prune it so future notify() calls
-        // stop targeting it, and terminal-fail this dispatch (AC3).
-        await this.subsRepo.delete({ id: sub.id });
-        return this.recordFailure(row, err, { terminal: true });
+      if (!stay || stay.status !== 'active' || !stay.hotel || stay.hotel.status !== 'active') {
+        await this.recordFailure(row, new Error('STAY_INACTIVE'), { terminal: true });
+        return;
       }
-      await this.recordFailure(row, err, { sub });
+
+      const sub = await this.subsRepo.findOne({ where: { id: row.subscriptionId } });
+      if (!sub) {
+        await this.recordFailure(row, new Error('SUBSCRIPTION_PRUNED'), { terminal: true });
+        return;
+      }
+
+      try {
+        await this.driver.send({
+          endpoint: sub.endpoint,
+          p256dh: sub.p256dh,
+          auth: sub.auth,
+          payload: JSON.stringify({
+            title: row.title,
+            body: row.body,
+            url: row.url,
+            tag: row.topic ?? undefined,
+          }),
+          ttlSeconds: row.ttlSeconds,
+          topic: row.topic ?? undefined,
+        });
+        await this.recordSuccess(row, sub);
+      } catch (err) {
+        if (err instanceof PushSendError && err.gone) {
+          // 404/410 — the endpoint is dead; prune it so future notify()
+          // calls stop targeting it, and terminal-fail this dispatch (AC3).
+          await this.subsRepo.delete({ id: sub.id });
+          await this.recordFailure(row, err, { terminal: true });
+          return;
+        }
+        await this.recordFailure(row, err, { sub });
+      }
+    } catch (err) {
+      // Anything above (stay/sub lookup, the prune-delete, or even the
+      // recordFailure/recordSuccess calls themselves) can throw on a
+      // transient infra error. Route it through a best-effort, non-terminal
+      // failure so the row is retried on the next tick instead of the
+      // exception escaping attemptSend.
+      await this.safeRecordFailure(row, err);
+    }
+  }
+
+  /**
+   * Last-resort failure recorder: if even persisting the failure fails
+   * (e.g. the DB is fully unreachable), log and return rather than let the
+   * exception escape — see attemptSend's doc for why that must never happen.
+   */
+  private async safeRecordFailure(row: PushDispatch, err: unknown): Promise<void> {
+    try {
+      await this.recordFailure(row, err, { terminal: false });
+    } catch (inner) {
+      this.logger.error(
+        `push dispatch ${row.id} attemptSend failed AND recordFailure failed: ${
+          inner instanceof Error ? inner.message : String(inner)
+        }`,
+      );
     }
   }
 

@@ -19,10 +19,16 @@ describe('PushDispatchService (23.1 AC2/AC3)', () => {
     find: jest.Mock;
     delete: jest.Mock;
     createQueryBuilder: jest.Mock;
+    manager: { transaction: jest.Mock };
   };
   let subsRepo: { findOne: jest.Mock; save: jest.Mock; delete: jest.Mock };
   let staysRepo: { findOne: jest.Mock };
   let driver: { send: jest.Mock };
+  // The transactional EntityManager handed to the callback passed to
+  // repo.manager.transaction(). getRepository() is wired to return the same
+  // `repo` mock, so existing assertions against repo.create/save/update stay
+  // valid unchanged — only the new advisory-lock query needs its own mock.
+  let txManager: { getRepository: jest.Mock; query: jest.Mock };
 
   const activeStay = {
     id: 'stay-1',
@@ -90,6 +96,16 @@ describe('PushDispatchService (23.1 AC2/AC3)', () => {
       find: jest.fn().mockResolvedValue([]),
       delete: jest.fn().mockResolvedValue({ affected: 0 }),
       createQueryBuilder: jest.fn(),
+      manager: null as unknown as { transaction: jest.Mock },
+    };
+    txManager = {
+      getRepository: jest.fn(() => repo),
+      query: jest.fn().mockResolvedValue(undefined),
+    };
+    repo.manager = {
+      transaction: jest.fn(async (cb: (m: typeof txManager) => Promise<unknown>) =>
+        cb(txManager),
+      ),
     };
     subsRepo = {
       findOne: jest.fn().mockResolvedValue({ ...sub }),
@@ -194,6 +210,42 @@ describe('PushDispatchService (23.1 AC2/AC3)', () => {
         service.enqueueAndSend([makeInput({ topic: 'order-123' })]),
       ).resolves.toBeUndefined();
     });
+
+    it('runs the supersede+insert inside one transaction, serialized by a per-(topic, subscriptionId) advisory lock', async () => {
+      // Closes the cross-call TOCTOU race: two overlapping enqueueAndSend
+      // calls for the same topic+subscription could otherwise each fail to
+      // see the other's still-uncommitted pending row and both insert,
+      // defeating collapse (double-send). The advisory lock serializes them;
+      // wrapping supersede+insert in one transaction means the lock, the
+      // supersede-UPDATE and the INSERT all see a consistent snapshot.
+      await service.enqueueAndSend([
+        makeInput({ topic: 'order-123', subscriptionId: 'sub-1' }),
+      ]);
+
+      expect(repo.manager.transaction).toHaveBeenCalledTimes(1);
+      expect(txManager.query).toHaveBeenCalledWith(
+        'SELECT pg_advisory_xact_lock(hashtext($1))',
+        ['order-123:sub-1'],
+      );
+      // Lock → supersede-update → insert, in that order, all inside the
+      // transaction (getRepository is called on the SAME txManager passed
+      // to the callback, not on `this.repo` directly).
+      expect(txManager.getRepository).toHaveBeenCalledWith(PushDispatch);
+      expect(txManager.query.mock.invocationCallOrder[0]).toBeLessThan(
+        repo.update.mock.invocationCallOrder[0],
+      );
+      expect(repo.update.mock.invocationCallOrder[0]).toBeLessThan(
+        repo.save.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('skips the advisory lock and supersede-update entirely when the input has no topic', async () => {
+      await service.enqueueAndSend([makeInput({ topic: null })]);
+
+      expect(txManager.query).not.toHaveBeenCalled();
+      expect(repo.update).not.toHaveBeenCalled();
+      expect(repo.save).toHaveBeenCalled();
+    });
   });
 
   describe('attemptSend', () => {
@@ -283,6 +335,57 @@ describe('PushDispatchService (23.1 AC2/AC3)', () => {
       expect(subsRepo.save).toHaveBeenCalledWith(
         expect.objectContaining({ id: sub.id, failureCount: 0, lastSuccessAt: expect.any(Date) }),
       );
+    });
+
+    // Calling attemptSend() DIRECTLY here (not via enqueueAndSend) matters:
+    // enqueueAndSend has its own outer try/catch that would otherwise mask
+    // an attemptSend that isn't exception-safe on its own. processDue()'s
+    // loop has no such wrapper, and PushRetryService's cron handler has no
+    // catch either — an uncaught rejection here would crash the whole
+    // process (no global unhandledRejection handler exists in main.ts).
+    it('never throws when the stay lookup itself fails (transient DB error, not a business gate)', async () => {
+      staysRepo.findOne.mockRejectedValue(new Error('connection timeout'));
+      const row = makeRow();
+
+      await expect(service.attemptSend(row)).resolves.toBeUndefined();
+
+      expect(driver.send).not.toHaveBeenCalled();
+      expect(row.lastError).toBe('connection timeout');
+      // Non-terminal: a transient infra hiccup gets retried, not permanently failed.
+      expect(row.status).toBe('pending');
+      expect(row.nextAttemptAt).not.toBeNull();
+    });
+
+    it('never throws when the subscription lookup itself fails', async () => {
+      subsRepo.findOne.mockRejectedValue(new Error('pool exhausted'));
+      const row = makeRow();
+
+      await expect(service.attemptSend(row)).resolves.toBeUndefined();
+
+      expect(driver.send).not.toHaveBeenCalled();
+      expect(row.lastError).toBe('pool exhausted');
+      expect(row.status).toBe('pending');
+    });
+
+    it('never throws when deleting the pruned subscription fails during 410-handling', async () => {
+      driver.send.mockRejectedValue(new PushSendError('gone', 410));
+      subsRepo.delete.mockRejectedValue(new Error('delete failed'));
+      const row = makeRow();
+
+      await expect(service.attemptSend(row)).resolves.toBeUndefined();
+
+      expect(row.lastError).toBe('delete failed');
+      // Couldn't confirm the prune committed — retry rather than
+      // terminal-fail so the delete is naturally retried alongside the send.
+      expect(row.status).toBe('pending');
+    });
+
+    it('never throws even when persisting the failure itself fails (last-resort log, not a crash)', async () => {
+      staysRepo.findOne.mockRejectedValue(new Error('db unreachable'));
+      repo.save.mockRejectedValue(new Error('db totally down'));
+      const row = makeRow();
+
+      await expect(service.attemptSend(row)).resolves.toBeUndefined();
     });
   });
 
