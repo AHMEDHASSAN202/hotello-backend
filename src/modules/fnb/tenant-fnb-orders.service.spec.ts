@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
+import { PushService } from '../push/push.service';
 import { TenantStaysService } from '../tenant-stays/tenant-stays.service';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { FnbSettlementSource } from './fnb-settlement-source';
@@ -61,6 +62,7 @@ describe('TenantFnbOrdersService (16.7/16.8)', () => {
   let hotelsRepo: Record<string, jest.Mock>;
   let stays: { findStayInHotel: jest.Mock };
   let auditLogs: { log: jest.Mock };
+  let push: { notify: jest.Mock };
   let qb: Record<string, jest.Mock>;
 
   beforeEach(async () => {
@@ -90,6 +92,7 @@ describe('TenantFnbOrdersService (16.7/16.8)', () => {
     };
     stays = { findStayInHotel: jest.fn().mockResolvedValue({ id: 'stay-1' }) };
     auditLogs = { log: jest.fn() };
+    push = { notify: jest.fn().mockResolvedValue(undefined) };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -104,6 +107,7 @@ describe('TenantFnbOrdersService (16.7/16.8)', () => {
         { provide: getRepositoryToken(Hotel), useValue: hotelsRepo },
         { provide: TenantStaysService, useValue: stays },
         { provide: AuditLogsService, useValue: auditLogs },
+        { provide: PushService, useValue: push },
       ],
     }).compile();
     service = moduleRef.get(TenantFnbOrdersService);
@@ -214,6 +218,117 @@ describe('TenantFnbOrdersService (16.7/16.8)', () => {
       expect(ordersRepo.save).toHaveBeenCalledWith(
         expect.objectContaining({ assignedToId: null }),
       );
+    });
+  });
+
+  describe('push hooks (23.4 AC2)', () => {
+    it('start() pushes order_status with itemCount summed from lines and null locationLine for a room delivery', async () => {
+      ordersRepo.findOne.mockResolvedValue(makeOrder({ destinationType: 'room' }));
+      linesRepo.find.mockResolvedValue([{ quantity: 2 }, { quantity: 3 }]);
+      await service.start(actor, 'order-1');
+      expect(push.notify).toHaveBeenCalledWith(
+        HOTEL_ID,
+        { stayIds: ['stay-1'] },
+        'order_status',
+        expect.objectContaining({
+          refId: 'order-1',
+          vars: expect.objectContaining({
+            id: 'order-1',
+            status: 'preparing',
+            itemCount: 5,
+            locationLine: null,
+          }),
+        }),
+      );
+    });
+
+    it('outForDelivery() resolves locationLine from locationNames by guestLanguage + appends spot', async () => {
+      ordersRepo.findOne.mockResolvedValue(
+        makeOrder({
+          status: 'preparing',
+          destinationType: 'location',
+          locationNames: { en: 'Pool', ar: 'المسبح' },
+          spot: '12',
+          guestLanguage: 'en',
+        }),
+      );
+      await service.outForDelivery(actor, 'order-1');
+      expect(push.notify).toHaveBeenCalledWith(
+        HOTEL_ID,
+        { stayIds: ['stay-1'] },
+        'order_status',
+        expect.objectContaining({
+          vars: expect.objectContaining({
+            status: 'on_the_way',
+            locationLine: 'Pool · 12',
+          }),
+        }),
+      );
+    });
+
+    it('outForDelivery() omits the spot suffix when no spot is set', async () => {
+      ordersRepo.findOne.mockResolvedValue(
+        makeOrder({
+          status: 'preparing',
+          destinationType: 'location',
+          locationNames: { en: 'Pool', ar: 'المسبح' },
+          spot: null,
+          guestLanguage: 'en',
+        }),
+      );
+      await service.outForDelivery(actor, 'order-1');
+      expect(push.notify).toHaveBeenCalledWith(
+        HOTEL_ID,
+        { stayIds: ['stay-1'] },
+        'order_status',
+        expect.objectContaining({
+          vars: expect.objectContaining({ locationLine: 'Pool' }),
+        }),
+      );
+    });
+
+    it('deliver() pushes order_status delivered', async () => {
+      ordersRepo.findOne.mockResolvedValue(makeOrder({ status: 'on_the_way' }));
+      await service.deliver(actor, 'order-1');
+      expect(push.notify).toHaveBeenCalledWith(
+        HOTEL_ID,
+        { stayIds: ['stay-1'] },
+        'order_status',
+        expect.objectContaining({
+          vars: expect.objectContaining({ status: 'delivered' }),
+        }),
+      );
+    });
+
+    it('cancel() pushes order_status cancelled', async () => {
+      ordersRepo.findOne.mockResolvedValue(makeOrder({ status: 'new' }));
+      await service.cancel(actor, 'order-1', { reason: 'out_of_stock' } as never);
+      expect(push.notify).toHaveBeenCalledWith(
+        HOTEL_ID,
+        { stayIds: ['stay-1'] },
+        'order_status',
+        expect.objectContaining({
+          vars: expect.objectContaining({ status: 'cancelled' }),
+        }),
+      );
+    });
+
+    it('assign() does NOT push — not a guest-visible status change', async () => {
+      ordersRepo.findOne.mockResolvedValue(makeOrder());
+      usersRepo.findOne.mockResolvedValue({
+        id: 'user-2',
+        status: 'active',
+        role: { permissions: ['fnb_orders.update'] },
+      });
+      await service.assign(actor, 'order-1', { assigneeId: 'user-2' } as never);
+      expect(push.notify).not.toHaveBeenCalled();
+    });
+
+    it('push failure never fails the transition', async () => {
+      ordersRepo.findOne.mockResolvedValue(makeOrder());
+      push.notify.mockRejectedValueOnce(new Error('dispatch exploded'));
+      const result = await service.start(actor, 'order-1');
+      expect(result.status).toBe('preparing');
     });
   });
 

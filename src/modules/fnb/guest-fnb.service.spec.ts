@@ -459,5 +459,13 @@ describe('GuestFnbService (16.5/16.6)', () => {
         expect.objectContaining({ action: 'fnb_order.cancelled' }),
       );
     });
+
+    it('never pushes (23.4 recorded decision) — GuestFnbService takes no PushService dependency, so a guest-initiated cancel structurally cannot notify; the guest already knows, they did it', () => {
+      // The push hooks added for Epic 23.4 live only on the STAFF-side
+      // TenantFnbOrdersService.cancel() (tenant-fnb-orders.service.spec.ts).
+      // This service is never given a `push` field/dependency, so cancelOwn
+      // (or any other guest method) has no way to call PushService.notify.
+      expect((service as unknown as Record<string, unknown>).push).toBeUndefined();
+    });
   });
 });

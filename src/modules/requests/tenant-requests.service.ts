@@ -1,6 +1,7 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
@@ -8,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, LessThan, MoreThan, Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
+import { PushService } from '../push/push.service';
 import { WILDCARD } from '../roles/permissions.constants';
 import { Room } from '../tenant-rooms/room.entity';
 import { naiveUtc, startOfHotelDay } from '../tenant-stays/stay-time';
@@ -71,6 +73,8 @@ export interface BoardCounts {
  */
 @Injectable()
 export class TenantRequestsService {
+  private readonly logger = new Logger(TenantRequestsService.name);
+
   constructor(
     @InjectRepository(GuestRequest)
     private readonly requestsRepo: Repository<GuestRequest>,
@@ -83,6 +87,7 @@ export class TenantRequestsService {
     @InjectRepository(Hotel)
     private readonly hotelsRepo: Repository<Hotel>,
     private readonly auditLogs: AuditLogsService,
+    private readonly push: PushService,
   ) {}
 
   /** Open board / delta feed — always ships counts + serverTime (note 4). */
@@ -240,6 +245,7 @@ export class TenantRequestsService {
     await this.audit('request.started', saved, user, {
       autoAssigned: saved.assignedToId === user.id,
     });
+    await this.notifyRequestPushSafely(saved);
     return (await this.toViews([saved]))[0];
   }
 
@@ -252,6 +258,7 @@ export class TenantRequestsService {
     request.completedById = user.id;
     const saved = await this.requestsRepo.save(request);
     await this.audit('request.completed', saved, user, {});
+    await this.notifyRequestPushSafely(saved);
     return (await this.toViews([saved]))[0];
   }
 
@@ -270,6 +277,7 @@ export class TenantRequestsService {
     request.cancelNote = dto.note?.trim() || null;
     const saved = await this.requestsRepo.save(request);
     await this.audit('request.cancelled', saved, user, { reason: dto.reason });
+    await this.notifyRequestPushSafely(saved);
     return (await this.toViews([saved]))[0];
   }
 
@@ -305,6 +313,34 @@ export class TenantRequestsService {
       assigneeId: assignee?.id ?? null,
     });
     return (await this.toViews([saved]))[0];
+  }
+
+  /**
+   * 23.4 AC1 — one push per hooked transition (start/complete/cancel only;
+   * `assign` is never a guest-visible status change, and guest-initiated
+   * cancellation is `GuestRequestsService.cancelOwn` — a different service
+   * that never takes a `PushService` dependency, so it structurally can't
+   * push: the guest already knows, they did it). `PushService.notify` never
+   * throws (Task 6's guarantee), but this try/catch is defense in depth at
+   * the call site, matching Task 7's `notifyPushSafely` — a push failure
+   * must never fail an already-committed transition.
+   */
+  private async notifyRequestPushSafely(saved: GuestRequest): Promise<void> {
+    try {
+      await this.push.notify(
+        saved.hotelId,
+        { stayIds: [saved.stayId] },
+        'request_status',
+        {
+          refId: saved.id,
+          vars: { id: saved.id, names: saved.itemNames, status: saved.status },
+        },
+      );
+    } catch (err) {
+      this.logger.error(
+        `push notify(request_status) failed for request ${saved.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private async findInHotel(hotelId: string, id: string): Promise<GuestRequest> {

@@ -423,6 +423,14 @@ describe('GuestRequestsService', () => {
       expect(repo.save).not.toHaveBeenCalled();
     });
 
+    it('never pushes (23.4 recorded decision) — GuestRequestsService takes no PushService dependency, so a guest-initiated cancel structurally cannot notify; the guest already knows, they did it', () => {
+      // The push hooks added for Epic 23.4 live only on the STAFF-side
+      // TenantRequestsService.cancel() (tenant-requests.service.spec.ts).
+      // This service is never given a `push` field/dependency, so cancelOwn
+      // (or any other guest method) has no way to call PushService.notify.
+      expect((service as unknown as Record<string, unknown>).push).toBeUndefined();
+    });
+
     it("404 for another stay's request (id scoped to own stay)", async () => {
       repo.findOne.mockResolvedValue(null);
       await expect(service.cancelOwn(STAY, 'req-x')).rejects.toMatchObject({

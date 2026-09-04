@@ -2,6 +2,7 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
+import { PushService } from '../push/push.service';
 import { Room } from '../tenant-rooms/room.entity';
 import { Stay } from '../tenant-stays/stay.entity';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
@@ -57,6 +58,7 @@ describe('TenantRequestsService', () => {
   let usersRepo: { find: jest.Mock; findOne: jest.Mock; createQueryBuilder: jest.Mock };
   let hotelsRepo: { findOne: jest.Mock };
   let auditLogs: { log: jest.Mock };
+  let push: { notify: jest.Mock };
 
   beforeEach(async () => {
     repo = {
@@ -85,6 +87,7 @@ describe('TenantRequestsService', () => {
         .mockResolvedValue({ id: 'hotel-1', timezone: 'Africa/Cairo' }),
     };
     auditLogs = { log: jest.fn().mockResolvedValue(undefined) };
+    push = { notify: jest.fn().mockResolvedValue(undefined) };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -95,6 +98,7 @@ describe('TenantRequestsService', () => {
         { provide: getRepositoryToken(TenantUser), useValue: usersRepo },
         { provide: getRepositoryToken(Hotel), useValue: hotelsRepo },
         { provide: AuditLogsService, useValue: auditLogs },
+        { provide: PushService, useValue: push },
       ],
     }).compile();
     service = moduleRef.get(TenantRequestsService);
@@ -261,6 +265,72 @@ describe('TenantRequestsService', () => {
       repo.findOne.mockResolvedValue(makeRequest({ assignedToId: 'user-2' }));
       await service.assign(ACTOR, 'req-1', { assigneeId: null });
       expect(repo.save.mock.calls[0][0].assignedToId).toBeNull();
+    });
+  });
+
+  describe('push hooks (23.4 AC1)', () => {
+    it('start() pushes request_status with the request name map and new status', async () => {
+      repo.findOne.mockResolvedValue(makeRequest());
+      await service.start(ACTOR, 'req-1');
+      expect(push.notify).toHaveBeenCalledWith(
+        'hotel-1',
+        { stayIds: ['stay-1'] },
+        'request_status',
+        expect.objectContaining({
+          refId: 'req-1',
+          vars: expect.objectContaining({
+            id: 'req-1',
+            names: { ar: 'مناشف إضافية', en: 'Extra towels' },
+            status: 'in_progress',
+          }),
+        }),
+      );
+    });
+
+    it('complete() pushes request_status with status done', async () => {
+      repo.findOne.mockResolvedValue(makeRequest({ status: 'in_progress' }));
+      await service.complete(ACTOR, 'req-1');
+      expect(push.notify).toHaveBeenCalledWith(
+        'hotel-1',
+        { stayIds: ['stay-1'] },
+        'request_status',
+        expect.objectContaining({
+          vars: expect.objectContaining({ status: 'done' }),
+        }),
+      );
+    });
+
+    it('staff cancel() pushes request_status with status cancelled', async () => {
+      repo.findOne.mockResolvedValue(makeRequest({ status: 'new' }));
+      await service.cancel(ACTOR, 'req-1', { reason: 'duplicate' });
+      expect(push.notify).toHaveBeenCalledWith(
+        'hotel-1',
+        { stayIds: ['stay-1'] },
+        'request_status',
+        expect.objectContaining({
+          vars: expect.objectContaining({ status: 'cancelled' }),
+        }),
+      );
+    });
+
+    it('assign() does NOT push — not a guest-visible status change', async () => {
+      repo.findOne.mockResolvedValue(makeRequest());
+      usersRepo.findOne.mockResolvedValue({
+        id: 'user-2',
+        hotelId: 'hotel-1',
+        status: 'active',
+        name: 'Hany',
+        role: { permissions: ['requests.update'] },
+      });
+      await service.assign(ACTOR, 'req-1', { assigneeId: 'user-2' });
+      expect(push.notify).not.toHaveBeenCalled();
+    });
+
+    it('push failure never fails the transition', async () => {
+      repo.findOne.mockResolvedValue(makeRequest());
+      push.notify.mockRejectedValueOnce(new Error('dispatch exploded'));
+      const result = await service.start(ACTOR, 'req-1');
+      expect(result.status).toBe('in_progress');
     });
   });
 

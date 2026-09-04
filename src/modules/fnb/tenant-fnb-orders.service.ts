@@ -1,6 +1,7 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
@@ -8,7 +9,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, LessThan, MoreThan, Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
-import { TranslationMap } from '../requests/requests.constants';
+import { PushService } from '../push/push.service';
+import { localizeField, TranslationMap } from '../requests/requests.constants';
 import { WILDCARD } from '../roles/permissions.constants';
 import { naiveUtc, startOfHotelDay } from '../tenant-stays/stay-time';
 import { TenantStaysService } from '../tenant-stays/tenant-stays.service';
@@ -99,6 +101,8 @@ const localized = (map: TranslationMap | null, lang: 'en' | 'ar'): string =>
  */
 @Injectable()
 export class TenantFnbOrdersService {
+  private readonly logger = new Logger(TenantFnbOrdersService.name);
+
   constructor(
     @InjectRepository(FnbOrder)
     private readonly ordersRepo: Repository<FnbOrder>,
@@ -111,6 +115,7 @@ export class TenantFnbOrdersService {
     private readonly stays: TenantStaysService,
     private readonly auditLogs: AuditLogsService,
     private readonly fnbSettlement: FnbSettlementSource,
+    private readonly push: PushService,
   ) {}
 
   // ------------------------------------------------------------------
@@ -274,6 +279,7 @@ export class TenantFnbOrdersService {
     if (!order.assignedToId) order.assignedToId = user.id;
     const saved = await this.ordersRepo.save(order);
     await this.audit('fnb_order.started', saved, user);
+    await this.notifyOrderPushSafely(saved);
     return (await this.toViews([saved]))[0];
   }
 
@@ -287,6 +293,7 @@ export class TenantFnbOrdersService {
     order.outForDeliveryAt = new Date();
     const saved = await this.ordersRepo.save(order);
     await this.audit('fnb_order.out_for_delivery', saved, user);
+    await this.notifyOrderPushSafely(saved);
     return (await this.toViews([saved]))[0];
   }
 
@@ -301,6 +308,7 @@ export class TenantFnbOrdersService {
       totalAmount: saved.totalAmount,
       paymentMethod: saved.paymentMethod,
     });
+    await this.notifyOrderPushSafely(saved);
     return (await this.toViews([saved]))[0];
   }
 
@@ -320,6 +328,7 @@ export class TenantFnbOrdersService {
     await this.audit('fnb_order.cancelled', saved, user, {
       reason: dto.reason,
     });
+    await this.notifyOrderPushSafely(saved);
     return (await this.toViews([saved]))[0];
   }
 
@@ -444,6 +453,46 @@ export class TenantFnbOrdersService {
   // ------------------------------------------------------------------
   // Shared internals
   // ------------------------------------------------------------------
+
+  /**
+   * 23.4 AC2 — one push per hooked transition (start/outForDelivery/deliver/
+   * cancel only; `assign` is never a guest-visible status change, and
+   * guest-initiated cancellation is `GuestFnbService.cancelOwn` — a
+   * different service that never takes a `PushService` dependency, so it
+   * structurally can't push: the guest already knows, they did it).
+   * `itemCount` sums line quantities (a fresh, lightweight per-order lookup —
+   * `start`/`outForDelivery`/`deliver`/`cancel` don't otherwise load lines).
+   * `locationLine` resolves `locationNames` by the snapshot `guestLanguage`
+   * (the same language `PushService.notify` composes with) and appends the
+   * spot, matching the hotel FE's `order-card.tsx` `destinationLabel`
+   * formatting (`"{name} · {spot}"`); room deliveries pass null so the copy
+   * falls back to its own room wording (23.4 AC2). `PushService.notify`
+   * never throws (Task 6's guarantee), but this try/catch is defense in
+   * depth at the call site, matching Task 7's `notifyPushSafely` — a push
+   * failure must never fail an already-committed transition.
+   */
+  private async notifyOrderPushSafely(order: FnbOrder): Promise<void> {
+    try {
+      const lines = await this.linesRepo.find({
+        where: { orderId: order.id },
+      });
+      const itemCount = lines.reduce((sum, l) => sum + l.quantity, 0);
+      const locationLine =
+        order.destinationType === 'location' && order.locationNames
+          ? `${localizeField(order.locationNames, order.guestLanguage)}${
+              order.spot ? ` · ${order.spot}` : ''
+            }`
+          : null;
+      await this.push.notify(order.hotelId, { stayIds: [order.stayId] }, 'order_status', {
+        refId: order.id,
+        vars: { id: order.id, itemCount, locationLine, status: order.status },
+      });
+    } catch (err) {
+      this.logger.error(
+        `push notify(order_status) failed for order ${order.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   private async findOrder(hotelId: string, id: string): Promise<FnbOrder> {
     const order = await this.ordersRepo.findOne({ where: { id, hotelId } });
