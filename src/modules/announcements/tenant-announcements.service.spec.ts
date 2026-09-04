@@ -4,6 +4,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
 import { Hotel } from '../hotels/hotel.entity';
+import { PushService } from '../push/push.service';
 import { Stay } from '../tenant-stays/stay.entity';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { Announcement } from './announcement.entity';
@@ -21,6 +22,7 @@ const makeAnnouncement = (o: Partial<Announcement> = {}): Announcement =>
     bodies: { en: 'Maintenance 9-12', ar: 'صيانة ٩-١٢' },
     infoEntryId: null,
     priority: false,
+    sendPush: false,
     audience: {},
     status: 'draft',
     publishAtLocal: null,
@@ -58,6 +60,7 @@ describe('TenantAnnouncementsService', () => {
   let infoRepo: Record<string, jest.Mock>;
   let auditLogs: { log: jest.Mock };
   let readCounts: jest.Mock;
+  let push: { notify: jest.Mock; statsForRefs: jest.Mock };
 
   beforeEach(async () => {
     repo = {
@@ -83,6 +86,10 @@ describe('TenantAnnouncementsService', () => {
     };
     infoRepo = { findOne: jest.fn().mockResolvedValue(null) };
     auditLogs = { log: jest.fn() };
+    push = {
+      notify: jest.fn().mockResolvedValue(undefined),
+      statsForRefs: jest.fn().mockResolvedValue(new Map()),
+    };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -93,6 +100,7 @@ describe('TenantAnnouncementsService', () => {
         { provide: getRepositoryToken(Hotel), useValue: hotelsRepo },
         { provide: getRepositoryToken(HotelInfoEntry), useValue: infoRepo },
         { provide: AuditLogsService, useValue: auditLogs },
+        { provide: PushService, useValue: push },
       ],
     }).compile();
     service = moduleRef.get(TenantAnnouncementsService);
@@ -523,6 +531,97 @@ describe('TenantAnnouncementsService', () => {
           audience: { stayIds: ['stay-1'], floors: [2] },
         }),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('push integration (23.3)', () => {
+    it('create action=send with sendPush=true notifies the push service with the audience + priority flag', async () => {
+      const view = await service.create(actor, {
+        ...CONTENT,
+        action: 'send',
+        priority: true,
+        sendPush: true,
+        audience: { floors: [2] },
+      });
+      expect(view.sendPush).toBe(true);
+      expect(push.notify).toHaveBeenCalledTimes(1);
+      expect(push.notify).toHaveBeenCalledWith(
+        HOTEL_ID,
+        { audience: { floors: [2] } },
+        'announcement',
+        expect.objectContaining({
+          refId: 'ann-new',
+          dedupePrefix: 'announcement:ann-new',
+          priority: true,
+          vars: expect.objectContaining({ id: 'ann-new' }),
+        }),
+      );
+    });
+
+    it('sendPush defaults to priority when omitted (AC1): priority draft → sendPush true', async () => {
+      const view = await service.create(actor, {
+        ...CONTENT,
+        action: 'draft',
+        priority: true,
+      });
+      expect(view.status).toBe('draft');
+      expect(view.sendPush).toBe(true);
+      // A draft never went live — push must not fire even though the
+      // stored intent is true.
+      expect(push.notify).not.toHaveBeenCalled();
+    });
+
+    it('create action=send with sendPush=false does not notify', async () => {
+      const view = await service.create(actor, {
+        ...CONTENT,
+        action: 'send',
+        priority: true,
+        sendPush: false,
+      });
+      expect(view.status).toBe('live');
+      expect(view.sendPush).toBe(false);
+      expect(push.notify).not.toHaveBeenCalled();
+    });
+
+    it('sendNow() on a stored sendPush=true row notifies (send-from-list keeps intent)', async () => {
+      repo.findOne.mockResolvedValue(
+        makeAnnouncement({ sendPush: true, audience: { floors: [3] }, priority: false }),
+      );
+      const view = await service.sendNow(actor, 'ann-1');
+      expect(view.status).toBe('live');
+      expect(push.notify).toHaveBeenCalledTimes(1);
+      expect(push.notify).toHaveBeenCalledWith(
+        HOTEL_ID,
+        { audience: { floors: [3] } },
+        'announcement',
+        expect.objectContaining({ refId: 'ann-1', dedupePrefix: 'announcement:ann-1' }),
+      );
+    });
+
+    it('push failure does not fail the create (notify never throws — assert create resolves when notify rejects)', async () => {
+      push.notify.mockRejectedValue(new Error('push down'));
+      await expect(
+        service.create(actor, { ...CONTENT, action: 'send', sendPush: true }),
+      ).resolves.toMatchObject({ status: 'live', sendPush: true });
+    });
+
+    it('toViews includes stats.push counts for sendPush rows, batched to eligible rows only', async () => {
+      repo.find.mockResolvedValue([
+        makeAnnouncement({ id: 'ann-push', status: 'live', sendPush: true }),
+        makeAnnouncement({ id: 'ann-nopush', status: 'live', sendPush: false }),
+        makeAnnouncement({ id: 'ann-draft', status: 'draft', sendPush: true }),
+      ]);
+      push.statsForRefs.mockResolvedValue(
+        new Map([['ann-push', { sent: 5, failed: 1 }]]),
+      );
+      const result = await service.list(actor);
+      // Only the live + sendPush row is eligible — one batched call, not N+1.
+      expect(push.statsForRefs).toHaveBeenCalledTimes(1);
+      expect(push.statsForRefs).toHaveBeenCalledWith(['ann-push']);
+      const byId = Object.fromEntries(result.data.map((v) => [v.id, v]));
+      expect(byId['ann-push'].stats.push).toEqual({ sent: 5, failed: 1 });
+      expect(byId['ann-nopush'].stats.push).toBeUndefined();
+      expect(byId['ann-draft'].stats.push).toBeUndefined();
     });
   });
 });

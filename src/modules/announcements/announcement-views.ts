@@ -13,6 +13,8 @@ export interface TenantAnnouncementView {
   bodies: TranslationMap;
   infoEntryId: string | null;
   priority: boolean;
+  /** 23.3 AC1 — composer push toggle; carried through send/schedule/scheduler. */
+  sendPush: boolean;
   audience: AudienceFilter;
   status: AnnouncementStatus;
   publishAtLocal: string | null;
@@ -25,7 +27,12 @@ export interface TenantAnnouncementView {
   /** Resolved when the audience targets one specific stay. */
   audienceStay: { guestName: string; roomNumber: string } | null;
   /** "قرأه 34 من 62" — reads / currently-matching audience (19.3 AC1). */
-  stats: { reads: number; audienceNow: number };
+  stats: {
+    reads: number;
+    audienceNow: number;
+    /** 23.3 — dispatch outcome; omitted for rows with no push dispatches. */
+    push?: { sent: number; failed: number };
+  };
   /** 21.3 groundwork — null = manual; set → tenant UI badges "auto · event". */
   source: AnnouncementSource | null;
 }
@@ -65,6 +72,7 @@ export function toTenantView(
     reads: number;
     audienceNow: number;
     audienceStay: { guestName: string; roomNumber: string } | null;
+    push?: { sent: number; failed: number };
   },
 ): TenantAnnouncementView {
   return {
@@ -73,6 +81,7 @@ export function toTenantView(
     bodies: a.bodies,
     infoEntryId: a.infoEntryId,
     priority: a.priority,
+    sendPush: a.sendPush,
     audience: a.audience ?? {},
     status: a.status,
     publishAtLocal: a.publishAtLocal,
@@ -83,7 +92,11 @@ export function toTenantView(
     createdAt: iso(a.createdAt) as string,
     updatedAt: iso(a.updatedAt) as string,
     audienceStay: extras.audienceStay,
-    stats: { reads: extras.reads, audienceNow: extras.audienceNow },
+    stats: {
+      reads: extras.reads,
+      audienceNow: extras.audienceNow,
+      ...(extras.push ? { push: extras.push } : {}),
+    },
     source: a.source,
   };
 }

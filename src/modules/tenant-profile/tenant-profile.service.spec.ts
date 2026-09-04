@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
@@ -19,6 +20,7 @@ describe('TenantProfileService (8.7)', () => {
   let roomsRepo: { count: jest.Mock };
   let access: { getAccessState: jest.Mock };
   let audit: { log: jest.Mock };
+  let config: { get: jest.Mock };
 
   const user = (o: Partial<TenantUser> = {}): TenantUser =>
     ({
@@ -67,6 +69,10 @@ describe('TenantProfileService (8.7)', () => {
       }),
     };
     audit = { log: jest.fn() };
+    config = {
+      // Mirrors PushService's own defaults (23.3) — same env keys, same fallback.
+      get: jest.fn((key: string, def?: string) => def),
+    };
     const moduleRef = await Test.createTestingModule({
       providers: [
         TenantProfileService,
@@ -75,6 +81,7 @@ describe('TenantProfileService (8.7)', () => {
         { provide: getRepositoryToken(Room), useValue: roomsRepo },
         { provide: TenantAccessService, useValue: access },
         { provide: AuditLogsService, useValue: audit },
+        { provide: ConfigService, useValue: config },
       ],
     }).compile();
     service = moduleRef.get(TenantProfileService);
@@ -91,6 +98,19 @@ describe('TenantProfileService (8.7)', () => {
     });
     expect(result.hotel).toMatchObject({ slug: 'sunrise' });
     expect(result.subscription).toMatchObject({ trialDaysRemaining: 5 });
+  });
+
+  it('23.3 — me() exposes hotel.pushQuietHours from env (defaults 22:00/08:00)', async () => {
+    const result = await service.me(user());
+    expect(result.hotel.pushQuietHours).toEqual({ start: '22:00', end: '08:00' });
+  });
+
+  it('23.3 — me() reflects a custom configured quiet window', async () => {
+    config.get.mockImplementation((key: string) =>
+      key === 'PUSH_QUIET_START' ? '23:00' : key === 'PUSH_QUIET_END' ? '07:00' : undefined,
+    );
+    const result = await service.me(user());
+    expect(result.hotel.pushQuietHours).toEqual({ start: '23:00', end: '07:00' });
   });
 
   it('updates name and preferredLanguage', async () => {

@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { Repository } from 'typeorm';
@@ -24,6 +25,7 @@ export class TenantProfileService {
     private readonly roomsRepo: Repository<Room>,
     private readonly access: TenantAccessService,
     private readonly auditLogs: AuditLogsService,
+    private readonly config: ConfigService,
   ) {}
 
   /**
@@ -92,6 +94,12 @@ export class TenantProfileService {
         timezone: hotel?.timezone,
         // Epic 16 — the kitchen board formats order totals in hotel currency.
         currency: hotel?.currency,
+        // 23.3 — hotel FE Task 15 shows this on the push settings screen;
+        // same env-derived default `PushService.notify` itself holds guests to.
+        pushQuietHours: {
+          start: this.config.get('PUSH_QUIET_START', '22:00'),
+          end: this.config.get('PUSH_QUIET_END', '08:00'),
+        },
       },
       subscription: {
         status: state.subscriptionStatus,

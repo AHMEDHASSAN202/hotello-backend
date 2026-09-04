@@ -141,6 +141,11 @@ export class AnnouncementContentDto {
   @IsBoolean()
   priority?: boolean;
 
+  /** 23.3 AC1 — composer push toggle; defaults to `priority` when omitted. */
+  @IsOptional()
+  @IsBoolean()
+  sendPush?: boolean;
+
   @IsOptional()
   @ValidateNested()
   @Type(() => AudienceFilterDto)
@@ -248,6 +253,11 @@ export class UpdateAnnouncementDto {
   @IsOptional()
   @IsBoolean()
   priority?: boolean;
+
+  /** 23.3 AC1 — composer push toggle; applied only when explicitly sent. */
+  @IsOptional()
+  @IsBoolean()
+  sendPush?: boolean;
 
   @IsOptional()
   @ValidateNested()

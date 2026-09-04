@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { PushService } from '../push/push.service';
 import { Announcement } from './announcement.entity';
 import { hotelLocalStamp, isWithinWindow } from './announcement-visibility';
 
@@ -26,6 +27,7 @@ export class AnnouncementSchedulerService {
     @InjectRepository(Announcement)
     private readonly repo: Repository<Announcement>,
     private readonly auditLogs: AuditLogsService,
+    private readonly push: PushService,
   ) {}
 
   @Cron(CronExpression.EVERY_5_MINUTES)
@@ -74,6 +76,29 @@ export class AnnouncementSchedulerService {
         await this.audit(row, 'announcement.published', {
           publishAtLocal: row.publishAtLocal,
         });
+        // 23.3 AC2 — the third live site; audience is resolved at THIS
+        // moment, not composer time. `notify()` never throws (Task 6), but
+        // this try/catch is defense in depth so a push failure can never
+        // stop the rest of the tick's transitions.
+        if (row.sendPush) {
+          try {
+            await this.push.notify(
+              row.hotelId,
+              { audience: row.audience },
+              'announcement',
+              {
+                refId: row.id,
+                dedupePrefix: `announcement:${row.id}`,
+                priority: row.priority,
+                vars: { id: row.id, titles: row.titles, bodies: row.bodies },
+              },
+            );
+          } catch (err) {
+            this.logger.error(
+              `push notify failed for announcement ${row.id}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
         published += 1;
         continue;
       }

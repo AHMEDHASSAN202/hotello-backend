@@ -2,6 +2,7 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { In } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { PushService } from '../push/push.service';
 import { Announcement } from './announcement.entity';
 import { AnnouncementSchedulerService } from './announcement-scheduler.service';
 
@@ -14,6 +15,11 @@ const makeAnnouncement = (o: Partial<Announcement> = {}): Announcement =>
     activeUntilLocal: null,
     publishedAt: null,
     expiredAt: null,
+    titles: { en: 'Pool closed', ar: 'المسبح مغلق' },
+    bodies: { en: 'Maintenance 9-12', ar: 'صيانة ٩-١٢' },
+    priority: false,
+    sendPush: false,
+    audience: {},
     hotel: { id: 'hotel-1', timezone: 'Africa/Cairo' },
     ...o,
   }) as unknown as Announcement;
@@ -22,6 +28,7 @@ describe('AnnouncementSchedulerService (19.2 AC1, note 4)', () => {
   let service: AnnouncementSchedulerService;
   let repo: Record<string, jest.Mock>;
   let auditLogs: { log: jest.Mock };
+  let push: { notify: jest.Mock };
 
   beforeEach(async () => {
     repo = {
@@ -29,11 +36,13 @@ describe('AnnouncementSchedulerService (19.2 AC1, note 4)', () => {
       save: jest.fn(async (e) => e),
     };
     auditLogs = { log: jest.fn() };
+    push = { notify: jest.fn().mockResolvedValue(undefined) };
     const moduleRef = await Test.createTestingModule({
       providers: [
         AnnouncementSchedulerService,
         { provide: getRepositoryToken(Announcement), useValue: repo },
         { provide: AuditLogsService, useValue: auditLogs },
+        { provide: PushService, useValue: push },
       ],
     }).compile();
     service = moduleRef.get(AnnouncementSchedulerService);
@@ -107,5 +116,45 @@ describe('AnnouncementSchedulerService (19.2 AC1, note 4)', () => {
     expect(auditLogs.log).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'announcement.expired', actorId: null }),
     );
+  });
+
+  describe('push integration (23.3)', () => {
+    it('scheduled→live transition with sendPush=true notifies push (AC2: audience at send time)', async () => {
+      repo.find.mockResolvedValue([
+        makeAnnouncement({
+          sendPush: true,
+          priority: true,
+          audience: { floors: [2] },
+        }),
+      ]);
+      const result = await service.transition(new Date('2026-01-15T10:00:00Z'));
+      expect(result).toEqual({ published: 1, expired: 0 });
+      expect(push.notify).toHaveBeenCalledTimes(1);
+      expect(push.notify).toHaveBeenCalledWith(
+        'hotel-1',
+        { audience: { floors: [2] } },
+        'announcement',
+        expect.objectContaining({
+          refId: 'ann-1',
+          dedupePrefix: 'announcement:ann-1',
+          priority: true,
+        }),
+      );
+    });
+
+    it('scheduled→live transition with sendPush=false (the default) does not notify', async () => {
+      repo.find.mockResolvedValue([makeAnnouncement()]);
+      await service.transition(new Date('2026-01-15T10:00:00Z'));
+      expect(push.notify).not.toHaveBeenCalled();
+    });
+
+    it('a push failure during the transition is swallowed — the row still publishes and the tick still counts it', async () => {
+      repo.find.mockResolvedValue([makeAnnouncement({ sendPush: true })]);
+      push.notify.mockRejectedValue(new Error('push down'));
+      const result = await service.transition(new Date('2026-01-15T10:00:00Z'));
+      expect(result).toEqual({ published: 1, expired: 0 });
+      const saved = repo.save.mock.calls[0][0];
+      expect(saved.status).toBe('live');
+    });
   });
 });

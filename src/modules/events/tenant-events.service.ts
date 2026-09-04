@@ -361,6 +361,9 @@ export class TenantEventsService {
               ...content,
               action: 'send',
               audience: {},
+              // 23.3 AC3 — auto-announcements always push; no per-publish UI
+              // toggle in MVP (recorded decision).
+              sendPush: true,
             } as CreateAnnouncementDto,
             { source: 'event_publish', eventId: event.id },
           );
@@ -478,6 +481,8 @@ export class TenantEventsService {
               ...content,
               action: 'send',
               audience: { stayIds: activeStayIds },
+              // 23.3 AC3 — cancel notices are always-push, unconditionally.
+              sendPush: true,
             } as CreateAnnouncementDto,
             {
               source: 'event_cancel',

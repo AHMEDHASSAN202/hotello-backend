@@ -4,6 +4,7 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { Event } from '../events/event.entity';
 import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
 import { Hotel } from '../hotels/hotel.entity';
+import { PushModule } from '../push/push.module';
 import { Stay } from '../tenant-stays/stay.entity';
 import { TenantAccessModule } from '../tenant-access/tenant-access.module';
 import { Announcement } from './announcement.entity';
@@ -32,6 +33,7 @@ import { TenantAnnouncementsService } from './tenant-announcements.service';
     ]),
     AuditLogsModule,
     TenantAccessModule,
+    PushModule,
   ],
   controllers: [TenantAnnouncementsController, GuestAnnouncementsController],
   providers: [

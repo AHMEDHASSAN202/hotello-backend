@@ -361,6 +361,16 @@ describe('TenantEventsService (Story 21.2)', () => {
       );
     });
 
+    it('event publish auto-announcement carries sendPush=true (23.3 AC3 default ON)', async () => {
+      eventsRepo.findOne.mockResolvedValue(futureDraft());
+      await service.publish(actor, 'event-1', {});
+      expect(announcements.create).toHaveBeenCalledWith(
+        actor,
+        expect.objectContaining({ sendPush: true }),
+        { source: 'event_publish', eventId: 'event-1' },
+      );
+    });
+
     it('announce: false publishes but creates no announcement', async () => {
       eventsRepo.findOne.mockResolvedValue(futureDraft());
       const result = await service.publish(actor, 'event-1', { announce: false });
@@ -505,6 +515,19 @@ describe('TenantEventsService (Story 21.2)', () => {
           eventId: 'event-1',
           dropUnresolvedStays: true,
         },
+      );
+    });
+
+    it('event cancel announcement always carries sendPush=true (23.3 AC3)', async () => {
+      managerEvents.findOne.mockResolvedValue(makeEvent({ status: 'published' }));
+      managerBookings.find.mockResolvedValue([makeBooking({ id: 'b1', stayId: 'stay-1' })]);
+
+      await service.cancel(actor, 'event-1', { reason: 'Storm warning' });
+
+      expect(announcements.create).toHaveBeenCalledWith(
+        actor,
+        expect.objectContaining({ sendPush: true }),
+        expect.objectContaining({ source: 'event_cancel' }),
       );
     });
 

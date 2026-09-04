@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -9,6 +10,7 @@ import { In, Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { HotelInfoEntry } from '../hotel-info/hotel-info-entry.entity';
 import { Hotel } from '../hotels/hotel.entity';
+import { PushService } from '../push/push.service';
 import { Stay } from '../tenant-stays/stay.entity';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { Announcement } from './announcement.entity';
@@ -60,6 +62,8 @@ export interface InternalCreateOptions {
  */
 @Injectable()
 export class TenantAnnouncementsService {
+  private readonly logger = new Logger(TenantAnnouncementsService.name);
+
   constructor(
     @InjectRepository(Announcement)
     private readonly repo: Repository<Announcement>,
@@ -72,6 +76,7 @@ export class TenantAnnouncementsService {
     @InjectRepository(HotelInfoEntry)
     private readonly infoRepo: Repository<HotelInfoEntry>,
     private readonly auditLogs: AuditLogsService,
+    private readonly push: PushService,
   ) {}
 
   async list(user: TenantUser): Promise<{ data: TenantAnnouncementView[] }> {
@@ -126,13 +131,19 @@ export class TenantAnnouncementsService {
     );
     const nowLocal = await this.nowLocal(user.hotelId);
     const timing = this.resolveTiming(dto, nowLocal);
+    const priority = dto.priority ?? false;
+    // 23.3 AC1 — the composer toggle defaults to `priority` when omitted:
+    // an important notice should reach guests' devices unless the tenant
+    // user explicitly turns push off.
+    const sendPush = dto.sendPush ?? priority;
 
     const row = this.repo.create({
       hotelId: user.hotelId,
       titles,
       bodies,
       infoEntryId,
-      priority: dto.priority ?? false,
+      priority,
+      sendPush,
       audience,
       createdById: user.id,
       source: internal?.source ?? null,
@@ -143,6 +154,7 @@ export class TenantAnnouncementsService {
 
     if (saved.status === 'live') {
       await this.audit(user, saved.id, 'announcement.published');
+      if (saved.sendPush) await this.notifyPushSafely(saved);
     } else {
       await this.audit(user, saved.id, 'announcement.created');
       if (saved.status === 'scheduled') {
@@ -199,6 +211,10 @@ export class TenantAnnouncementsService {
       track('priority', row.priority, dto.priority);
       row.priority = dto.priority;
     }
+    if (dto.sendPush !== undefined) {
+      track('sendPush', row.sendPush, dto.sendPush);
+      row.sendPush = dto.sendPush;
+    }
 
     const nowLocal = await this.nowLocal(user.hotelId);
     if (dto.publishAtLocal !== undefined) {
@@ -244,6 +260,9 @@ export class TenantAnnouncementsService {
     row.publishAtLocal = null;
     const saved = await this.repo.save(row);
     await this.audit(user, saved.id, 'announcement.published');
+    // 23.3 — send-from-list keeps the composer's push intent (send-now on a
+    // drafted/scheduled row that had sendPush=true still notifies).
+    if (saved.sendPush) await this.notifyPushSafely(saved);
     const [view] = await this.toViews(user.hotelId, [saved]);
     return view;
   }
@@ -485,15 +504,58 @@ export class TenantAnnouncementsService {
     return new Map(rows.map((r) => [r.announcementId, Number(r.count)]));
   }
 
+  /** 23.3 AC2 — push is a moment: fires only at the live transition, never retroactively. */
+  private notifyPush(row: Announcement): Promise<void> {
+    return this.push.notify(row.hotelId, { audience: row.audience }, 'announcement', {
+      refId: row.id,
+      dedupePrefix: `announcement:${row.id}`, // belt-and-braces: live-site overlap can't double-push
+      priority: row.priority,
+      vars: { id: row.id, titles: row.titles, bodies: row.bodies },
+    });
+  }
+
+  /**
+   * `PushService.notify` never throws (Task 6's guarantee) — this try/catch
+   * is defense in depth at the call site, not a substitute: a push failure
+   * must never turn an already-committed announcement send into a failed
+   * HTTP request.
+   */
+  private async notifyPushSafely(row: Announcement): Promise<void> {
+    try {
+      await this.notifyPush(row);
+    } catch (err) {
+      this.logger.error(
+        `push notify failed for announcement ${row.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * One batched `statsForRefs` call for the whole page/list — never N+1.
+   * Only rows that could plausibly have dispatches (push-enabled and past
+   * draft/scheduled) are asked for; `toTenantView` omits `stats.push`
+   * entirely for ids absent from the returned map.
+   */
+  private async pushStats(
+    rows: Announcement[],
+  ): Promise<Map<string, { sent: number; failed: number }>> {
+    const ids = rows
+      .filter((r) => r.sendPush && r.status !== 'draft' && r.status !== 'scheduled')
+      .map((r) => r.id);
+    if (!ids.length) return new Map();
+    return this.push.statsForRefs(ids);
+  }
+
   /** Shared view assembly: one stays query + one grouped reads query. */
   private async toViews(
     hotelId: string,
     rows: Announcement[],
   ): Promise<TenantAnnouncementView[]> {
     if (!rows.length) return [];
-    const [stays, reads] = await Promise.all([
+    const [stays, reads, pushStats] = await Promise.all([
       this.activeStays(hotelId),
       this.readCounts(rows.map((r) => r.id)),
+      this.pushStats(rows),
     ]);
 
     const stayIds = rows
@@ -515,6 +577,7 @@ export class TenantAnnouncementsService {
         reads: reads.get(row.id) ?? 0,
         audienceNow: stays.filter((s) => matchesAudience(row.audience, s))
           .length,
+        push: pushStats.get(row.id),
         audienceStay: target
           ? {
               guestName: target.guestName,
