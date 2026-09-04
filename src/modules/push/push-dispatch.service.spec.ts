@@ -92,7 +92,11 @@ describe('PushDispatchService (23.1 AC2/AC3)', () => {
     repo = {
       create: jest.fn((data) => data),
       save: jest.fn(async (row) => ({ id: row.id ?? 'dispatch-new', ...row })),
-      update: jest.fn().mockResolvedValue(undefined),
+      // Default: the guarded conditional update (recordSuccess/recordFailure)
+      // finds the row still pending and applies — matches the old blind-save
+      // behavior for every test that doesn't specifically exercise the race
+      // (affected: 0) below.
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
       find: jest.fn().mockResolvedValue([]),
       delete: jest.fn().mockResolvedValue({ affected: 0 }),
       createQueryBuilder: jest.fn(),
@@ -198,7 +202,9 @@ describe('PushDispatchService (23.1 AC2/AC3)', () => {
 
       await expect(service.enqueueAndSend([makeInput()])).resolves.toBeUndefined();
 
-      expect(repo.save).toHaveBeenCalledWith(
+      // recordFailure now persists via the guarded update, not repo.save.
+      expect(repo.update).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'pending' }),
         expect.objectContaining({ lastError: 'raw string explosion', status: 'pending' }),
       );
     });
@@ -243,7 +249,11 @@ describe('PushDispatchService (23.1 AC2/AC3)', () => {
       await service.enqueueAndSend([makeInput({ topic: null })]);
 
       expect(txManager.query).not.toHaveBeenCalled();
-      expect(repo.update).not.toHaveBeenCalled();
+      // No topic-keyed supersede update should run. (repo.update IS still
+      // called once here for the immediate send's recordSuccess — that's the
+      // separate guarded-write path, unrelated to collapse/supersede.)
+      const supersedeCalls = repo.update.mock.calls.filter(([criteria]) => 'topic' in criteria);
+      expect(supersedeCalls).toHaveLength(0);
       expect(repo.save).toHaveBeenCalled();
     });
   });
@@ -262,7 +272,12 @@ describe('PushDispatchService (23.1 AC2/AC3)', () => {
       expect(driver.send).not.toHaveBeenCalled();
       expect(row.status).toBe('failed');
       expect(row.nextAttemptAt).toBeNull();
-      expect(repo.save).toHaveBeenCalledWith(row);
+      // recordFailure persists via a guarded conditional update (WHERE id
+      // AND status = 'pending'), never a blind full-entity save.
+      expect(repo.update).toHaveBeenCalledWith(
+        { id: row.id, status: 'pending' },
+        expect.objectContaining({ status: 'failed', nextAttemptAt: null }),
+      );
     });
 
     it('gates on hotel status: suspended hotel → terminal failure', async () => {
@@ -382,10 +397,94 @@ describe('PushDispatchService (23.1 AC2/AC3)', () => {
 
     it('never throws even when persisting the failure itself fails (last-resort log, not a crash)', async () => {
       staysRepo.findOne.mockRejectedValue(new Error('db unreachable'));
-      repo.save.mockRejectedValue(new Error('db totally down'));
+      repo.update.mockRejectedValue(new Error('db totally down'));
       const row = makeRow();
 
       await expect(service.attemptSend(row)).resolves.toBeUndefined();
+    });
+
+    describe('concurrent-supersede guard (recordSuccess/recordFailure race fix)', () => {
+      // The bug (live smoke test, Epic 23 task 16): recordSuccess/recordFailure
+      // used to do a blind `repo.save(row)` on an in-memory row snapshot with
+      // no `WHERE status = 'pending'` guard. If a concurrent enqueueAndSend
+      // collapse-supersede flipped the row to 'superseded' in the DB WHILE an
+      // older attemptSend for that same row was still in flight, the older
+      // call's blind save would silently overwrite status back to 'sent' or
+      // 'failed' — resurrecting a dispatch that had already correctly
+      // collapsed away. These tests simulate that outcome via a mocked
+      // `repo.update` returning `{ affected: 0 }`, i.e. "another writer moved
+      // this row off 'pending' before this write landed."
+
+      it('recordSuccess no-ops when the row was concurrently superseded (affected: 0) — does not resurrect status', async () => {
+        repo.update.mockResolvedValueOnce({ affected: 0 });
+        // In-memory snapshot is still 'pending' — that's exactly what let
+        // attemptSend proceed to call the driver in the first place, even
+        // though the row's TRUE DB state has already moved on.
+        const row = makeRow({ status: 'pending' });
+
+        await expect(service.attemptSend(row)).resolves.toBeUndefined();
+
+        expect(driver.send).toHaveBeenCalled();
+        expect(repo.update).toHaveBeenCalledWith(
+          { id: row.id, status: 'pending' },
+          expect.objectContaining({ status: 'sent' }),
+        );
+        // No-op: the in-memory row must NOT be mutated to reflect a write
+        // that never actually landed, and no further recovery/retry write
+        // is attempted for this row.
+        expect(row.status).toBe('pending');
+        expect(row.sentAt).toBeNull();
+        expect(repo.update).toHaveBeenCalledTimes(1);
+        // Subscription health bookkeeping is part of "this row's write" too
+        // — must not proceed once the guard reports the row moved on.
+        expect(subsRepo.save).not.toHaveBeenCalled();
+      });
+
+      it('recordFailure no-ops when the row was concurrently superseded (affected: 0) — does not resurrect status', async () => {
+        driver.send.mockRejectedValue(new Error('temporary failure'));
+        repo.update.mockResolvedValueOnce({ affected: 0 });
+        const row = makeRow({ status: 'pending', attemptCount: 0, lastError: null });
+
+        await expect(service.attemptSend(row)).resolves.toBeUndefined();
+
+        expect(repo.update).toHaveBeenCalledWith(
+          { id: row.id, status: 'pending' },
+          expect.objectContaining({ status: 'pending', attemptCount: 1 }),
+        );
+        // No-op: nothing about the row's in-memory state changes, and the
+        // subscription failureCount bump (a side effect of a landed write)
+        // must not happen either.
+        expect(row.attemptCount).toBe(0);
+        expect(row.lastError).toBeNull();
+        expect(repo.update).toHaveBeenCalledTimes(1);
+        expect(subsRepo.save).not.toHaveBeenCalled();
+      });
+
+      it('a lagging attemptSend for an already-superseded row cannot resurrect it (race outcome simulation)', async () => {
+        // Model the DB as a tiny state machine: the guarded update only
+        // "lands" (affected: 1) if its WHERE-criteria status still matches
+        // the current DB status; otherwise it's a no-op (affected: 0) — this
+        // is exactly what a real `UPDATE ... WHERE id = :id AND status =
+        // :status` does against a real row.
+        let dbStatus: string = 'pending';
+        repo.update.mockImplementation(async (criteria: Record<string, unknown>, set: Record<string, unknown>) => {
+          if (criteria.status !== dbStatus) return { affected: 0 };
+          dbStatus = (set.status as string) ?? dbStatus;
+          return { affected: 1 };
+        });
+
+        // A concurrent enqueueAndSend collapse already superseded this row
+        // in the DB before the older in-flight attemptSend's recordSuccess
+        // gets a chance to write.
+        dbStatus = 'superseded';
+
+        const row = makeRow({ status: 'pending' }); // stale snapshot the older call is still holding
+        await service.attemptSend(row);
+
+        // The DB truth must never be resurrected back to 'sent' by the
+        // lagging call.
+        expect(dbStatus).toBe('superseded');
+      });
     });
   });
 

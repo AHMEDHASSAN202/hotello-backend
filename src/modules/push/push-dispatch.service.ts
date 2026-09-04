@@ -14,7 +14,7 @@ import { Stay } from '../tenant-stays/stay.entity';
 import { PushDispatch } from './push-dispatch.entity';
 import { PushSubscription } from './push-subscription.entity';
 import { PUSH_DRIVER, PushDriver, PushSendError } from './push.interface';
-import { PushType } from './push.constants';
+import { PushDispatchStatus, PushType } from './push.constants';
 
 const BATCH_SIZE = 50; // processDue: bounded poller batch
 const SEND_CONCURRENCY = 8; // enqueueAndSend: bounded fan-out for immediate sends
@@ -277,15 +277,42 @@ export class PushDispatchService {
     return result;
   }
 
+  /**
+   * `row` is an in-memory snapshot that may be stale by the time this write
+   * lands — `attemptSend` can be holding a row that was read (or inserted)
+   * before a CONCURRENT `enqueueAndSend` collapse-supersede flipped this
+   * same row to 'superseded' in the DB. A blind `repo.save(row)` here would
+   * silently overwrite that back to 'sent', resurrecting a dispatch that had
+   * already correctly collapsed away (the bug found in the 2026-09-04 live
+   * smoke test — see task-16-backend-smoke-report.md §6).
+   *
+   * The guard: `repo.update({ id, status: 'pending' }, set)` issues
+   * `UPDATE push_dispatches SET ... WHERE id = :id AND status = 'pending'`.
+   * If the row is no longer 'pending' (superseded by a concurrent writer, or
+   * otherwise already moved to a terminal state), `affected` comes back 0
+   * and this method no-ops: the row's current DB state is authoritative and
+   * must be left alone — no throw, no retry, no "fixing" it, and no further
+   * side effects (subscription health bookkeeping included) for this write.
+   */
   private async recordSuccess(row: PushDispatch, sub: PushSubscription): Promise<void> {
     const now = new Date();
+    const attempts = [...(row.attempts ?? []), { at: now.toISOString(), ok: true, error: null }];
+    const result = await this.repo.update(
+      { id: row.id, status: 'pending' },
+      { status: 'sent', sentAt: now, attemptCount: row.attemptCount + 1, lastError: null, nextAttemptAt: null, attempts },
+    );
+    if (!result.affected) {
+      this.logger.debug(
+        `Push dispatch ${row.id} recordSuccess skipped: row moved off 'pending' before this write landed (concurrently superseded or already terminal).`,
+      );
+      return;
+    }
     row.status = 'sent';
     row.sentAt = now;
     row.attemptCount += 1;
     row.lastError = null;
     row.nextAttemptAt = null;
-    row.attempts = [...(row.attempts ?? []), { at: now.toISOString(), ok: true, error: null }];
-    await this.repo.save(row);
+    row.attempts = attempts;
     sub.lastSuccessAt = now;
     sub.failureCount = 0;
     await this.subsRepo.save(sub);
@@ -298,21 +325,35 @@ export class PushDispatchService {
   ): Promise<void> {
     const now = new Date();
     const message = err instanceof Error ? err.message : String(err);
-    row.attemptCount += 1;
-    row.lastError = message;
-    row.attempts = [...(row.attempts ?? []), { at: now.toISOString(), ok: false, error: message }];
-    if (opts.terminal || row.attemptCount >= this.maxAttempts()) {
-      row.status = 'failed';
-      row.nextAttemptAt = null;
-    } else {
-      // Exponential backoff: base, 2×base, 4×base…
-      row.nextAttemptAt = new Date(now.getTime() + this.retryBaseMs() * 2 ** (row.attemptCount - 1));
-      if (opts.sub) {
-        opts.sub.failureCount += 1;
-        await this.subsRepo.save(opts.sub);
-      }
+    const attemptCount = row.attemptCount + 1;
+    const attempts = [...(row.attempts ?? []), { at: now.toISOString(), ok: false, error: message }];
+    const terminal = opts.terminal || attemptCount >= this.maxAttempts();
+    const status: PushDispatchStatus = terminal ? 'failed' : 'pending';
+    // Exponential backoff: base, 2×base, 4×base…
+    const nextAttemptAt = terminal
+      ? null
+      : new Date(now.getTime() + this.retryBaseMs() * 2 ** (attemptCount - 1));
+
+    const result = await this.repo.update(
+      { id: row.id, status: 'pending' },
+      { status, nextAttemptAt, attemptCount, lastError: message, attempts },
+    );
+    if (!result.affected) {
+      this.logger.debug(
+        `Push dispatch ${row.id} recordFailure skipped: row moved off 'pending' before this write landed (concurrently superseded or already terminal).`,
+      );
+      return;
     }
-    await this.repo.save(row);
+
+    row.status = status;
+    row.nextAttemptAt = nextAttemptAt;
+    row.attemptCount = attemptCount;
+    row.lastError = message;
+    row.attempts = attempts;
+    if (!terminal && opts.sub) {
+      opts.sub.failureCount += 1;
+      await this.subsRepo.save(opts.sub);
+    }
     this.logger.warn(
       `Push dispatch ${row.id} (${row.type}) attempt ${row.attemptCount} failed: ${message}`,
     );
