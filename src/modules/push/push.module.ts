@@ -10,6 +10,7 @@ import { PushDispatch } from './push-dispatch.entity';
 import { PushSubscriptionsService } from './push-subscriptions.service';
 import { PushDispatchService } from './push-dispatch.service';
 import { PushRetryService } from './push-retry.service';
+import { PushService } from './push.service';
 import { GuestPushController } from './guest-push.controller';
 
 @Module({
@@ -31,7 +32,8 @@ import { GuestPushController } from './guest-push.controller';
     PushSubscriptionsService,
     PushDispatchService,
     PushRetryService,
+    PushService,
   ],
-  exports: [PUSH_DRIVER, PushSubscriptionsService, PushDispatchService],
+  exports: [PUSH_DRIVER, PushSubscriptionsService, PushDispatchService, PushService],
 })
 export class PushModule {}
