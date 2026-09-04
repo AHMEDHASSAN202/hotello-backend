@@ -2,6 +2,46 @@ import { GUEST_LANGUAGES, GuestLanguage } from '../tenant-stays/stays.constants'
 import { Event } from './event.entity';
 
 /**
+ * Story guest-polish-v1 item A1 — mirrors the guest app's event-card date
+ * format (`hotello-guest-frontend/src/i18n/format.ts`'s `INTL_TAGS` +
+ * `formatCheckoutDate`/`formatTimeOfDay`, joined with ' · '), so the
+ * auto-announcement body reads the same as the event card instead of a raw
+ * 'YYYY-MM-DD HH:MM' stamp. Kept local to this file rather than shared
+ * with the frontend (different runtimes) — if either drifts, update both.
+ */
+const WHEN_INTL_TAGS: Record<GuestLanguage, string> = {
+  ar: 'ar-EG-u-nu-latn-ca-gregory',
+  en: 'en-GB-u-nu-latn',
+  ru: 'ru-RU-u-nu-latn',
+  fr: 'fr-FR-u-nu-latn',
+  it: 'it-IT-u-nu-latn',
+  es: 'es-ES-u-nu-latn',
+  de: 'de-DE-u-nu-latn',
+};
+
+const WHEN_STAMP_RE = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/;
+
+/** "Sat, 5 Sept · 20:00" (per-language) from a 'YYYY-MM-DD HH:MM' hotel-local stamp. */
+function formatEventWhen(stamp: string, lang: GuestLanguage): string {
+  const match = WHEN_STAMP_RE.exec(stamp);
+  if (!match) return stamp;
+  const [, y, mo, d, hh, mm] = match;
+  const date = new Date(Number(y), Number(mo) - 1, Number(d), Number(hh), Number(mm));
+  const tag = WHEN_INTL_TAGS[lang];
+  const datePart = new Intl.DateTimeFormat(tag, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  }).format(date);
+  const timePart = new Intl.DateTimeFormat(tag, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);
+  return `${datePart} · ${timePart}`;
+}
+
+/**
  * Story 21.3 AC1/AC3 — the flat `titleXx`/`bodyXx` fields
  * `TenantAnnouncementsService.create()` expects, auto-composed from an
  * event's own 7-locale `titles` map. Only locales the event actually has a
@@ -75,7 +115,7 @@ function composeFields(
 
 export function composePublishAnnouncement(event: Event): FlatAnnouncementFields {
   return composeFields(event, (lang, title) =>
-    PUBLISH_BODY[lang](title, event.startAtLocal, event.locationText),
+    PUBLISH_BODY[lang](title, formatEventWhen(event.startAtLocal, lang), event.locationText),
   );
 }
 
@@ -84,6 +124,6 @@ export function composeCancelAnnouncement(
   reason: string,
 ): FlatAnnouncementFields {
   return composeFields(event, (lang, title) =>
-    CANCEL_BODY[lang](title, event.startAtLocal, reason),
+    CANCEL_BODY[lang](title, formatEventWhen(event.startAtLocal, lang), reason),
   );
 }
