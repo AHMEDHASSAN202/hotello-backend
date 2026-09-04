@@ -6,9 +6,12 @@ import { LogPushDriver } from './log-push.driver';
 import { WebPushDriver } from './web-push.driver';
 import { PushSubscription } from './push-subscription.entity';
 import { PushDispatch } from './push-dispatch.entity';
+import { PushSubscriptionsService } from './push-subscriptions.service';
+import { GuestPushController } from './guest-push.controller';
 
 @Module({
   imports: [TypeOrmModule.forFeature([PushSubscription, PushDispatch])],
+  controllers: [GuestPushController],
   providers: [
     {
       provide: PUSH_DRIVER,
@@ -22,7 +25,8 @@ import { PushDispatch } from './push-dispatch.entity';
             })
           : new LogPushDriver(),
     },
+    PushSubscriptionsService,
   ],
-  exports: [PUSH_DRIVER],
+  exports: [PUSH_DRIVER, PushSubscriptionsService],
 })
 export class PushModule {}
