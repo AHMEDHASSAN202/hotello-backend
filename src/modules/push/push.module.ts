@@ -1,6 +1,10 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { EventBooking } from '../events/event-booking.entity';
+import { Event } from '../events/event.entity';
+import { FnbOrder } from '../fnb/fnb-order.entity';
+import { Hotel } from '../hotels/hotel.entity';
 import { Stay } from '../tenant-stays/stay.entity';
 import { PUSH_DRIVER } from './push.interface';
 import { LogPushDriver } from './log-push.driver';
@@ -9,12 +13,23 @@ import { PushSubscription } from './push-subscription.entity';
 import { PushDispatch } from './push-dispatch.entity';
 import { PushSubscriptionsService } from './push-subscriptions.service';
 import { PushDispatchService } from './push-dispatch.service';
+import { PushRemindersService } from './push-reminders.service';
 import { PushRetryService } from './push-retry.service';
 import { PushService } from './push.service';
 import { GuestPushController } from './guest-push.controller';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([PushSubscription, PushDispatch, Stay])],
+  imports: [
+    TypeOrmModule.forFeature([
+      PushSubscription,
+      PushDispatch,
+      Stay,
+      EventBooking,
+      Event,
+      FnbOrder,
+      Hotel,
+    ]),
+  ],
   controllers: [GuestPushController],
   providers: [
     {
@@ -33,6 +48,7 @@ import { GuestPushController } from './guest-push.controller';
     PushDispatchService,
     PushRetryService,
     PushService,
+    PushRemindersService,
   ],
   exports: [PUSH_DRIVER, PushSubscriptionsService, PushDispatchService, PushService],
 })
