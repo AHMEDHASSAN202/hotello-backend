@@ -1,10 +1,14 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { PUSH_DRIVER } from './push.interface';
 import { LogPushDriver } from './log-push.driver';
 import { WebPushDriver } from './web-push.driver';
+import { PushSubscription } from './push-subscription.entity';
+import { PushDispatch } from './push-dispatch.entity';
 
 @Module({
+  imports: [TypeOrmModule.forFeature([PushSubscription, PushDispatch])],
   providers: [
     {
       provide: PUSH_DRIVER,

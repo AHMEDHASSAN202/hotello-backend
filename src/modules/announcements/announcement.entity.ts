@@ -57,6 +57,10 @@ export class Announcement {
   @Column({ default: false })
   priority: boolean;
 
+  /** 23.3 AC1 — composer toggle; also set for event auto-announcements (23.3 AC3). */
+  @Column({ default: false })
+  sendPush: boolean;
+
   @Column({ type: 'jsonb', default: () => `'{}'` })
   audience: AudienceFilter;
 
