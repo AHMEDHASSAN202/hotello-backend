@@ -12,7 +12,7 @@
 #   1. applies all migrations to the (empty) database, then
 #   2. checks that the resulting schema matches the entities exactly.
 #
-# Usage:  DB_NAME=hotello_ci ./scripts/check-migrations.sh
+# Usage:  DB_NAME=gxp_ci ./scripts/check-migrations.sh
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

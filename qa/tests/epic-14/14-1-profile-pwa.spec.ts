@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process';
 test.setTimeout(420_000);
 
 function sql(query: string): string {
-  return execFileSync('docker', ['exec', 'hotello-db', 'psql', '-U', 'hotello', '-d', 'hotello', '-tAc', query], {
+  return execFileSync('docker', ['exec', 'gxp-db', 'psql', '-U', 'gxp', '-d', 'gxp', '-tAc', query], {
     encoding: 'utf8',
   }).trim();
 }

@@ -34,7 +34,7 @@ describe('AdminsService', () => {
     ({
       id: 'admin-1',
       name: 'Ahmed',
-      email: 'ahmed@hotello.app',
+      email: 'ahmed@gxp.app',
       passwordHash: 'old-hash',
       refreshTokenHash: 'refresh-hash',
       isActive: true,
@@ -68,7 +68,7 @@ describe('AdminsService', () => {
   describe('create (SA-ADM-2)', () => {
     const dto = {
       name: 'New Admin',
-      email: 'New.Admin@Hotello.APP',
+      email: 'New.Admin@GXP.APP',
       password: 'Secret123',
       roleId: 'role-1',
     };
@@ -80,7 +80,7 @@ describe('AdminsService', () => {
       const created = await service.create(dto);
 
       expect(mockedBcrypt.hash).toHaveBeenCalledWith('Secret123', 10);
-      expect(created.email).toBe('new.admin@hotello.app');
+      expect(created.email).toBe('new.admin@gxp.app');
       expect(created.passwordHash).toBe('hashed-password');
       expect(created.isActive).toBe(true);
       expect(adminsRepo.save).toHaveBeenCalled();
@@ -116,7 +116,7 @@ describe('AdminsService', () => {
         .mockResolvedValueOnce(admin) // findOne(id)
         .mockResolvedValueOnce(makeAdmin({ id: 'other' })); // email lookup
       await expect(
-        service.update('admin-1', { email: 'taken@hotello.app' }),
+        service.update('admin-1', { email: 'taken@gxp.app' }),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -128,11 +128,11 @@ describe('AdminsService', () => {
 
       const updated = await service.update('admin-1', {
         name: 'Renamed',
-        email: 'Renamed@Hotello.APP',
+        email: 'Renamed@GXP.APP',
       });
 
       expect(updated.name).toBe('Renamed');
-      expect(updated.email).toBe('renamed@hotello.app');
+      expect(updated.email).toBe('renamed@gxp.app');
     });
 
     it('returns 404 for an unknown id', async () => {

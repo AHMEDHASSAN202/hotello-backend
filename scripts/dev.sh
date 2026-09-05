@@ -14,8 +14,8 @@
 #            tenant   http://localhost:3001  (sunrise.lvh.me:3001, or
 #                                             localhost:3001/t/<slug>)
 #
-# The frontends live in sibling repos (../hotello-admin-frontend,
-# ../hotello-hotel-frontend). If they aren't checked out, this script says so
+# The frontends live in sibling repos (../gxp-admin-frontend,
+# ../gxp-hotel-frontend). If they aren't checked out, this script says so
 # and runs what it can — a standalone backend clone still works.
 #
 # Ctrl+C stops everything this script started. The Postgres container is left
@@ -34,12 +34,12 @@ SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 
 BACKEND="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKSPACE="$(cd "$BACKEND/.." && pwd)"
-ADMIN="$WORKSPACE/hotello-admin-frontend"
-TENANT="$WORKSPACE/hotello-hotel-frontend"
+ADMIN="$WORKSPACE/gxp-admin-frontend"
+TENANT="$WORKSPACE/gxp-hotel-frontend"
 
 # npm's shared cache has root-owned entries on some machines; a local cache dir
 # keeps `npm install` from failing with EACCES.
-NPM_CACHE="${TMPDIR:-/tmp}/npm-cache-hotello"
+NPM_CACHE="${TMPDIR:-/tmp}/npm-cache-gxp"
 
 C_RESET=$'\033[0m'; C_DIM=$'\033[2m'; C_RED=$'\033[31m'
 C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_BLUE=$'\033[34m'; C_MAGENTA=$'\033[35m'
@@ -76,7 +76,7 @@ drop_service() { # remove $1 from SERVICES
 require_repo() { # $1 dir, $2 service, $3 repo name
   [[ -d "$1" ]] && return 0
   if [[ $EXPLICIT -eq 1 ]]; then
-    die "$3 not found at $1 — clone it next to hotello-backend"
+    die "$3 not found at $1 — clone it next to gxp-backend"
   fi
   warn "$3 not checked out — skipping '$2' (expected at $1)"
   drop_service "$2"
@@ -149,15 +149,15 @@ start_db() {
     docker info >/dev/null 2>&1 || die "Docker daemon is not running (start Docker Desktop, or use --no-db)"
   fi
 
-  info "starting Postgres (hotello-db, host port 5433)…"
+  info "starting Postgres (gxp-db, host port 5433)…"
   (cd "$BACKEND" && docker compose up -d) >/dev/null 2>&1 \
     || die "docker compose up failed — run it in $(basename "$BACKEND")/ to see why"
 
   # docker-compose.yml defines a pg_isready healthcheck; wait for it.
   for _ in $(seq 45); do
-    case "$(docker inspect -f '{{.State.Health.Status}}' hotello-db 2>/dev/null)" in
+    case "$(docker inspect -f '{{.State.Health.Status}}' gxp-db 2>/dev/null)" in
       healthy)   ok "Postgres healthy"; return 0 ;;
-      unhealthy) die "hotello-db reports unhealthy — check 'docker logs hotello-db'" ;;
+      unhealthy) die "gxp-db reports unhealthy — check 'docker logs gxp-db'" ;;
     esac
     sleep 1
   done
@@ -166,8 +166,8 @@ start_db() {
 
 # ------------------------------------------------------------------ boot
 
-wants admin  && require_repo "$ADMIN"  admin  "hotello-admin-frontend"
-wants tenant && require_repo "$TENANT" tenant "hotello-hotel-frontend"
+wants admin  && require_repo "$ADMIN"  admin  "gxp-admin-frontend"
+wants tenant && require_repo "$TENANT" tenant "gxp-hotel-frontend"
 [[ ${#SERVICES[@]} -eq 0 ]] && die "nothing to run"
 
 printf '%s\n' "${C_DIM}GXP local stack — ${SERVICES[*]}${C_RESET}"

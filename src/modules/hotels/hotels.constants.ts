@@ -28,7 +28,6 @@ export const RESERVED_SLUGS = [
   'dev',
   'test',
   'tenant',
-  'hotello',
   'gxp',
 ] as const;
 

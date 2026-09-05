@@ -234,7 +234,7 @@ test('13.1 AC5 — audit stay.checked_in carries guest/room/dates but never the 
 function outboxRow(hotelId: string, stayId: string): string | null {
   const out = execFileSync(
     'docker',
-    ['exec', 'hotello-db', 'psql', '-U', 'hotello', '-d', 'hotello', '-tAc',
+    ['exec', 'gxp-db', 'psql', '-U', 'gxp', '-d', 'gxp', '-tAc',
      `SELECT row_to_json(t) FROM (SELECT type, language, "recipientEmail", status, "bodyHtml" FROM notification_outbox WHERE "hotelId"='${hotelId}' AND type='stay_code' AND "dedupeKey" LIKE 'stay_code:${stayId}:%' ORDER BY "createdAt" DESC LIMIT 1) t`],
     { encoding: 'utf8' },
   ).trim();
@@ -244,7 +244,7 @@ function outboxRow(hotelId: string, stayId: string): string | null {
 function outboxCount(hotelId: string): number {
   return Number(execFileSync(
     'docker',
-    ['exec', 'hotello-db', 'psql', '-U', 'hotello', '-d', 'hotello', '-tAc',
+    ['exec', 'gxp-db', 'psql', '-U', 'gxp', '-d', 'gxp', '-tAc',
      `SELECT count(*) FROM notification_outbox WHERE "hotelId"='${hotelId}' AND type='stay_code'`],
     { encoding: 'utf8' },
   ).trim());

@@ -3,7 +3,7 @@ import { Event } from './event.entity';
 
 /**
  * Story guest-polish-v1 item A1 — mirrors the guest app's event-card date
- * format (`hotello-guest-frontend/src/i18n/format.ts`'s `INTL_TAGS` +
+ * format (`gxp-guest-frontend/src/i18n/format.ts`'s `INTL_TAGS` +
  * `formatCheckoutDate`/`formatTimeOfDay`, joined with ' · '), so the
  * auto-announcement body reads the same as the event card instead of a raw
  * 'YYYY-MM-DD HH:MM' stamp. Kept local to this file rather than shared

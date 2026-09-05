@@ -9,7 +9,7 @@ describe('LocalStorageDriver', () => {
   let driver: LocalStorageDriver;
 
   beforeEach(async () => {
-    base = await mkdtemp(join(tmpdir(), 'hotello-storage-'));
+    base = await mkdtemp(join(tmpdir(), 'gxp-storage-'));
     driver = new LocalStorageDriver(base);
   });
 

@@ -1,6 +1,6 @@
-# hotello-backend
+# gxp-backend
 
-Hotello (GXP) unified backend API — NestJS 10 · TypeORM · PostgreSQL.
+GXP unified backend API — NestJS 10 · TypeORM · PostgreSQL.
 
 ## Running the local stack
 
@@ -19,14 +19,14 @@ this API, and whichever frontends are checked out alongside this repo.
 | Backend API | http://localhost:4000/api/v1 |
 | Super Admin dashboard | http://localhost:3000 |
 | Tenant dashboard | http://localhost:3001/t/`<slug>` — or `<slug>`.lvh.me:3001 |
-| Postgres | `localhost:5433` (container `hotello-db`) |
+| Postgres | `localhost:5433` (container `gxp-db`) |
 
 It waits for the database healthcheck, applies migrations, bootstraps any missing
 `.env` from `.env.example`, and prefixes each service's log lines. Ctrl+C stops
 everything it started; the Postgres container is left up (`docker compose down`).
 
-The frontends live in sibling repos (`../hotello-admin-frontend`,
-`../hotello-hotel-frontend`). If they aren't checked out the script says so and
+The frontends live in sibling repos (`../gxp-admin-frontend`,
+`../gxp-hotel-frontend`). If they aren't checked out the script says so and
 runs what it can, so a standalone clone of this repo still works.
 
 ## PDF generation
@@ -162,5 +162,5 @@ guard: against a throwaway Postgres it runs every migration and then
 `--check` finds the drift and the script exits non-zero.
 
 ```bash
-DB_NAME=hotello_ci ./scripts/check-migrations.sh
+DB_NAME=gxp_ci ./scripts/check-migrations.sh
 ```

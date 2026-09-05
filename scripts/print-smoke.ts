@@ -3,7 +3,7 @@
  * without a logo) and the room-cards sheet through real Chromium and asserts
  * every artifact is exactly one page per sheet. Run with:
  *   npx ts-node -T scripts/print-smoke.ts
- * Writes the PDFs to /tmp/hotello-print-smoke/ for eyeballing.
+ * Writes the PDFs to /tmp/gxp-print-smoke/ for eyeballing.
  */
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -12,7 +12,7 @@ import { posterTemplate } from '../src/modules/tenant-rooms/pdf/poster.template'
 import { cardsTemplate } from '../src/modules/tenant-rooms/pdf/cards.template';
 import { PdfRendererService } from '../src/modules/tenant-rooms/pdf/pdf-renderer.service';
 
-const OUT_DIR = '/tmp/hotello-print-smoke';
+const OUT_DIR = '/tmp/gxp-print-smoke';
 
 // Tall-ish square logo — worst case for the poster header (max-height wins).
 const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" rx="36" fill="#0E2A47"/><text x="100" y="125" font-size="72" text-anchor="middle" fill="#C8A24A" font-family="sans-serif">GH</text></svg>`;

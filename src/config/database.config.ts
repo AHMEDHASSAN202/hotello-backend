@@ -17,9 +17,9 @@ export function databaseConnectionOptions(): PostgresConnectionOptions {
     type: 'postgres',
     host: process.env.DB_HOST ?? 'localhost',
     port: parseInt(process.env.DB_PORT ?? '5432', 10),
-    username: process.env.DB_USER ?? 'hotello',
-    password: process.env.DB_PASSWORD ?? 'hotello',
-    database: process.env.DB_NAME ?? 'hotello',
+    username: process.env.DB_USER ?? 'gxp',
+    password: process.env.DB_PASSWORD ?? 'gxp',
+    database: process.env.DB_NAME ?? 'gxp',
     synchronize: false,
   };
 }

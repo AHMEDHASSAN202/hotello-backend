@@ -66,7 +66,7 @@ test.beforeAll(async ({ request, adminToken }) => {
   hotels.live = await provisionHotel(request, { epic: 'e17', tag: `uiliv${Date.now().toString(36)}`, planId: fullPlan, adminToken });
   await addRooms(request, hotels.live, ['731', '732', '733', '734', '735']);
   const ess = await putEssentials(request, hotels.live.ownerToken, {
-    wifiName: 'Hotello-Guest',
+    wifiName: 'GXP-Guest',
     wifiPassword: 'sunrise2026',
     receptionPhone: '+20 100 123 4567',
   });
@@ -180,7 +180,7 @@ test('17.2 AC1/AC2 — live: nav slot appears and the directory opens, Essential
   expect(essentialsBox?.y ?? -1, 'essentials pinned first').toBeLessThan(facilitiesBox?.y ?? 99999);
 
   // The Essentials card content + tap-to-call links.
-  await expect(page.getByText('Hotello-Guest')).toBeVisible();
+  await expect(page.getByText('GXP-Guest')).toBeVisible();
   await expect(page.getByText('sunrise2026')).toBeVisible();
   await expect(page.locator('a[href="tel:+20 100 123 4567"]')).toBeVisible();
   // The bottom-nav info slot is live only now (AC1).

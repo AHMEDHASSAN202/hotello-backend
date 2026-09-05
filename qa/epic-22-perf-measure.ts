@@ -10,7 +10,7 @@
  * often slower than steady state; both numbers are printed so neither
  * over- nor under-states real performance.
  *
- * Run from `hotello-backend/` (same TS_NODE_PROJECT override the seed script
+ * Run from `gxp-backend/` (same TS_NODE_PROJECT override the seed script
  * needs — see qa/epic-22-report.md "How to reproduce" for why):
  *   TS_NODE_PROJECT=tsconfig.json npx ts-node -r tsconfig-paths/register qa/epic-22-perf-measure.ts
  */

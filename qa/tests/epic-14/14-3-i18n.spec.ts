@@ -119,7 +119,7 @@ test('14.3 AC1 — the seven locale files pass the repo parity check', async () 
   // The guest repo's own check runs across all seven bundles — a red parity
   // is a red build per the repo law; we run it here so E2E fails with it.
   const out = execFileSync('npm', ['run', 'check:i18n'], {
-    cwd: process.env.GXP_GUEST_REPO ?? '/Users/ahmedhassan/Desktop/Projects/Hotello/hotello-guest-frontend',
+    cwd: process.env.GXP_GUEST_REPO ?? '/Users/ahmedhassan/Desktop/Projects/GXP/gxp-guest-frontend',
     encoding: 'utf8',
   });
   expect(out.toLowerCase()).not.toContain('missing');

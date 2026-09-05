@@ -1,6 +1,6 @@
 /**
  * Epic 11 — Story 11.1 Room Types (API-level E2E).
- * Spec: hotello-backend/specs/epic-11-rooms-qr-user-stories.md
+ * Spec: gxp-backend/specs/epic-11-rooms-qr-user-stories.md
  */
 import { expect, test } from '../../fixtures';
 import { apiPatch, apiPost } from '../../helpers/gxp-api';

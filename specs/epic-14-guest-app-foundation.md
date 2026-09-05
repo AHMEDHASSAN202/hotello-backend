@@ -1,6 +1,6 @@
 # Epic 14 — Guest App Foundation (PWA)
 
-> **Scope:** The guest-facing PWA — a **new Next.js project** (`hotello-guest-frontend`) and the fourth surface of the platform. This epic ships the foundation everything guest-side builds on: the entry/session flow (consuming Epic 13.5's contract verbatim), the **7-language i18n foundation** (ar, en, ru, fr, it, es, de — this absorbs the planned Guest Localization epic), the home screen, and the PWA machinery.
+> **Scope:** The guest-facing PWA — a **new Next.js project** (`gxp-guest-frontend`) and the fourth surface of the platform. This epic ships the foundation everything guest-side builds on: the entry/session flow (consuming Epic 13.5's contract verbatim), the **7-language i18n foundation** (ar, en, ru, fr, it, es, de — this absorbs the planned Guest Localization epic), the home screen, and the PWA machinery.
 >
 > **The prime directive of this epic: it must feel like a native app, not a website.** Guests will compare it to Instagram and WhatsApp, not to other hotel software. Design and interaction quality outrank feature count everywhere in this epic — see Story 14.5, which is a real story with acceptance criteria, not a vibe.
 >
@@ -20,7 +20,7 @@
 
 ### Acceptance Criteria
 
-- **AC1 — New project:** `hotello-guest-frontend`, Next.js App Router, same tooling family as the other frontends. Mobile-only viewport strategy (desktop shows a centered phone-width layout — no desktop redesign).
+- **AC1 — New project:** `gxp-guest-frontend`, Next.js App Router, same tooling family as the other frontends. Mobile-only viewport strategy (desktop shows a centered phone-width layout — no desktop redesign).
 - **AC2 — PWA manifest:** name/short_name from the resolved hotel where possible, standalone display, theme-color, maskable icons, correct `viewport-fit=cover` + safe-area-inset handling (notches, home indicators).
 - **AC3 — Service worker:** app shell cached for instant repeat opens; an offline fallback screen ("You're offline — reconnect to the hotel WiFi") in the guest's language; **no aggressive caching of API data** in MVP (correctness first).
 - **AC4 — Performance budget (enforced, not aspirational):** LCP < 2.5s and TTI < 3.5s on a mid-range Android over throttled 4G (Lighthouse mobile CI check); initial JS budget set and asserted in the build. Fonts subset per script (see 14.3 AC5).
@@ -139,4 +139,4 @@
 - **Accent gating is server-side** — `brandAccentColor` is nulled in the response unless the plan includes `guest_app_branding`; the app never sees a color it shouldn't render. Column is `hotels.brandAccentColor` varchar(7) nullable (migration `1786200000000-GuestAppFoundation`); no setter UI this epic.
 - **`requests` module key added** to `MODULE_CATALOG` (`Guest Requests` / `طلبات النزلاء`) so plan gating of the Requests tile works from day one; the "Hotel Info" tile is unconditional (no key). Dining maps to `fnb`, Transport to `transportation`.
 - **camelCase confirmed** — the app sends `{ roomNumber, code }` per the recorded 13.5 decision.
-- **Repo named `hotello-guest-frontend`** (originally spec'd as `gxp-guest-frontend`) — matches the `hotello-*` naming of the other three repos.
+- **Repo named `gxp-guest-frontend`** (originally spec'd as `gxp-guest-frontend`) — matches the `gxp-*` naming of the other three repos.

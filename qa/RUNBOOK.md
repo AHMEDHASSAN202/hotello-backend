@@ -1,6 +1,6 @@
 # QA E2E Runbook — read before writing suites
 
-You are extending the GXP E2E QA suites in `hotello-backend/qa/`. Rules: tests
+You are extending the GXP E2E QA suites in `gxp-backend/qa/`. Rules: tests
 + reports ONLY. Never modify application code in any repo. Never modify shared
 harness files (`helpers/*`, `fixtures.ts`, `playwright.config.ts`) — import
 them, and put any epic-specific helpers in your own `tests/epic-NN/helpers.ts`.
@@ -9,8 +9,8 @@ Do NOT `git commit` — the orchestrator commits after review.
 ## Environment
 
 - Stack: backend `http://localhost:4000/api/v1`, tenant app `:3001`, guest app `:3002`
-  (guest hotels at `http://localhost:3002/{slug}`), Postgres in docker (`hotello-db`).
-- Super Admin: `admin@hotello.app` / `ChangeMe123` (see `helpers/gxp-api.ts`).
+  (guest hotels at `http://localhost:3002/{slug}`), Postgres in docker (`gxp-db`).
+- Super Admin: `admin@gxp.app` / `ChangeMe123` (see `helpers/gxp-api.ts`).
 - Helpers you must reuse (read them first):
   - `helpers/gxp-api.ts` — admin/tenant auth, `provisionHotel` (onboards hotel +
     owner via the real flows), `createPlan`, `createFullModulePlan`, room helpers.
@@ -23,7 +23,7 @@ Do NOT `git commit` — the orchestrator commits after review.
   - `helpers/db.ts` — `sql`, audit lookups, `deleteQaHotels`.
   - `fixtures.ts` — `test`/`expect` + worker-scoped `hotel`, `adminToken`,
     `standardType` fixtures.
-- Run: `cd hotello-backend/qa && GXP_CLEANUP_PREFIX=qa-e16- npx playwright test tests/epic-16 --workers=2`
+- Run: `cd gxp-backend/qa && GXP_CLEANUP_PREFIX=qa-e16- npx playwright test tests/epic-16 --workers=2`
   (use YOUR epic's prefix; the cleanup only deletes hotels with slugs starting
   with it — parallel agents rely on this).
 - Typecheck before declaring done: `npx tsc --noEmit -p tsconfig.json`.

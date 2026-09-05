@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# GXP / Hotello — start the whole local stack.
+# GXP — start the whole local stack.
 #
 #   ./dev.sh                 Postgres + backend + both frontends
 #   ./dev.sh --no-db         skip Docker/Postgres (DB already running elsewhere)
@@ -13,18 +13,18 @@
 #            tenant   http://localhost:3001   (sunrise.lvh.me:3001 / localhost:3001/t/<slug>)
 #
 # Ctrl+C stops everything this script started. The Postgres container is left
-# running on purpose — `docker compose down` in hotello-backend/ stops it.
+# running on purpose — `docker compose down` in gxp-backend/ stops it.
 
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BACKEND="$ROOT/hotello-backend"
-ADMIN="$ROOT/hotello-admin-frontend"
-TENANT="$ROOT/hotello-hotel-frontend"
+BACKEND="$ROOT/gxp-backend"
+ADMIN="$ROOT/gxp-admin-frontend"
+TENANT="$ROOT/gxp-hotel-frontend"
 
 # npm's shared cache has root-owned entries on this machine; a local cache dir
 # keeps `npm install` from failing with EACCES.
-NPM_CACHE="${TMPDIR:-/tmp}/npm-cache-hotello"
+NPM_CACHE="${TMPDIR:-/tmp}/npm-cache-gxp"
 
 C_RESET=$'\033[0m'; C_DIM=$'\033[2m'; C_RED=$'\033[31m'
 C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_BLUE=$'\033[34m'; C_MAGENTA=$'\033[35m'
@@ -68,7 +68,7 @@ cleanup() {
     [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && kill_tree "$pid"
   done
   wait 2>/dev/null
-  ok "stopped. Postgres is still up — 'cd hotello-backend && docker compose down' to stop it."
+  ok "stopped. Postgres is still up — 'cd gxp-backend && docker compose down' to stop it."
 }
 trap cleanup INT TERM EXIT
 
@@ -116,15 +116,15 @@ start_db() {
     docker info >/dev/null 2>&1 || die "Docker daemon is not running (start Docker Desktop, or use --no-db)"
   fi
 
-  info "starting Postgres (hotello-db, host port 5433)…"
+  info "starting Postgres (gxp-db, host port 5433)…"
   (cd "$BACKEND" && docker compose up -d) >/dev/null 2>&1 \
-    || die "docker compose up failed — run it in hotello-backend/ to see why"
+    || die "docker compose up failed — run it in gxp-backend/ to see why"
 
   # docker-compose.yml defines a pg_isready healthcheck; wait for it.
   for _ in $(seq 45); do
-    case "$(docker inspect -f '{{.State.Health.Status}}' hotello-db 2>/dev/null)" in
+    case "$(docker inspect -f '{{.State.Health.Status}}' gxp-db 2>/dev/null)" in
       healthy) ok "Postgres healthy"; return 0 ;;
-      unhealthy) die "hotello-db reports unhealthy — check 'docker logs hotello-db'" ;;
+      unhealthy) die "gxp-db reports unhealthy — check 'docker logs gxp-db'" ;;
     esac
     sleep 1
   done

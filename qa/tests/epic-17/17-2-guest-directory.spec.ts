@@ -51,7 +51,7 @@ test.beforeAll(async ({ request, adminToken }) => {
   expect(settings.status, JSON.stringify(settings.body)).toBe(200);
 
   const essentials = await putEssentials(request, token, {
-    wifiName: 'Hotello-Guest',
+    wifiName: 'GXP-Guest',
     wifiPassword: 'sunrise2026',
     receptionPhone: '+20 100 123 4567',
     whatsapp: '+20 100 123 4568',
@@ -129,7 +129,7 @@ test('17.2 AC2/AC3 — an ar guest gets the pinned Essentials, curated order, pe
 
   // Essentials pinned first and fully populated; checkout projected from 13.
   expect(info.essentials).not.toBeNull();
-  expect(info.essentials!.wifiName).toBe('Hotello-Guest');
+  expect(info.essentials!.wifiName).toBe('GXP-Guest');
   expect(info.essentials!.wifiPassword).toBe('sunrise2026');
   expect(info.essentials!.receptionPhone).toBe('+20 100 123 4567');
   expect(info.essentials!.checkoutTime).toBe('11:30');

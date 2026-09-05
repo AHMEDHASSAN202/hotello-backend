@@ -1,7 +1,7 @@
 # QA Report — Epic 15: Guest Requests (End to End)
 
-- **Suite:** `hotello-backend/qa/tests/epic-15/` (Playwright, 4 spec files, 29 tests)
-- **Surfaces under test:** hotello-backend (public guest tree + tenant requests/catalog), hotello-guest-frontend (`:3002`, real browser for submit/track/empty-catalog flows)
+- **Suite:** `gxp-backend/qa/tests/epic-15/` (Playwright, 4 spec files, 29 tests)
+- **Surfaces under test:** gxp-backend (public guest tree + tenant requests/catalog), gxp-guest-frontend (`:3002`, real browser for submit/track/empty-catalog flows)
 - **Stack:** local dev stack, migrations + seed applied
 - **Result: 29 passed / 0 failed.** One carried **major** finding re-confirmed at three levels (QA-14-001) and one new minor API-contract finding (QA-15-001).
 
@@ -19,7 +19,7 @@
   3. Tenant API: `GET /tenant/requests` and `/tenant/request-catalog` → `403 MODULE_NOT_ENABLED`.
 - **Root cause:** the seeded Standard/Free Trial plan rows predate the `requests` module key; seeds are find-or-create and never refresh `enabled_modules`.
 - **Evidence:** `qa/tests/epic-15/15-3-board-lifecycle.spec.ts` › module-gating test (fresh hotel on the seeded plan → both surfaces 403), plus every suite in this epic needing explicit `createFullModulePlan` provisioning to run at all.
-- **Repo/area:** hotello-backend seed / backfill migration. All newly created plans behave correctly.
+- **Repo/area:** gxp-backend seed / backfill migration. All newly created plans behave correctly.
 
 ### QA-15-001 — open-tab board ignores `categoryId` / `floor` / `assigneeId` / `overdue` query params
 
@@ -31,7 +31,7 @@
   2. `GET /tenant/requests?overdue=1` → the response includes **all** open requests (not just overdue); same for `categoryId`/`floor`/`assigneeId` — accepted, unapplied.
 - **Expected vs actual:** per the DTO documentation, server-side filtering; actual: only `hotelId` + open-status (+ `updatedSince`) are applied on the open tab. The **history** tab applies category/assignee/floor/status server-side, and `counts.overdueNow` is correctly computed — the product's own tenant UI is unaffected (it filters the open board client-side and only server-filters history), which is why this is minor.
 - **Failing test:** `qa/tests/epic-15/15-3-board-lifecycle.spec.ts` › `15.4 AC2 — board filters…` (asserts the implemented contract: open-tab = client-side, history-tab = server-side, `counts.overdueNow` correct).
-- **Repo/area:** hotello-backend — `tenant-requests.service.ts` `listBoard` (params validated by the DTO but never read).
+- **Repo/area:** gxp-backend — `tenant-requests.service.ts` `listBoard` (params validated by the DTO but never read).
 
 ### Observations
 

@@ -17,7 +17,7 @@ import type { Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 
 function sql(query: string): string {
-  return execFileSync('docker', ['exec', 'hotello-db', 'psql', '-U', 'hotello', '-d', 'hotello', '-tAc', query], {
+  return execFileSync('docker', ['exec', 'gxp-db', 'psql', '-U', 'gxp', '-d', 'gxp', '-tAc', query], {
     encoding: 'utf8',
   }).trim();
 }

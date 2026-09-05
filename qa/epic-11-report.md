@@ -1,7 +1,7 @@
 # QA Report — Epic 11: Rooms Management & QR Codes
 
-- **Suite:** `hotello-backend/qa/tests/epic-11/` (Playwright, 9 spec files, 74 tests)
-- **Surfaces under test:** hotello-backend API (`/api/v1`), hotello-hotel-frontend tenant dashboard (`:3001`)
+- **Suite:** `gxp-backend/qa/tests/epic-11/` (Playwright, 9 spec files, 74 tests)
+- **Surfaces under test:** gxp-backend API (`/api/v1`), gxp-hotel-frontend tenant dashboard (`:3001`)
 - **Stack:** local dev stack (`./dev.sh backend tenant`), Postgres 16 via docker compose, migrations applied, seed applied
 - **Result: 73 passed / 1 failed** — the single failure is a verified product bug (QA-11-001).
 - **Determinism:** every test seeds its own data through the real API (hotel onboarding → owner setup → login); worker-scoped hotels with per-suite room-number ranges; global setup/teardown deletes every `qa-*` hotel via SQL (QA-only slug namespace; no hard-delete API exists). Login rate limits are respected with a cross-process pacer (`helpers/throttle.ts`), so the suite runs ~16 minutes.
@@ -23,7 +23,7 @@
   - **Expected:** issue `{ field: "roomTypeId", code: "UNKNOWN_TYPE" }` — the stable code exists in `room-rows.ts` and has a dedicated translation in the tenant dashboard (`rooms.excel.import.issue.UNKNOWN_TYPE` = "This room type doesn't match any of your room types.").
   - **Actual:** issue `{ field: "roomTypeId", code: "REQUIRED" }` — the UI would tell the user "This field is required." for a cell they *did* fill in. The `UNKNOWN_TYPE` branch is dead code on the import path.
 - **Failing test:** `qa/tests/epic-11/11-7-excel.spec.ts` › `11.7 AC4 — import preview reports per-row errors (unknown type, bad status, empty)`
-- **Repo/area (best guess, no fix applied):** hotello-backend — `src/modules/tenant-rooms/xlsx/parse-import.ts` maps an unmatched type *name* to `roomTypeId: null`, and `src/modules/tenant-rooms/room-rows.ts` (`validateRoomRows`) emits `REQUIRED` for any falsy `roomTypeId`, so the parser cannot distinguish "cell left empty" from "name not found". The UI-facing translation lives in hotello-hotel-frontend `messages/en/rooms.json`.
+- **Repo/area (best guess, no fix applied):** gxp-backend — `src/modules/tenant-rooms/xlsx/parse-import.ts` maps an unmatched type *name* to `roomTypeId: null`, and `src/modules/tenant-rooms/room-rows.ts` (`validateRoomRows`) emits `REQUIRED` for any falsy `roomTypeId`, so the parser cannot distinguish "cell left empty" from "name not found". The UI-facing translation lives in gxp-hotel-frontend `messages/en/rooms.json`.
 - **Verification performed:** reproduced with a hand-built workbook via a raw authenticated API call outside the suite (same `REQUIRED` response), and confirmed by code reading that the `UNKNOWN_TYPE` branch can only fire on the range path (non-null-but-foreign UUID), never on imports.
 
 ### QA-11-002 — Amber usage warning triggers at exactly 80%; spec says "exceeds 80%"
@@ -38,7 +38,7 @@
   - **Expected (strict reading):** no amber at exactly 80%; indicator only when usage *exceeds* 80%.
   - **Actual:** badge is amber at exactly 80% (`usageAmber` computes `used / max >= 0.8` in the tenant frontend rooms page). 60% is correctly not amber.
 - **Failing test:** none — the boundary behavior is deliberately asserted in `qa/tests/epic-11/11-9-ui-rooms.spec.ts` › `11.2 AC3 — usage badge shows used vs plan max; amber from 80% (spec: >80%)`, which documents both sides of the boundary and passes. Recorded here so product can decide whether the threshold should be exclusive.
-- **Repo/area (best guess):** hotello-hotel-frontend — `src/app/t/[slug]/(dashboard)/rooms/page.tsx` (`usageAmber`).
+- **Repo/area (best guess):** gxp-hotel-frontend — `src/app/t/[slug]/(dashboard)/rooms/page.tsx` (`usageAmber`).
 
 ### QA-11-003 — QR PDFs are not byte-stable across regeneration (QR codes are)
 
@@ -47,7 +47,7 @@
 - **Acceptance criterion touched:** 11.5 AC4 ("regenerating PDFs anytime yields identical codes").
 - **Evidence:** two consecutive `GET /tenant/rooms/pdf/poster?size=a4` responses have different MD5s (PDF embeds render timestamps), while two consecutive room-QR PNGs are byte-identical, and decoded QR payloads are identical (`…/{slug}?room=N`). The spec's "identical **codes**" is satisfied; byte-level file stability is not, and arguably not intended.
 - **Failing test:** none — `qa/tests/epic-11/11-5-qr-pdfs.spec.ts` › `11.5 AC4 — regeneration is byte-identical for QRs (derived, nothing stored)` asserts QR byte-identity and only PDF validity for the poster.
-- **Repo/area:** hotello-backend — `src/modules/tenant-rooms/pdf/pdf-renderer.service.ts` (Chromium print-to-PDF timestamps). No action required unless byte-stable PDFs become a requirement.
+- **Repo/area:** gxp-backend — `src/modules/tenant-rooms/pdf/pdf-renderer.service.ts` (Chromium print-to-PDF timestamps). No action required unless byte-stable PDFs become a requirement.
 
 ---
 

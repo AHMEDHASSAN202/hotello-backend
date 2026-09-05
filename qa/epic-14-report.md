@@ -1,7 +1,7 @@
 # QA Report — Epic 14: Guest App Foundation (PWA)
 
-- **Suite:** `hotello-backend/qa/tests/epic-14/` (Playwright, 5 spec files, 30 tests)
-- **Surfaces under test:** hotello-guest-frontend (`:3002`, real browser), hotello-backend public guest endpoints, hotello-hotel-frontend (none — tenant-side only via setup)
+- **Suite:** `gxp-backend/qa/tests/epic-14/` (Playwright, 5 spec files, 30 tests)
+- **Surfaces under test:** gxp-guest-frontend (`:3002`, real browser), gxp-backend public guest endpoints, gxp-hotel-frontend (none — tenant-side only via setup)
 - **Stack:** local dev stack (API :4000, tenant :3001, guest :3002), migrations + seed applied
 - **Result: 30 passed / 0 failed.** One product-level data finding (QA-14-001, minor) plus observations.
 - **Isolation model:** guest-session UI tests use dedicated per-run hotels (rate-limit budget + localStorage is per-origin across all slugs); PWA/profile tests provision fresh hotels so the profile endpoint's 60s per-slug cache never masks state changes.
@@ -23,7 +23,7 @@
   - **Expected:** adding `requests` to `MODULE_CATALOG` (Epic 14) should surface the Requests tile for hotels on the Standard plan — the seed created that plan with "all modules, no limits".
   - **Actual:** `ALL_MODULE_KEYS` grew when `requests` (and `guest_app_branding`, `events`) joined the catalog, but the **existing** Standard/Free Trial plan rows were seeded find-or-create style and never backfilled. Every hotel on a pre-Epic-14 plan lacks the new keys — the "flip a flag" activation cannot reach them.
 - **Failing test:** none fails outright — `qa/tests/epic-14/14-4-home.spec.ts` › `14.4 AC3 — services grid: live tiles, "Soon" tile, gating follows enabled_modules` documents the correct gating behavior on **freshly created** plans (which do include `requests`) and is the test that exposed the gap.
-- **Repo/area (best guess, no fix applied):** hotello-backend — `src/database/seeds/seed.ts` (find-or-create plans never refresh `enabled_modules`) / a backfill migration. Newly created plans behave correctly (verified).
+- **Repo/area (best guess, no fix applied):** gxp-backend — `src/database/seeds/seed.ts` (find-or-create plans never refresh `enabled_modules`) / a backfill migration. Newly created plans behave correctly (verified).
 - **Why not a test bug:** verified outside the suite — `GET /guest/demo-hotel/profile` (a hotel that predates Epic 14) shows the stale module list, while freshly created plans include every current catalog key.
 
 ### Observations (no AC violated)

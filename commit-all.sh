@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Commit all pending changes in every Hotello sub-repo (the workspace root is
+# Commit all pending changes in every GXP sub-repo (the workspace root is
 # not a git repository — each subproject has its own).
 #
 # Usage:
@@ -16,7 +16,7 @@ BRANCH="${1:-master}"
 MESSAGE="${2:-}"
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-REPOS=(hotello-backend hotello-admin-frontend hotello-hotel-frontend)
+REPOS=(gxp-backend gxp-admin-frontend gxp-hotel-frontend)
 
 for repo in "${REPOS[@]}"; do
   dir="$ROOT/$repo"

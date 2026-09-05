@@ -133,7 +133,7 @@ at higher volume — not a finding against this task's ~50-room MVP scope.
    `target: es2022`, `strict: true`, no `experimentalDecorators`/
    `emitDecoratorMetadata`). `ts-node` resolves the nearest `tsconfig.json`
    starting from the **entry script's directory**, not the process's cwd —
-   so running `ts-node qa/epic-22-perf-seed.ts` from `hotello-backend/`
+   so running `ts-node qa/epic-22-perf-seed.ts` from `gxp-backend/`
    picks up `qa/tsconfig.json` instead of the root one. With
    `useDefineForClassFields` defaulting to `true` under `es2022`, every
    TypeORM entity in the app fails to compile (`TS2564: Property 'X' has no
@@ -163,7 +163,7 @@ at higher volume — not a finding against this task's ~50-room MVP scope.
 ## How to reproduce
 
 ```bash
-docker ps                                    # confirm hotello-db is up on 5433
+docker ps                                    # confirm gxp-db is up on 5433
 npm run migration:run
 TS_NODE_PROJECT=tsconfig.json npx ts-node -r tsconfig-paths/register qa/epic-22-perf-seed.ts
 TS_NODE_PROJECT=tsconfig.json npx ts-node -r tsconfig-paths/register qa/epic-22-perf-measure.ts
@@ -237,7 +237,7 @@ something the pilot hotel's expected volume will approach.
 
 ## Frontend status (added post-backend-perf-report)
 
-The Epic 22 frontend (hotello-hotel-frontend) shipped across Tasks F1a-F3:
+The Epic 22 frontend (gxp-hotel-frontend) shipped across Tasks F1a-F3:
 Overview dashboard, all seven report tabs (guests/services/housekeeping/
 dining/events/totals/balances), xlsx/CSV exports, the analytics upsell
 sample-data preview, and revenue-permission scoping in the UI. Task F3

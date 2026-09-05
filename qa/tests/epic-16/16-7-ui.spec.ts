@@ -1,7 +1,7 @@
 /**
  * Epic 16 — UI level: the guest dining flow (tile → browse → cart →
- * checkout → tracking, QR prefill) on hotello-guest-frontend :3002 and the
- * kitchen board on hotello-hotel-frontend :3001.
+ * checkout → tracking, QR prefill) on gxp-guest-frontend :3002 and the
+ * kitchen board on gxp-hotel-frontend :3001.
  */
 import { expect, test } from '../../fixtures';
 import type { Page } from '@playwright/test';

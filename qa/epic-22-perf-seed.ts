@@ -20,7 +20,7 @@
  * rebuilds from scratch. Does NOT delete the hotel at the end — see the QA
  * report's Cleanup section for the manual teardown SQL.
  *
- * Run from `hotello-backend/`:
+ * Run from `gxp-backend/`:
  *   npx ts-node -r tsconfig-paths/register qa/epic-22-perf-seed.ts
  */
 import 'reflect-metadata';

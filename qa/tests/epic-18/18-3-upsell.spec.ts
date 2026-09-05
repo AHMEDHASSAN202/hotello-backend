@@ -2,7 +2,7 @@
  * Epic 18 — Story 18.3 (upsell vs permission) and the Story 18.1 management
  * page in the Tenant Dashboard: live phone preview, contrast block +
  * suggestion, welcome editing, logo note, reset flow.
- * API surface: hotello-hotel-frontend `/t/{slug}/branding`; suites drive the
+ * API surface: gxp-hotel-frontend `/t/{slug}/branding`; suites drive the
  * real UI at :3001.
  */
 import { expect, test } from '../../fixtures';

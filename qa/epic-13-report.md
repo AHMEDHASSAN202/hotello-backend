@@ -1,7 +1,7 @@
 # QA Report — Epic 13: Stays & Guest Sessions
 
-- **Suite:** `hotello-backend/qa/tests/epic-13/` (Playwright, 7 spec files, 46 tests)
-- **Surfaces under test:** hotello-backend API (`/api/v1` tenant + public guest trees), hotello-hotel-frontend tenant dashboard (`:3001`)
+- **Suite:** `gxp-backend/qa/tests/epic-13/` (Playwright, 7 spec files, 46 tests)
+- **Surfaces under test:** gxp-backend API (`/api/v1` tenant + public guest trees), gxp-hotel-frontend tenant dashboard (`:3001`)
 - **Stack:** local dev stack (Postgres 16, API :4000, tenant app :3001), migrations + seed applied
 - **Result: 46 passed / 0 failed.** No product defects found in this epic. Three observations recorded below (no AC violated).
 - **Isolation model:** rate-limit and guest-session suites run against dedicated per-run hotels (lockouts would poison shared state); list/history suites use fresh hotels per test; worker-shared hotels use per-file room ranges and timezone pinned to UTC for deterministic date math.

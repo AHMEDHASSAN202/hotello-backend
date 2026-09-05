@@ -7,7 +7,7 @@ import { expect } from '@playwright/test';
 
 export const API_URL = process.env.GXP_API_URL ?? 'http://localhost:4000/api/v1';
 export const TENANT_URL = process.env.GXP_TENANT_URL ?? 'http://localhost:3001';
-export const ADMIN_EMAIL = process.env.GXP_ADMIN_EMAIL ?? 'admin@hotello.app';
+export const ADMIN_EMAIL = process.env.GXP_ADMIN_EMAIL ?? 'admin@gxp.app';
 export const ADMIN_PASSWORD = process.env.GXP_ADMIN_PASSWORD ?? 'ChangeMe123';
 
 /**
@@ -17,7 +17,7 @@ export const ADMIN_PASSWORD = process.env.GXP_ADMIN_PASSWORD ?? 'ChangeMe123';
 export function guestBaseUrl(): string {
   if (process.env.GXP_GUEST_APP_BASE_URL) return process.env.GXP_GUEST_APP_BASE_URL;
   try {
-    // qa/ lives inside hotello-backend/ — read its .env without importing it.
+    // qa/ lives inside gxp-backend/ — read its .env without importing it.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const fs = require('node:fs') as typeof import('node:fs');
     // eslint-disable-next-line @typescript-eslint/no-var-requires

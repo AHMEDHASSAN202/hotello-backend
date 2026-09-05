@@ -7,9 +7,9 @@
  */
 import { execFileSync } from 'node:child_process';
 
-const CONTAINER = process.env.GXP_DB_CONTAINER ?? 'hotello-db';
-const DB_USER = process.env.GXP_DB_USER ?? 'hotello';
-const DB_NAME = process.env.GXP_DB_NAME ?? 'hotello';
+const CONTAINER = process.env.GXP_DB_CONTAINER ?? 'gxp-db';
+const DB_USER = process.env.GXP_DB_USER ?? 'gxp';
+const DB_NAME = process.env.GXP_DB_NAME ?? 'gxp';
 
 export function sql(query: string): string {
   return execFileSync(

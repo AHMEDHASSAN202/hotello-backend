@@ -32,7 +32,7 @@ describe('AuthService', () => {
     ({
       id: 'admin-1',
       name: 'Ahmed',
-      email: 'ahmed@hotello.app',
+      email: 'ahmed@gxp.app',
       passwordHash: 'stored-hash',
       refreshTokenHash: 'stored-refresh-hash',
       isActive: true,
@@ -83,19 +83,19 @@ describe('AuthService', () => {
       mockedBcrypt.compare.mockResolvedValue(true as never);
 
       const result = await service.login({
-        email: 'Ahmed@Hotello.app',
+        email: 'Ahmed@GXP.app',
         password: 'Secret123',
       });
 
       expect(repo.findOne).toHaveBeenCalledWith({
-        where: { email: 'ahmed@hotello.app' },
+        where: { email: 'ahmed@gxp.app' },
       });
       expect(result.accessToken).toBe('new-access-token');
       expect(result.refreshToken).toBe('new-refresh-token');
       expect(result.admin).toEqual({
         id: 'admin-1',
         name: 'Ahmed',
-        email: 'ahmed@hotello.app',
+        email: 'ahmed@gxp.app',
         preferredLanguage: 'en',
         role: { id: 'role-1', name: 'Super Admin', permissions: ['*'] },
       });
@@ -117,7 +117,7 @@ describe('AuthService', () => {
       repo.findOne.mockResolvedValue(makeAdmin());
       mockedBcrypt.compare.mockResolvedValue(false as never);
       await expect(
-        service.login({ email: 'ahmed@hotello.app', password: 'wrong' }),
+        service.login({ email: 'ahmed@gxp.app', password: 'wrong' }),
       ).rejects.toThrow(new UnauthorizedException('Invalid credentials'));
     });
 
@@ -125,7 +125,7 @@ describe('AuthService', () => {
       repo.findOne.mockResolvedValue(makeAdmin({ isActive: false }));
       mockedBcrypt.compare.mockResolvedValue(true as never);
       await expect(
-        service.login({ email: 'ahmed@hotello.app', password: 'Secret123' }),
+        service.login({ email: 'ahmed@gxp.app', password: 'Secret123' }),
       ).rejects.toThrow(ForbiddenException);
     });
   });
@@ -198,11 +198,11 @@ describe('AuthService', () => {
 
       const updated = await service.updateProfile(admin, {
         name: 'Renamed',
-        email: 'New.Email@Hotello.APP',
+        email: 'New.Email@GXP.APP',
       });
 
       expect(updated.name).toBe('Renamed');
-      expect(updated.email).toBe('new.email@hotello.app');
+      expect(updated.email).toBe('new.email@gxp.app');
       expect(repo.save).toHaveBeenCalledWith(admin);
     });
 
@@ -211,7 +211,7 @@ describe('AuthService', () => {
       repo.findOne.mockResolvedValue(makeAdmin({ id: 'other-admin' }));
 
       await expect(
-        service.updateProfile(admin, { email: 'taken@hotello.app' }),
+        service.updateProfile(admin, { email: 'taken@gxp.app' }),
       ).rejects.toThrow(ConflictException);
     });
 
@@ -219,11 +219,11 @@ describe('AuthService', () => {
       const admin = makeAdmin();
 
       const updated = await service.updateProfile(admin, {
-        email: 'Ahmed@Hotello.app', // same address, different casing
+        email: 'Ahmed@GXP.app', // same address, different casing
       });
 
       expect(repo.findOne).not.toHaveBeenCalled();
-      expect(updated.email).toBe('ahmed@hotello.app');
+      expect(updated.email).toBe('ahmed@gxp.app');
     });
 
     it('updates the preferred UI language (Epic 07 — language persistence)', async () => {

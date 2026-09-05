@@ -1,7 +1,7 @@
 {
   "name": "gxp-backend",
   "version": "0.1.0",
-  "description": "Hotello (GXP) unified backend API",
+  "description": "GXP unified backend API",
   "private": true,
   "scripts": {
     "build": "nest build",

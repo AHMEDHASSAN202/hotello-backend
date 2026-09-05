@@ -533,7 +533,7 @@ test('17.1 AC1 — essentials: full card, PUT full-replacement, all-empty delete
   // null). Kept LAST in serial mode with the QA-17-001 test.
   const token = dedicated.ownerToken;
   const full = await putEssentials(request, token, {
-    wifiName: 'Hotello-Guest',
+    wifiName: 'GXP-Guest',
     wifiPassword: 'sunrise2026',
     receptionPhone: '+20 100 123 4567',
     whatsapp: '+20 100 123 4568',
@@ -541,7 +541,7 @@ test('17.1 AC1 — essentials: full card, PUT full-replacement, all-empty delete
   });
   expect(full.status, JSON.stringify(full.body)).toBe(200);
   expect(full.body?.structured).toMatchObject({
-    wifiName: 'Hotello-Guest',
+    wifiName: 'GXP-Guest',
     wifiPassword: 'sunrise2026',
     receptionPhone: '+20 100 123 4567',
     whatsapp: '+20 100 123 4568',
@@ -549,9 +549,9 @@ test('17.1 AC1 — essentials: full card, PUT full-replacement, all-empty delete
   });
 
   // PUT semantics: the editor sends the whole card — absent fields are cleared.
-  const partial = await putEssentials(request, token, { wifiName: 'Hotello-Guest-2' });
+  const partial = await putEssentials(request, token, { wifiName: 'GXP-Guest-2' });
   expect(partial.status).toBe(200);
-  expect(partial.body?.structured).toEqual({ wifiName: 'Hotello-Guest-2' });
+  expect(partial.body?.structured).toEqual({ wifiName: 'GXP-Guest-2' });
 
   const allEmpty = await putEssentials(request, token, {});
   expect(allEmpty.status, `QA-17-002 — clearing all fields 500s: ${JSON.stringify(allEmpty.body)}`).toBe(200);
