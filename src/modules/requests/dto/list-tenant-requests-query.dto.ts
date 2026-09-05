@@ -8,6 +8,7 @@ import {
   Max,
   Min,
 } from 'class-validator';
+import { ASSIGNEE_FILTERS, AssigneeFilter } from '../../../common/lanes';
 import { REQUEST_STATUSES, RequestStatus } from '../requests.constants';
 
 /**
@@ -44,6 +45,16 @@ export class ListTenantRequestsQueryDto {
   @IsOptional()
   @IsUUID()
   assigneeId?: string;
+
+  /**
+   * Epic 26 (26.2 AC3) — the Staff PWA's two-lane filter, relative to the
+   * caller: `me` (assigned to me), `unassigned`, or both. Open tab only
+   * (ignored on history). Rows come back stamped with `lane`; in delta mode
+   * rows that left the requested lanes return as reasoned tombstones.
+   */
+  @IsOptional()
+  @IsIn(ASSIGNEE_FILTERS)
+  assignee?: AssigneeFilter;
 
   @IsOptional()
   @Type(() => Number)

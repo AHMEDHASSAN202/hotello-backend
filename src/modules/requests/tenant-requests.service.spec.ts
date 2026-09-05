@@ -362,6 +362,91 @@ describe('TenantRequestsService', () => {
     });
   });
 
+  describe('two-lane filter (26.2 AC3)', () => {
+    const openReq = (
+      id: string,
+      assignedToId: string | null,
+      status: string = 'new',
+    ) =>
+      makeRequest({
+        id,
+        assignedToId,
+        status: status as never,
+        updatedAt: new Date(),
+      });
+
+    beforeEach(() => {
+      usersRepo.find.mockResolvedValue([
+        { id: 'user-1', name: 'Front Desk Fatma' },
+        { id: 'someone-else', name: 'Someone Else' },
+      ]);
+    });
+
+    it('assignee=me,unassigned (full) returns only my open + unassigned open rows, lane-stamped', async () => {
+      repo.find.mockResolvedValue([
+        openReq('mine', ACTOR.id, 'in_progress'),
+        openReq('free', null),
+        openReq('other', 'someone-else'),
+      ]);
+      const result = await service.listBoard(ACTOR, {
+        tab: 'open',
+        assignee: 'me,unassigned',
+      } as any);
+      expect(result.data.map((r: any) => r.id)).toEqual(['mine', 'free']);
+      expect(result.data.map((r: any) => r.lane)).toEqual([
+        'mine',
+        'available',
+      ]);
+      expect(result.counts.myDoneToday).toBe(0);
+    });
+
+    it('assignee=me (delta) tombstones a row a colleague claimed and one cancelled elsewhere', async () => {
+      repo.find.mockResolvedValue([
+        openReq('claimed', 'someone-else', 'in_progress'),
+        openReq('gone', null, 'cancelled'),
+        openReq('still-mine', ACTOR.id, 'in_progress'),
+      ]);
+      const result = await service.listBoard(ACTOR, {
+        tab: 'open',
+        assignee: 'me',
+        updatedSince: new Date().toISOString(),
+      } as any);
+      expect(result.data).toEqual(
+        expect.arrayContaining([
+          { id: 'claimed', active: false, reason: 'taken' },
+          { id: 'gone', active: false, reason: 'cancelled' },
+          expect.objectContaining({ id: 'still-mine', lane: 'mine' }),
+        ]),
+      );
+      expect(result.data).toHaveLength(3);
+    });
+
+    it('without assignee the board payload is unchanged (no lane, no myDoneToday)', async () => {
+      repo.find.mockResolvedValue([openReq('a', null)]);
+      const result = await service.listBoard(ACTOR, { tab: 'open' } as any);
+      expect((result.data[0] as any).lane).toBeUndefined();
+      expect(result.counts.myDoneToday).toBeUndefined();
+    });
+
+    it('myDoneToday counts only MY completions since the hotel-local day start', async () => {
+      repo.find.mockResolvedValue([]);
+      repo.count.mockResolvedValue(0);
+      await service.listBoard(ACTOR, {
+        tab: 'open',
+        assignee: 'me',
+      } as any);
+      expect(repo.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            hotelId: 'hotel-1',
+            completedById: 'user-1',
+            status: 'done',
+          }),
+        }),
+      );
+    });
+  });
+
   describe('listHistory (15.4 AC1/AC2)', () => {
     it('paginates final statuses with filters', async () => {
       repo.findAndCount.mockResolvedValue([[makeRequest({ status: 'done' })], 41]);

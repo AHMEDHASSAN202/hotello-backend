@@ -8,6 +8,14 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, LessThan, MoreThan, Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import {
+  applyLaneFilter,
+  Lane,
+  Laned,
+  LaneTombstone,
+  LaneTombstoneReason,
+  requestedLanes,
+} from '../../common/lanes';
 import { Hotel } from '../hotels/hotel.entity';
 import { PushService } from '../push/push.service';
 import { WILDCARD } from '../roles/permissions.constants';
@@ -63,6 +71,21 @@ export interface BoardCounts {
   open: number;
   doneToday: number;
   overdueNow: number;
+  /** 26.5 AC2 — only present when `assignee` was requested (Staff PWA). */
+  myDoneToday?: number;
+}
+
+/** 26.2 AC1 — lane rules for requests, relative to the caller. */
+function laneOfRequest(view: TenantRequestView, userId: string): Lane | null {
+  if (!OPEN_REQUEST_STATUSES.includes(view.status as never)) return null;
+  if (view.assignedTo?.id === userId) return 'mine';
+  if (view.assignedTo === null) return 'available';
+  return null;
+}
+function reasonOfRequest(view: TenantRequestView): LaneTombstoneReason {
+  if (view.status === 'cancelled') return 'cancelled';
+  if (view.status === 'done') return 'closed';
+  return 'taken';
 }
 
 /**
@@ -95,7 +118,7 @@ export class TenantRequestsService {
     user: TenantUser,
     query: ListTenantRequestsQueryDto,
   ): Promise<{
-    data: TenantRequestView[];
+    data: Array<TenantRequestView | Laned<TenantRequestView> | LaneTombstone>;
     counts: BoardCounts;
     serverTime: string;
   }> {
@@ -109,11 +132,19 @@ export class TenantRequestsService {
       where,
       order: { createdAt: 'DESC' },
     });
-    return {
-      data: await this.toViews(rows),
-      counts: await this.counts(user.hotelId),
-      serverTime: new Date().toISOString(),
-    };
+    const views = await this.toViews(rows);
+    const data = query.assignee
+      ? applyLaneFilter(
+          views,
+          requestedLanes(query.assignee),
+          (v) => laneOfRequest(v, user.id),
+          reasonOfRequest,
+          query.updatedSince ? 'delta' : 'full',
+        )
+      : views;
+    const counts = await this.counts(user.hotelId);
+    if (query.assignee) counts.myDoneToday = await this.myDoneToday(user);
+    return { data, counts, serverTime: new Date().toISOString() };
   }
 
   /** History tab — done/cancelled, filterable, paginated (15.4 AC1/AC2). */
@@ -176,6 +207,25 @@ export class TenantRequestsService {
       }),
     ]);
     return { open, doneToday, overdueNow };
+  }
+
+  /** 26.5 AC2 — my completions since the hotel-local day start (recorded decision 10). */
+  private async myDoneToday(user: TenantUser): Promise<number> {
+    const hotel = await this.hotelsRepo.findOne({
+      where: { id: user.hotelId },
+    });
+    const dayStart = startOfHotelDay(
+      hotel?.timezone ?? 'Africa/Cairo',
+      new Date(),
+    );
+    return this.requestsRepo.count({
+      where: {
+        hotelId: user.hotelId,
+        completedById: user.id,
+        status: 'done',
+        completedAt: MoreThan(dayStart),
+      },
+    });
   }
 
   /**
