@@ -1,3 +1,4 @@
+import { localizeField, TranslationMap } from '../requests/requests.constants';
 import { GuestLanguage } from '../tenant-stays/stays.constants';
 
 /**
@@ -380,3 +381,67 @@ export function composeCheckoutReminder(
   const spec = CHECKOUT_REMINDER[lang];
   return { title: spec.title, body: spec.body(checkoutTime, hasUnsettledBalance) };
 }
+
+/**
+ * Epic 26 — staff push copy. Staff is AR/EN only (recorded decision), so
+ * `staffLang` collapses every other `GuestLanguage` to `en` rather than
+ * carrying the guest 7-locale table for a surface that never renders them.
+ */
+export type StaffFeed = 'requests' | 'orders' | 'rooms';
+export type StaffLang = 'ar' | 'en';
+export const staffLang = (lang: GuestLanguage): StaffLang => (lang === 'ar' ? 'ar' : 'en');
+
+export interface StaffPushVars {
+  feed: StaffFeed; id?: string; count?: number; roomNumber?: string;
+  names?: TranslationMap; locationNames?: TranslationMap | null; spot?: string | null;
+  cleaningType?: 'checkout' | 'daily' | null;
+}
+
+/** Where the task is, for a runner reading at arm's length. */
+function whereLine(lang: StaffLang, v: StaffPushVars): string {
+  if (v.locationNames) {
+    const loc = localizeField(v.locationNames, lang);
+    return v.spot ? `${loc} — ${v.spot}` : loc;
+  }
+  return lang === 'ar' ? `غرفة ${v.roomNumber ?? ''}` : `Room ${v.roomNumber ?? ''}`;
+}
+const itemLine = (lang: StaffLang, v: StaffPushVars) => (v.names ? localizeField(v.names, lang) : '');
+const typeLine = (lang: StaffLang, v: StaffPushVars) =>
+  v.cleaningType === 'checkout' ? (lang === 'ar' ? 'تنظيف بعد مغادرة' : 'Checkout clean')
+  : v.cleaningType === 'daily' ? (lang === 'ar' ? 'خدمة يومية' : 'Daily service') : '';
+
+/** 26.4 AC2 — ① assigned to me (always), ② new unassigned task in my lane (toggle). */
+export const STAFF_PUSH_LINES: Record<StaffLang, Record<'assigned' | 'available', Record<StaffFeed, (v: StaffPushVars) => PushLine>>> = {
+  ar: {
+    assigned: {
+      requests: (v) => ({ title: 'اتعيّنلك طلب 🛎️', body: `${itemLine('ar', v)} — ${whereLine('ar', v)}` }),
+      orders: (v) => ({ title: 'اتعيّنلك أوردر 🍽️', body: whereLine('ar', v) }),
+      rooms: (v) => v.count && v.count > 1
+        ? ({ title: `اتعيّنلك ${v.count} غرف 🧹`, body: 'افتح التطبيق وابدأ بالأقرب' })
+        : ({ title: `اتعيّنتلك غرفة ${v.roomNumber ?? ''} 🧹`, body: typeLine('ar', v) }),
+    },
+    available: {
+      requests: (v) => ({ title: 'طلب جديد متاح للاستلام', body: `${itemLine('ar', v)} — ${whereLine('ar', v)}` }),
+      orders: (v) => ({ title: 'أوردر جديد متاح للاستلام', body: whereLine('ar', v) }),
+      rooms: (v) => v.count && v.count > 1
+        ? ({ title: 'غرف محتاجة خدمة النهاردة', body: `${v.count} غرف متاحة للاستلام` })
+        : ({ title: `غرفة ${v.roomNumber ?? ''} محتاجة تنظيف`, body: typeLine('ar', v) }),
+    },
+  },
+  en: {
+    assigned: {
+      requests: (v) => ({ title: 'Request assigned to you 🛎️', body: `${itemLine('en', v)} — ${whereLine('en', v)}` }),
+      orders: (v) => ({ title: 'Order assigned to you 🍽️', body: whereLine('en', v) }),
+      rooms: (v) => v.count && v.count > 1
+        ? ({ title: `${v.count} rooms assigned to you 🧹`, body: 'Open the app and start with the nearest' })
+        : ({ title: `Room ${v.roomNumber ?? ''} assigned to you 🧹`, body: typeLine('en', v) }),
+    },
+    available: {
+      requests: (v) => ({ title: 'New request up for grabs', body: `${itemLine('en', v)} — ${whereLine('en', v)}` }),
+      orders: (v) => ({ title: 'New order up for grabs', body: whereLine('en', v) }),
+      rooms: (v) => v.count && v.count > 1
+        ? ({ title: 'Rooms need service today', body: `${v.count} rooms available to claim` })
+        : ({ title: `Room ${v.roomNumber ?? ''} needs cleaning`, body: typeLine('en', v) }),
+    },
+  },
+};

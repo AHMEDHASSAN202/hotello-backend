@@ -5,12 +5,14 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, MoreThan, MoreThanOrEqual, Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { PushService } from '../push/push.service';
 import { TranslationMap, localizeField } from '../requests/requests.constants';
 import { TenantAccessService } from '../tenant-access/tenant-access.service';
 import { hotelLocalParts, naiveUtc, startOfHotelDay } from '../tenant-stays/stay-time';
@@ -140,6 +142,7 @@ export interface GuestFnbOrderView {
  */
 @Injectable()
 export class GuestFnbService {
+  private readonly logger = new Logger(GuestFnbService.name);
   private readonly maxOpenPerStay: number;
   private readonly maxPerDay: number;
 
@@ -159,6 +162,7 @@ export class GuestFnbService {
     private readonly dataSource: DataSource,
     private readonly access: TenantAccessService,
     private readonly auditLogs: AuditLogsService,
+    private readonly push: PushService,
     config: ConfigService,
   ) {
     this.maxOpenPerStay = parseInt(
@@ -507,7 +511,44 @@ export class GuestFnbService {
         destinationType: dto.destination.type,
       },
     });
+    await this.notifyStaffAvailableSafely(
+      stay.hotelId,
+      {
+        feed: 'orders',
+        id: saved.order.id,
+        roomNumber: saved.order.roomNumber,
+        locationNames: saved.order.locationNames,
+        spot: saved.order.spot,
+      },
+      saved.order.id,
+    );
     return this.toView(saved.order, saved.lineRows, language);
+  }
+
+  /**
+   * 26.4 AC2 ② — a fresh unassigned order in the orders lane. Recipients are
+   * every active `fnb_orders.update` holder minus whoever muted the hint
+   * (recorded decision 6/8). `PushService.notify` never throws (Task 6's
+   * guarantee), but this try/catch is defense in depth at the call site — a
+   * push failure must never fail an already-committed guest order.
+   */
+  private async notifyStaffAvailableSafely(
+    hotelId: string,
+    vars: Record<string, unknown>,
+    refId: string,
+  ): Promise<void> {
+    try {
+      await this.push.notify(
+        hotelId,
+        { tenantPermission: 'fnb_orders.update', mutedHintKey: 'staffPush.availableMuted' },
+        'staff_available',
+        { refId, vars },
+      );
+    } catch (err) {
+      this.logger.error(
+        `push notify(staff_available) failed for order ${refId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private async assertThrottles(stay: Stay, now: Date): Promise<void> {

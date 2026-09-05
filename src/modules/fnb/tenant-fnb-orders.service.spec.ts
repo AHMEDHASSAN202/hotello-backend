@@ -313,7 +313,7 @@ describe('TenantFnbOrdersService (16.7/16.8)', () => {
       );
     });
 
-    it('assign() does NOT push — not a guest-visible status change', async () => {
+    it('assign() does NOT push order_status — not a guest-visible status change (it pushes staff_assigned instead, see below)', async () => {
       ordersRepo.findOne.mockResolvedValue(makeOrder());
       usersRepo.findOne.mockResolvedValue({
         id: 'user-2',
@@ -321,7 +321,12 @@ describe('TenantFnbOrdersService (16.7/16.8)', () => {
         role: { permissions: ['fnb_orders.update'] },
       });
       await service.assign(actor, 'order-1', { assigneeId: 'user-2' } as never);
-      expect(push.notify).not.toHaveBeenCalled();
+      expect(push.notify).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        'order_status',
+        expect.anything(),
+      );
     });
 
     it('push failure never fails the transition', async () => {
@@ -329,6 +334,66 @@ describe('TenantFnbOrdersService (16.7/16.8)', () => {
       push.notify.mockRejectedValueOnce(new Error('dispatch exploded'));
       const result = await service.start(actor, 'order-1');
       expect(result.status).toBe('preparing');
+    });
+  });
+
+  describe('staff push on assign (26.4 AC2 ①)', () => {
+    it('assign to another user emits staff_assigned to exactly that user, with location vars for a location-destination order', async () => {
+      const order = makeOrder({
+        destinationType: 'location',
+        locationNames: { en: 'Pool', ar: 'المسبح' },
+        spot: '12',
+      });
+      ordersRepo.findOne.mockResolvedValue(order);
+      usersRepo.findOne.mockResolvedValue({
+        id: 'user-2',
+        status: 'active',
+        role: { permissions: ['fnb_orders.update'] },
+      });
+      await service.assign(actor, 'order-1', { assigneeId: 'user-2' } as never);
+      expect(push.notify).toHaveBeenCalledWith(
+        HOTEL_ID,
+        { tenantUserIds: ['user-2'] },
+        'staff_assigned',
+        expect.objectContaining({
+          refId: order.id,
+          vars: expect.objectContaining({
+            feed: 'orders',
+            id: order.id,
+            roomNumber: order.roomNumber,
+            locationNames: { en: 'Pool', ar: 'المسبح' },
+            spot: '12',
+          }),
+        }),
+      );
+    });
+
+    it('self-assign does not push staff_assigned', async () => {
+      ordersRepo.findOne.mockResolvedValue(makeOrder());
+      usersRepo.findOne.mockResolvedValue({
+        id: actor.id,
+        status: 'active',
+        role: { permissions: ['fnb_orders.update'] },
+      });
+      await service.assign(actor, 'order-1', { assigneeId: actor.id } as never);
+      expect(push.notify).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        'staff_assigned',
+        expect.anything(),
+      );
+    });
+
+    it('push failure during assign() never fails the transition', async () => {
+      ordersRepo.findOne.mockResolvedValue(makeOrder());
+      usersRepo.findOne.mockResolvedValue({
+        id: 'user-2',
+        status: 'active',
+        role: { permissions: ['fnb_orders.update'] },
+      });
+      push.notify.mockRejectedValueOnce(new Error('dispatch exploded'));
+      const result = await service.assign(actor, 'order-1', { assigneeId: 'user-2' } as never);
+      expect(result).toBeDefined();
     });
   });
 

@@ -362,6 +362,15 @@ export class TenantRequestsService {
     await this.audit('request.assigned', saved, user, {
       assigneeId: assignee?.id ?? null,
     });
+    if (assignee && assignee.id !== user.id) {
+      await this.notifyStaffSafely(
+        saved.hotelId,
+        'staff_assigned',
+        { tenantUserIds: [assignee.id] },
+        { feed: 'requests', id: saved.id, roomNumber: saved.roomNumber, names: saved.itemNames },
+        saved.id,
+      );
+    }
     return (await this.toViews([saved]))[0];
   }
 
@@ -389,6 +398,28 @@ export class TenantRequestsService {
     } catch (err) {
       this.logger.error(
         `push notify(request_status) failed for request ${saved.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * 26.4 AC2 ① — staff-assignment push. `PushService.notify` never throws
+   * (Task 6's guarantee), but this try/catch is defense in depth at the call
+   * site, matching `notifyRequestPushSafely` — a push failure must never
+   * fail an already-committed transition.
+   */
+  private async notifyStaffSafely(
+    hotelId: string,
+    type: 'staff_assigned' | 'staff_available',
+    target: Parameters<PushService['notify']>[1],
+    vars: Record<string, unknown>,
+    refId: string | null,
+  ): Promise<void> {
+    try {
+      await this.push.notify(hotelId, target, type, { refId, vars });
+    } catch (err) {
+      this.logger.error(
+        `push notify(${type}) failed for request ${refId}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }

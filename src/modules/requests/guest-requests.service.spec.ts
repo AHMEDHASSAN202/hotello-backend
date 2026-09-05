@@ -2,6 +2,7 @@ import { Test } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { PushService } from '../push/push.service';
 import { TenantAccessService } from '../tenant-access/tenant-access.service';
 import { Stay } from '../tenant-stays/stay.entity';
 import { GuestRequestsService } from './guest-requests.service';
@@ -84,6 +85,7 @@ describe('GuestRequestsService', () => {
   };
   let access: { getAccessState: jest.Mock };
   let auditLogs: { log: jest.Mock };
+  let push: { notify: jest.Mock };
 
   beforeEach(async () => {
     repo = {
@@ -114,6 +116,7 @@ describe('GuestRequestsService', () => {
       }),
     };
     auditLogs = { log: jest.fn().mockResolvedValue(undefined) };
+    push = { notify: jest.fn().mockResolvedValue(undefined) };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -122,6 +125,7 @@ describe('GuestRequestsService', () => {
         { provide: RequestCatalogViewService, useValue: catalogView },
         { provide: TenantAccessService, useValue: access },
         { provide: AuditLogsService, useValue: auditLogs },
+        { provide: PushService, useValue: push },
         {
           provide: ConfigService,
           useValue: { get: jest.fn((_key: string, fallback: string) => fallback) },
@@ -246,6 +250,33 @@ describe('GuestRequestsService', () => {
       expect(auditLogs.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'request.created', actorId: null }),
       );
+    });
+
+    it('emits staff_available to requests.update holders, muted key respected (26.4 AC2 ②)', async () => {
+      await service.submit(STAY, { itemId: 'item-towels', optionValue: '2' });
+      expect(push.notify).toHaveBeenCalledWith(
+        'hotel-1',
+        {
+          tenantPermission: 'requests.update',
+          mutedHintKey: 'staffPush.availableMuted',
+        },
+        'staff_available',
+        expect.objectContaining({
+          refId: 'req-1',
+          vars: expect.objectContaining({
+            feed: 'requests',
+            id: 'req-1',
+            roomNumber: '204',
+            names: TOWELS.item.names,
+          }),
+        }),
+      );
+    });
+
+    it('a push failure never fails the submission', async () => {
+      push.notify.mockRejectedValueOnce(new Error('dispatch exploded'));
+      const view = await service.submit(STAY, { itemId: 'item-towels', optionValue: '2' });
+      expect(view).toBeDefined();
     });
 
     it('AC5 — open-request throttle: the 6th open request is rejected 429', async () => {
@@ -423,12 +454,15 @@ describe('GuestRequestsService', () => {
       expect(repo.save).not.toHaveBeenCalled();
     });
 
-    it('never pushes (23.4 recorded decision) — GuestRequestsService takes no PushService dependency, so a guest-initiated cancel structurally cannot notify; the guest already knows, they did it', () => {
+    it('never pushes (23.4 recorded decision) — a guest-initiated cancel never notifies; the guest already knows, they did it', async () => {
       // The push hooks added for Epic 23.4 live only on the STAFF-side
       // TenantRequestsService.cancel() (tenant-requests.service.spec.ts).
-      // This service is never given a `push` field/dependency, so cancelOwn
-      // (or any other guest method) has no way to call PushService.notify.
-      expect((service as unknown as Record<string, unknown>).push).toBeUndefined();
+      // GuestRequestsService now DOES hold a PushService dependency (Epic
+      // 26 — `submit()` pushes `staff_available`), but `cancelOwn()` itself
+      // never calls it.
+      repo.findOne.mockResolvedValue({ id: 'req-1', stayId: 'stay-1', status: 'new' });
+      await service.cancelOwn(STAY, 'req-1');
+      expect(push.notify).not.toHaveBeenCalled();
     });
 
     it("404 for another stay's request (id scoped to own stay)", async () => {

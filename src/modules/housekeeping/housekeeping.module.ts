@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { Hotel } from '../hotels/hotel.entity';
+import { PushModule } from '../push/push.module';
 import { TenantAccessModule } from '../tenant-access/tenant-access.module';
 import { Room } from '../tenant-rooms/room.entity';
 import { Stay } from '../tenant-stays/stay.entity';
@@ -24,6 +25,7 @@ import { TenantHousekeepingController } from './tenant-housekeeping.controller';
     TypeOrmModule.forFeature([Room, Stay, Hotel, TenantUser, HousekeepingEvent]),
     TenantAccessModule,
     AuditLogsModule,
+    PushModule,
   ],
   controllers: [TenantHousekeepingController, GuestHousekeepingController],
   providers: [

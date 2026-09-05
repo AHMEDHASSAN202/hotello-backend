@@ -6,8 +6,11 @@ import {
   ORDER_STATUS_LINES,
   RequestStatusPushKey,
   REQUEST_STATUS_LINES,
+  StaffPushVars,
+  STAFF_PUSH_LINES,
   composeCheckoutReminder,
   composeEventReminder,
+  staffLang,
 } from './push-copy';
 
 export interface ComposedPush {
@@ -29,6 +32,10 @@ const uuidTopic = (refId: string | null) => (refId ? refId.replace(/-/g, '').sli
 
 const BODY_MAX = 160; // push bodies are glanceable; announcement bodies get truncated
 const clip = (s: string) => (s.length > BODY_MAX ? `${s.slice(0, BODY_MAX - 1)}…` : s);
+
+/** 26.4 AC5 — relative deep link, resolved against the staff PWA's own origin. */
+const staffUrl = (slug: string, v: StaffPushVars) =>
+  v.id ? `/t/${slug}?open=${v.feed}:${v.id}` : `/t/${slug}?open=${v.feed}`;
 
 /**
  * THE type registry (spec note 4): adding a new push (e.g. Laundry's
@@ -107,6 +114,28 @@ export const PUSH_REGISTRY: Record<PushType, PushTypeSpec> = {
         body: line.body,
         url: `/${vars.slug}?open=home`,
       };
+    },
+  },
+  // Epic 26 — staff pushes. Per-lane collapse (latest wins on the device),
+  // no quiet hours (shifts are the quiet hours), short TTLs.
+  staff_assigned: {
+    ttlSeconds: 3600,
+    quietHours: false,
+    topic: (_refId, vars) => `sa-${vars.feed}`,
+    compose: (lang, vars) => {
+      const v = vars as unknown as StaffPushVars;
+      const line = STAFF_PUSH_LINES[staffLang(lang)].assigned[v.feed](v);
+      return { ...line, url: staffUrl(vars.slug as string, v) };
+    },
+  },
+  staff_available: {
+    ttlSeconds: 900,
+    quietHours: false,
+    topic: (_refId, vars) => `sv-${vars.feed}`,
+    compose: (lang, vars) => {
+      const v = vars as unknown as StaffPushVars;
+      const line = STAFF_PUSH_LINES[staffLang(lang)].available[v.feed](v);
+      return { ...line, url: staffUrl(vars.slug as string, v) };
     },
   },
 };

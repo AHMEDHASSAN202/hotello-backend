@@ -418,6 +418,21 @@ export class TenantFnbOrdersService {
     await this.audit('fnb_order.assigned', saved, user, {
       assigneeId: assignee?.id ?? null,
     });
+    if (assignee && assignee.id !== user.id) {
+      await this.notifyStaffSafely(
+        saved.hotelId,
+        'staff_assigned',
+        { tenantUserIds: [assignee.id] },
+        {
+          feed: 'orders',
+          id: saved.id,
+          roomNumber: saved.roomNumber,
+          locationNames: saved.locationNames,
+          spot: saved.spot,
+        },
+        saved.id,
+      );
+    }
     return (await this.toViews([saved]))[0];
   }
 
@@ -540,6 +555,28 @@ export class TenantFnbOrdersService {
     } catch (err) {
       this.logger.error(
         `push notify(order_status) failed for order ${order.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * 26.4 AC2 ① — staff-assignment push. `PushService.notify` never throws
+   * (Task 6's guarantee), but this try/catch is defense in depth at the call
+   * site, matching `notifyOrderPushSafely` — a push failure must never fail
+   * an already-committed transition.
+   */
+  private async notifyStaffSafely(
+    hotelId: string,
+    type: 'staff_assigned' | 'staff_available',
+    target: Parameters<PushService['notify']>[1],
+    vars: Record<string, unknown>,
+    refId: string | null,
+  ): Promise<void> {
+    try {
+      await this.push.notify(hotelId, target, type, { refId, vars });
+    } catch (err) {
+      this.logger.error(
+        `push notify(${type}) failed for order ${refId}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }

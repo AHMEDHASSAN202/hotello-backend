@@ -2,6 +2,7 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
+import { PushService } from '../push/push.service';
 import { Room } from '../tenant-rooms/room.entity';
 import { Stay } from '../tenant-stays/stay.entity';
 import { HousekeepingEventsService } from './housekeeping-events.service';
@@ -41,6 +42,7 @@ describe('HousekeepingSchedulerService', () => {
   let hotelsRepo: { find: jest.Mock };
   let auditLogs: { log: jest.Mock };
   let housekeepingEvents: { record: jest.Mock };
+  let push: { notify: jest.Mock };
 
   beforeEach(async () => {
     roomsRepo = { find: jest.fn().mockResolvedValue([]), save: jest.fn(async (r) => r) };
@@ -48,6 +50,7 @@ describe('HousekeepingSchedulerService', () => {
     hotelsRepo = { find: jest.fn().mockResolvedValue([cairoHotel()]) };
     auditLogs = { log: jest.fn() };
     housekeepingEvents = { record: jest.fn().mockResolvedValue(undefined) };
+    push = { notify: jest.fn().mockResolvedValue(undefined) };
     const moduleRef = await Test.createTestingModule({
       providers: [
         HousekeepingSchedulerService,
@@ -56,6 +59,7 @@ describe('HousekeepingSchedulerService', () => {
         { provide: getRepositoryToken(Hotel), useValue: hotelsRepo },
         { provide: AuditLogsService, useValue: auditLogs },
         { provide: HousekeepingEventsService, useValue: housekeepingEvents },
+        { provide: PushService, useValue: push },
       ],
     }).compile();
     service = moduleRef.get(HousekeepingSchedulerService);
@@ -327,6 +331,51 @@ describe('HousekeepingSchedulerService', () => {
           actorId: null,
         }),
       );
+    });
+  });
+
+  describe('staff push (26.4 AC2 ③ — the daily tick)', () => {
+    it('flags 1+ rooms → one staff_available per hotel with the flagged count and a per-day dedupe prefix', async () => {
+      staysRepo.find.mockResolvedValue([{ roomId: 'room-1' }]);
+      mockRooms([], [makeRoom()]);
+
+      await service.runDailyService(PAST_HOUR);
+
+      expect(push.notify).toHaveBeenCalledWith(
+        'hotel-1',
+        { tenantPermission: 'housekeeping.update', mutedHintKey: 'staffPush.availableMuted' },
+        'staff_available',
+        expect.objectContaining({
+          refId: null,
+          dedupePrefix: expect.stringContaining('staff_daily:'),
+          vars: expect.objectContaining({ feed: 'rooms', count: expect.any(Number) }),
+        }),
+      );
+      expect(push.notify.mock.calls[0][3].dedupePrefix).toBe(`staff_daily:hotel-1:${LOCAL_DATE}`);
+      expect(push.notify.mock.calls[0][3].vars.count).toBe(1);
+    });
+
+    it('a hotel where nothing gets flagged does NOT push staff_available', async () => {
+      staysRepo.find.mockResolvedValue([]); // vacant — nothing to flag
+      mockRooms([], []);
+
+      await service.runDailyService(PAST_HOUR);
+
+      expect(push.notify).not.toHaveBeenCalled();
+    });
+
+    it('a hotel not yet due for the tick is never even considered for a push', async () => {
+      const res = await service.runDailyService(BEFORE_HOUR);
+      expect(res).toEqual({ flagged: 0, released: 0 });
+      expect(push.notify).not.toHaveBeenCalled();
+    });
+
+    it('a push failure during the tick never fails the tick itself', async () => {
+      staysRepo.find.mockResolvedValue([{ roomId: 'room-1' }]);
+      mockRooms([], [makeRoom()]);
+      push.notify.mockRejectedValueOnce(new Error('dispatch exploded'));
+      const res = await service.runDailyService(PAST_HOUR);
+      expect(res).toEqual({ flagged: 1, released: 0 });
     });
   });
 });

@@ -15,7 +15,11 @@ describe('PUSH_REGISTRY completeness (23.1 AC4, note 4)', () => {
       const out = PUSH_REGISTRY[type].compose(lang, vars);
       expect(out.title.length).toBeGreaterThan(0);
       expect(out.body.length).toBeGreaterThan(0);
-      expect(out.url.startsWith('/sunrise')).toBe(true);
+      // Staff types (Epic 26) deep-link into the tenant dashboard route
+      // (`/t/{slug}?open=...`), not the guest app's bare `/{slug}` route.
+      expect(
+        out.url.startsWith('/sunrise') || out.url.startsWith('/t/sunrise'),
+      ).toBe(true);
     }
   });
 
@@ -40,6 +44,31 @@ describe('PUSH_REGISTRY completeness (23.1 AC4, note 4)', () => {
     expect(without.body).not.toContain('مشتريات');
     expect(withBal.body).toContain('مشتريات');
   });
+
+  describe('staff types (26.4 AC2/AC3/AC5)', () => {
+    it('staff_assigned/rooms deep-links to the rooms tab with the room highlighted', () => {
+      const out = PUSH_REGISTRY.staff_assigned.compose('ar', { slug: 'sunrise', feed: 'rooms', id: 'room-1', roomNumber: '304', cleaningType: 'checkout' });
+      expect(out.url).toBe('/t/sunrise?open=rooms:room-1');
+      expect(out.title).toContain('304');
+    });
+    it('staff_available bulk rooms line carries the count and links to the tab', () => {
+      const out = PUSH_REGISTRY.staff_available.compose('en', { slug: 'sunrise', feed: 'rooms', count: 12 });
+      expect(out.url).toBe('/t/sunrise?open=rooms');
+      expect(out.body).toContain('12');
+    });
+    it('topics collapse per lane, not per task', () => {
+      expect(PUSH_REGISTRY.staff_assigned.topic('any-id', { feed: 'orders' })).toBe('sa-orders');
+      expect(PUSH_REGISTRY.staff_available.topic(null, { feed: 'requests' })).toBe('sv-requests');
+    });
+    it('staff types never apply quiet hours', () => {
+      expect(PUSH_REGISTRY.staff_assigned.quietHours).toBe(false);
+      expect(PUSH_REGISTRY.staff_available.quietHours).toBe(false);
+    });
+    it('non-AR locales fall back to English copy (staff is AR/EN only)', () => {
+      const out = PUSH_REGISTRY.staff_available.compose('ru', { slug: 's', feed: 'orders', id: 'o1', roomNumber: '12', locationNames: null });
+      expect(out.title).toMatch(/order/i);
+    });
+  });
 });
 
 function sampleVars(type: string): Record<string, unknown> {
@@ -55,6 +84,15 @@ function sampleVars(type: string): Record<string, unknown> {
       return { ...base, id: 'e1', titles: { en: 'Yoga', ar: 'ورشة اليوجا' }, startTime: '17:00', locationText: 'Beach, Bldg B' };
     case 'checkout_reminder':
       return { ...base, checkoutTime: '12:00', hasUnsettledBalance: false };
+    case 'staff_assigned':
+    case 'staff_available':
+      return {
+        ...base,
+        feed: 'requests',
+        id: 'r1',
+        roomNumber: '304',
+        names: { ar: 'مناشف إضافية', en: 'Extra towels' },
+      };
     default:
       return base;
   }

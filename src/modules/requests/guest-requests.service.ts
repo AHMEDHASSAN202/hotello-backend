@@ -5,12 +5,14 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, MoreThan, MoreThanOrEqual, Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { PushService } from '../push/push.service';
 import { TenantAccessService } from '../tenant-access/tenant-access.service';
 import { naiveUtc, startOfHotelDay } from '../tenant-stays/stay-time';
 import { GuestLanguage } from '../tenant-stays/stays.constants';
@@ -70,6 +72,7 @@ export interface GuestRequestView {
  */
 @Injectable()
 export class GuestRequestsService {
+  private readonly logger = new Logger(GuestRequestsService.name);
   private readonly maxOpenPerStay: number;
   private readonly maxPerDay: number;
 
@@ -79,6 +82,7 @@ export class GuestRequestsService {
     private readonly catalogView: RequestCatalogViewService,
     private readonly access: TenantAccessService,
     private readonly auditLogs: AuditLogsService,
+    private readonly push: PushService,
     config: ConfigService,
   ) {
     this.maxOpenPerStay = parseInt(
@@ -234,7 +238,38 @@ export class GuestRequestsService {
         itemId: resolved.item.id,
       },
     });
+    await this.notifyStaffAvailableSafely(
+      stay.hotelId,
+      { feed: 'requests', id: saved.id, roomNumber: saved.roomNumber, names: saved.itemNames },
+      saved.id,
+    );
     return this.toView(saved, stay.language);
+  }
+
+  /**
+   * 26.4 AC2 ② — a fresh unassigned request in the requests lane. Recipients
+   * are every active `requests.update` holder minus whoever muted the hint
+   * (recorded decision 6/8). `PushService.notify` never throws (Task 6's
+   * guarantee), but this try/catch is defense in depth at the call site — a
+   * push failure must never fail an already-committed guest submission.
+   */
+  private async notifyStaffAvailableSafely(
+    hotelId: string,
+    vars: Record<string, unknown>,
+    refId: string,
+  ): Promise<void> {
+    try {
+      await this.push.notify(
+        hotelId,
+        { tenantPermission: 'requests.update', mutedHintKey: 'staffPush.availableMuted' },
+        'staff_available',
+        { refId, vars },
+      );
+    } catch (err) {
+      this.logger.error(
+        `push notify(staff_available) failed for request ${refId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /** 15.3 AC1/AC2 — own stay only; `updatedSince` returns deltas (note 4). */

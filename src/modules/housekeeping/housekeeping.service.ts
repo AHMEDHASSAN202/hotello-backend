@@ -18,6 +18,7 @@ import {
   requestedLanes,
 } from '../../common/lanes';
 import { Hotel } from '../hotels/hotel.entity';
+import { PushService } from '../push/push.service';
 import { WILDCARD } from '../roles/permissions.constants';
 import { Room } from '../tenant-rooms/room.entity';
 import { NATURAL_ROOM_ORDER } from '../tenant-rooms/tenant-rooms.service';
@@ -127,6 +128,7 @@ export class HousekeepingService {
     private readonly access: TenantAccessService,
     private readonly auditLogs: AuditLogsService,
     private readonly housekeepingEvents: HousekeepingEventsService,
+    private readonly push: PushService,
   ) {}
 
   /** Board / delta feed — always ships counts + serverTime (note 5). */
@@ -294,6 +296,14 @@ export class HousekeepingService {
       actorId: user.id,
       assignedToId: saved.housekeepingAssignedToId,
     });
+    if (!saved.housekeepingAssignedToId && saved.housekeepingStatus === 'needs_cleaning') {
+      await this.notifyStaffAvailableSafely(
+        saved.hotelId,
+        { excludeUserId: user.id },
+        { feed: 'rooms', id: saved.id, roomNumber: saved.roomNumber, cleaningType: saved.cleaningType },
+        saved.id,
+      );
+    }
     return (await this.toViews([saved]))[0];
   }
 
@@ -404,6 +414,14 @@ export class HousekeepingService {
       actorType: 'tenant_user',
       assigneeId: assignee?.id ?? null,
     });
+    if (assignee && assignee.id !== user.id) {
+      await this.notifyStaffAssignedSafely(
+        saved.hotelId,
+        [assignee.id],
+        { feed: 'rooms', id: saved.id, roomNumber: saved.roomNumber, cleaningType: saved.cleaningType },
+        saved.id,
+      );
+    }
     return (await this.toViews([saved]))[0];
   }
 
@@ -442,6 +460,14 @@ export class HousekeepingService {
         assigneeId: assignee?.id ?? null,
       },
     });
+    if (assignee && assignee.id !== user.id && saved.length) {
+      await this.notifyStaffAssignedSafely(
+        user.hotelId,
+        [assignee.id],
+        { feed: 'rooms', count: saved.length, roomNumber: saved[0]?.roomNumber },
+        null,
+      );
+    }
     return this.toViews(saved);
   }
 
@@ -518,6 +544,14 @@ export class HousekeepingService {
         actorId,
         assignedToId: saved.housekeepingAssignedToId,
       });
+      if (!saved.housekeepingAssignedToId && saved.housekeepingStatus === 'needs_cleaning') {
+        await this.notifyStaffAvailableSafely(
+          saved.hotelId,
+          {},
+          { feed: 'rooms', id: saved.id, roomNumber: saved.roomNumber, cleaningType: saved.cleaningType },
+          saved.id,
+        );
+      }
     } catch (err) {
       this.logger.error(
         `housekeeping vacate hook failed for room ${roomId}: ${
@@ -618,6 +652,52 @@ export class HousekeepingService {
           : 'This action is not allowed in the room’s current cleaning state',
       status,
     });
+  }
+
+  /**
+   * 26.4 AC2 ① — staff-assignment push (`assign`/`bulkAssign`).
+   * `PushService.notify` never throws (Task 6's guarantee), but this
+   * try/catch is defense in depth at the call site — a push failure must
+   * never fail an already-committed transition.
+   */
+  private async notifyStaffAssignedSafely(
+    hotelId: string,
+    tenantUserIds: string[],
+    vars: Record<string, unknown>,
+    refId: string | null,
+  ): Promise<void> {
+    try {
+      await this.push.notify(hotelId, { tenantUserIds }, 'staff_assigned', { refId, vars });
+    } catch (err) {
+      this.logger.error(
+        `push notify(staff_assigned) failed for room ${refId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * 26.4 AC2 ② — a fresh unassigned cleaning task (manual flag or vacate).
+   * `excludeUserId` is only set for the manual-flag path (a human actor);
+   * the vacate hook is system-triggered and excludes no one.
+   */
+  private async notifyStaffAvailableSafely(
+    hotelId: string,
+    extra: { excludeUserId?: string },
+    vars: Record<string, unknown>,
+    refId: string | null,
+  ): Promise<void> {
+    try {
+      await this.push.notify(
+        hotelId,
+        { tenantPermission: 'housekeeping.update', mutedHintKey: 'staffPush.availableMuted', ...extra },
+        'staff_available',
+        { refId, vars },
+      );
+    } catch (err) {
+      this.logger.error(
+        `push notify(staff_available) failed for room ${refId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private async resolveAssignee(

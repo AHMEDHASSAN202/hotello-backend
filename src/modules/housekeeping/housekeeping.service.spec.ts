@@ -2,6 +2,7 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
+import { PushService } from '../push/push.service';
 import { Room } from '../tenant-rooms/room.entity';
 import { Stay } from '../tenant-stays/stay.entity';
 import { TenantAccessService } from '../tenant-access/tenant-access.service';
@@ -64,6 +65,7 @@ describe('HousekeepingService', () => {
   let access: { getAccessState: jest.Mock };
   let auditLogs: { log: jest.Mock };
   let housekeepingEvents: { record: jest.Mock; countCompletedBy: jest.Mock };
+  let push: { notify: jest.Mock };
   let qb: Record<string, jest.Mock>;
 
   beforeEach(async () => {
@@ -96,6 +98,7 @@ describe('HousekeepingService', () => {
       record: jest.fn().mockResolvedValue(undefined),
       countCompletedBy: jest.fn().mockResolvedValue(0),
     };
+    push = { notify: jest.fn().mockResolvedValue(undefined) };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -107,6 +110,7 @@ describe('HousekeepingService', () => {
         { provide: TenantAccessService, useValue: access },
         { provide: AuditLogsService, useValue: auditLogs },
         { provide: HousekeepingEventsService, useValue: housekeepingEvents },
+        { provide: PushService, useValue: push },
       ],
     }).compile();
     service = moduleRef.get(HousekeepingService);
@@ -321,6 +325,51 @@ describe('HousekeepingService', () => {
         expect.objectContaining({ action: 'housekeeping.cleared' }),
       );
     });
+
+    it('flagging an unassigned room to needs_cleaning emits staff_available, excluding the flagger (26.4 AC2 ②)', async () => {
+      roomsRepo.findOne.mockResolvedValue(makeRoom());
+      await service.flagRoom(makeActor(), 'room-1', {
+        cleaningType: 'checkout',
+        reason: 'Spill in 101',
+      });
+      expect(push.notify).toHaveBeenCalledWith(
+        HOTEL_ID,
+        {
+          tenantPermission: 'housekeeping.update',
+          excludeUserId: 'actor-1',
+          mutedHintKey: 'staffPush.availableMuted',
+        },
+        'staff_available',
+        expect.objectContaining({
+          refId: 'room-1',
+          vars: expect.objectContaining({
+            feed: 'rooms',
+            id: 'room-1',
+            roomNumber: '101',
+            cleaningType: 'checkout',
+          }),
+        }),
+      );
+    });
+
+    it('flagging a DND room (parked flag, stays dnd not needs_cleaning) does NOT push staff_available', async () => {
+      roomsRepo.findOne.mockResolvedValue(makeRoom({ housekeepingStatus: 'dnd' }));
+      await service.flagRoom(makeActor(), 'room-1', { cleaningType: 'daily' });
+      expect(push.notify).not.toHaveBeenCalled();
+    });
+
+    it('flagging an already-assigned room does NOT push staff_available', async () => {
+      roomsRepo.findOne.mockResolvedValue(makeRoom({ housekeepingAssignedToId: 'user-2' }));
+      await service.flagRoom(makeActor(), 'room-1', { cleaningType: 'checkout' });
+      expect(push.notify).not.toHaveBeenCalled();
+    });
+
+    it('push failure during flagRoom() never fails the transition', async () => {
+      roomsRepo.findOne.mockResolvedValue(makeRoom());
+      push.notify.mockRejectedValueOnce(new Error('dispatch exploded'));
+      const view = await service.flagRoom(makeActor(), 'room-1', { cleaningType: 'checkout' });
+      expect(view).toBeDefined();
+    });
   });
 
   describe('assignment (20.3 AC1)', () => {
@@ -395,6 +444,94 @@ describe('HousekeepingService', () => {
           }),
         }),
       );
+    });
+  });
+
+  describe('staff push on assign/bulkAssign (26.4 AC2 ①)', () => {
+    const validAssignee = {
+      id: 'user-2',
+      hotelId: HOTEL_ID,
+      status: 'active',
+      name: 'Mona',
+      role: { permissions: ['housekeeping.update'] },
+    };
+
+    it('assign to another user emits staff_assigned to that one user', async () => {
+      roomsRepo.findOne.mockResolvedValue(makeRoom({ cleaningType: 'daily' }));
+      usersRepo.findOne.mockResolvedValue(validAssignee);
+      await service.assign(makeActor(), 'room-1', { assigneeId: 'user-2' });
+      expect(push.notify).toHaveBeenCalledWith(
+        HOTEL_ID,
+        { tenantUserIds: ['user-2'] },
+        'staff_assigned',
+        expect.objectContaining({
+          refId: 'room-1',
+          vars: expect.objectContaining({
+            feed: 'rooms',
+            id: 'room-1',
+            roomNumber: '101',
+            cleaningType: 'daily',
+          }),
+        }),
+      );
+    });
+
+    it('self-assign does not push', async () => {
+      roomsRepo.findOne.mockResolvedValue(makeRoom());
+      usersRepo.findOne.mockResolvedValue({ ...validAssignee, id: 'actor-1' });
+      await service.assign(makeActor(), 'room-1', { assigneeId: 'actor-1' });
+      expect(push.notify).not.toHaveBeenCalled();
+    });
+
+    it('push failure during assign() never fails the transition', async () => {
+      roomsRepo.findOne.mockResolvedValue(makeRoom());
+      usersRepo.findOne.mockResolvedValue(validAssignee);
+      push.notify.mockRejectedValueOnce(new Error('dispatch exploded'));
+      const view = await service.assign(makeActor(), 'room-1', { assigneeId: 'user-2' });
+      expect(view).toBeDefined();
+    });
+
+    it('bulk-assign to another user emits exactly ONE staff_assigned carrying the count + first room number', async () => {
+      usersRepo.findOne.mockResolvedValue(validAssignee);
+      roomsRepo.find.mockResolvedValue([
+        makeRoom({ id: 'room-1', roomNumber: '101' }),
+        makeRoom({ id: 'room-2', roomNumber: '102' }),
+      ]);
+      await service.bulkAssign(makeActor(), {
+        roomIds: ['room-1', 'room-2'],
+        assigneeId: 'user-2',
+      });
+      const staffCalls = push.notify.mock.calls.filter((c) => c[2] === 'staff_assigned');
+      expect(staffCalls).toHaveLength(1);
+      expect(staffCalls[0]).toEqual([
+        HOTEL_ID,
+        { tenantUserIds: ['user-2'] },
+        'staff_assigned',
+        expect.objectContaining({
+          vars: expect.objectContaining({ feed: 'rooms', count: 2, roomNumber: '101' }),
+        }),
+      ]);
+    });
+
+    it('self bulk-assign does not push', async () => {
+      usersRepo.findOne.mockResolvedValue({ ...validAssignee, id: 'actor-1' });
+      roomsRepo.find.mockResolvedValue([makeRoom({ id: 'room-1' }), makeRoom({ id: 'room-2' })]);
+      await service.bulkAssign(makeActor(), {
+        roomIds: ['room-1', 'room-2'],
+        assigneeId: 'actor-1',
+      });
+      expect(push.notify).not.toHaveBeenCalled();
+    });
+
+    it('push failure during bulkAssign() never fails the transition', async () => {
+      usersRepo.findOne.mockResolvedValue(validAssignee);
+      roomsRepo.find.mockResolvedValue([makeRoom({ id: 'room-1' })]);
+      push.notify.mockRejectedValueOnce(new Error('dispatch exploded'));
+      const views = await service.bulkAssign(makeActor(), {
+        roomIds: ['room-1'],
+        assigneeId: 'user-2',
+      });
+      expect(views).toBeDefined();
     });
   });
 
@@ -473,6 +610,40 @@ describe('HousekeepingService', () => {
 
     it('never throws into the checkout path', async () => {
       roomsRepo.findOne.mockRejectedValue(new Error('db down'));
+      await expect(
+        service.onRoomVacated('room-1', HOTEL_ID, null),
+      ).resolves.toBeUndefined();
+    });
+
+    it('vacating an unassigned room emits staff_available with NO excludeUserId (system-triggered)', async () => {
+      roomsRepo.findOne.mockResolvedValue(makeRoom({ housekeepingAssignedToId: null }));
+      await service.onRoomVacated('room-1', HOTEL_ID, null);
+      expect(push.notify).toHaveBeenCalledWith(
+        HOTEL_ID,
+        { tenantPermission: 'housekeeping.update', mutedHintKey: 'staffPush.availableMuted' },
+        'staff_available',
+        expect.objectContaining({
+          refId: 'room-1',
+          vars: expect.objectContaining({
+            feed: 'rooms',
+            id: 'room-1',
+            roomNumber: '101',
+            cleaningType: 'checkout',
+          }),
+        }),
+      );
+      expect(push.notify.mock.calls[0][1]).not.toHaveProperty('excludeUserId');
+    });
+
+    it('vacating an already-assigned room does NOT push staff_available', async () => {
+      roomsRepo.findOne.mockResolvedValue(makeRoom({ housekeepingAssignedToId: 'user-2' }));
+      await service.onRoomVacated('room-1', HOTEL_ID, 'actor-1');
+      expect(push.notify).not.toHaveBeenCalled();
+    });
+
+    it('a push failure during onRoomVacated() never throws into the checkout path', async () => {
+      roomsRepo.findOne.mockResolvedValue(makeRoom());
+      push.notify.mockRejectedValueOnce(new Error('dispatch exploded'));
       await expect(
         service.onRoomVacated('room-1', HOTEL_ID, null),
       ).resolves.toBeUndefined();

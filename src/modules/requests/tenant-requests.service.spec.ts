@@ -313,7 +313,7 @@ describe('TenantRequestsService', () => {
       );
     });
 
-    it('assign() does NOT push — not a guest-visible status change', async () => {
+    it('assign() does NOT push request_status — not a guest-visible status change (it pushes staff_assigned instead, see below)', async () => {
       repo.findOne.mockResolvedValue(makeRequest());
       usersRepo.findOne.mockResolvedValue({
         id: 'user-2',
@@ -323,7 +323,12 @@ describe('TenantRequestsService', () => {
         role: { permissions: ['requests.update'] },
       });
       await service.assign(ACTOR, 'req-1', { assigneeId: 'user-2' });
-      expect(push.notify).not.toHaveBeenCalled();
+      expect(push.notify).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        'request_status',
+        expect.anything(),
+      );
     });
 
     it('push failure never fails the transition', async () => {
@@ -331,6 +336,66 @@ describe('TenantRequestsService', () => {
       push.notify.mockRejectedValueOnce(new Error('dispatch exploded'));
       const result = await service.start(ACTOR, 'req-1');
       expect(result.status).toBe('in_progress');
+    });
+  });
+
+  describe('staff push on assign (26.4 AC2 ①)', () => {
+    it('assign to another user emits staff_assigned to exactly that user', async () => {
+      const request = makeRequest();
+      repo.findOne.mockResolvedValue(request);
+      usersRepo.findOne.mockResolvedValue({
+        id: 'user-2',
+        hotelId: 'hotel-1',
+        status: 'active',
+        name: 'Hany',
+        role: { permissions: ['requests.update'] },
+      });
+      await service.assign(ACTOR, 'req-1', { assigneeId: 'user-2' });
+      expect(push.notify).toHaveBeenCalledWith(
+        'hotel-1',
+        { tenantUserIds: ['user-2'] },
+        'staff_assigned',
+        expect.objectContaining({
+          refId: request.id,
+          vars: expect.objectContaining({
+            feed: 'requests',
+            id: request.id,
+            roomNumber: request.roomNumber,
+          }),
+        }),
+      );
+    });
+
+    it('self-assign does not push staff_assigned', async () => {
+      repo.findOne.mockResolvedValue(makeRequest());
+      usersRepo.findOne.mockResolvedValue({
+        id: ACTOR.id,
+        hotelId: 'hotel-1',
+        status: 'active',
+        name: 'Front Desk Fatma',
+        role: { permissions: ['requests.update'] },
+      });
+      await service.assign(ACTOR, 'req-1', { assigneeId: ACTOR.id });
+      expect(push.notify).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        'staff_assigned',
+        expect.anything(),
+      );
+    });
+
+    it('push failure during assign() never fails the transition', async () => {
+      repo.findOne.mockResolvedValue(makeRequest());
+      usersRepo.findOne.mockResolvedValue({
+        id: 'user-2',
+        hotelId: 'hotel-1',
+        status: 'active',
+        name: 'Hany',
+        role: { permissions: ['requests.update'] },
+      });
+      push.notify.mockRejectedValueOnce(new Error('dispatch exploded'));
+      const result = await service.assign(ACTOR, 'req-1', { assigneeId: 'user-2' });
+      expect(result).toBeDefined();
     });
   });
 

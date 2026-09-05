@@ -6,7 +6,6 @@ import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { PushService } from './push.service';
 import { PushDispatchService } from './push-dispatch.service';
 import { PushSubscriptionsService } from './push-subscriptions.service';
-import { PushType } from './push.constants';
 
 describe('PushService.notify (23.1 AC5)', () => {
   let service: PushService;
@@ -303,10 +302,6 @@ describe('PushService.notify (23.1 AC5)', () => {
     expect(result).toBe(map);
   });
 
-  // 'staff_assigned'/'staff_available' are added to PUSH_TYPES by Task 7
-  // (not this task). Cast the type argument so THIS file type-checks and
-  // runs now; Task 7 removes the cast when it adds the real union members
-  // (its own push.service.spec.ts pass turns this describe green).
   describe('tenant-user targets (26.4)', () => {
     const hotel = { id: 'h1', slug: 'sunrise', timezone: 'Africa/Cairo', defaultLanguage: 'ar' };
     const u = (id: string, extra: Partial<any> = {}) => ({
@@ -315,11 +310,14 @@ describe('PushService.notify (23.1 AC5)', () => {
     });
 
     it('tenantUserIds: composes in the user language (preferredLanguage → hotel default) and never applies quiet hours', async () => {
-      usersQb.getMany.mockResolvedValue([u('u1', { preferredLanguage: 'en' }), u('u2')]);
+      // The `tenantUserIds` target shape resolves via `usersRepo.find` (an
+      // explicit id lookup), not the query builder (that's the
+      // `tenantPermission` fan-out path below).
+      usersRepo.find.mockResolvedValue([u('u1', { preferredLanguage: 'en' }), u('u2')]);
       subscriptions.findByTenantUserIds.mockResolvedValue([
         { id: 's1', tenantUserId: 'u1' }, { id: 's2', tenantUserId: 'u2' },
       ]);
-      await service.notify('h1', { tenantUserIds: ['u1', 'u2'] }, 'staff_assigned' as unknown as PushType, {
+      await service.notify('h1', { tenantUserIds: ['u1', 'u2'] }, 'staff_assigned', {
         refId: 'r1', vars: { feed: 'requests', id: 'r1', roomNumber: '304', names: { ar: 'مناشف', en: 'Towels' } },
       });
       const inputs = dispatch.enqueueAndSend.mock.calls[0][0];
@@ -336,15 +334,15 @@ describe('PushService.notify (23.1 AC5)', () => {
       subscriptions.findByTenantUserIds.mockResolvedValue([{ id: 's3', tenantUserId: 'ok' }]);
       await service.notify('h1', {
         tenantPermission: 'requests.update', excludeUserId: 'actor', mutedHintKey: 'staffPush.availableMuted',
-      }, 'staff_available' as unknown as PushType, { refId: 'r2', vars: { feed: 'requests', id: 'r2', roomNumber: '101', names: { ar: 'x', en: 'x' } } });
+      }, 'staff_available', { refId: 'r2', vars: { feed: 'requests', id: 'r2', roomNumber: '101', names: { ar: 'x', en: 'x' } } });
       expect(subscriptions.findByTenantUserIds).toHaveBeenCalledWith(['ok']);
     });
 
     it('tenant targets with no subscriptions enqueue nothing and never throw', async () => {
-      usersQb.getMany.mockResolvedValue([u('u9')]);
+      usersRepo.find.mockResolvedValue([u('u9')]);
       subscriptions.findByTenantUserIds.mockResolvedValue([]);
       await expect(
-        service.notify('h1', { tenantUserIds: ['u9'] }, 'staff_assigned' as unknown as PushType, { refId: null, vars: {} }),
+        service.notify('h1', { tenantUserIds: ['u9'] }, 'staff_assigned', { refId: null, vars: {} }),
       ).resolves.toBeUndefined();
       expect(dispatch.enqueueAndSend).not.toHaveBeenCalled();
     });

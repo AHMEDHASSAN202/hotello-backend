@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { PushService } from '../push/push.service';
 import { TenantAccessService } from '../tenant-access/tenant-access.service';
 import { hotelLocalParts } from '../tenant-stays/stay-time';
 import { Stay } from '../tenant-stays/stay.entity';
@@ -98,6 +99,7 @@ describe('GuestFnbService (16.5/16.6)', () => {
   let linesRepo: Record<string, jest.Mock>;
   let access: { getAccessState: jest.Mock };
   let auditLogs: { log: jest.Mock };
+  let push: { notify: jest.Mock };
   let managerOrders: Record<string, jest.Mock>;
   let managerLines: Record<string, jest.Mock>;
 
@@ -124,6 +126,7 @@ describe('GuestFnbService (16.5/16.6)', () => {
       }),
     };
     auditLogs = { log: jest.fn() };
+    push = { notify: jest.fn().mockResolvedValue(undefined) };
 
     managerOrders = {
       create: jest.fn((d) => ({ id: 'order-new', createdAt: new Date(), updatedAt: new Date(), ...d })),
@@ -154,6 +157,7 @@ describe('GuestFnbService (16.5/16.6)', () => {
         { provide: DataSource, useValue: dataSource },
         { provide: TenantAccessService, useValue: access },
         { provide: AuditLogsService, useValue: auditLogs },
+        { provide: PushService, useValue: push },
         {
           provide: ConfigService,
           useValue: { get: jest.fn((_k: string, fallback: string) => fallback) },
@@ -240,6 +244,32 @@ describe('GuestFnbService (16.5/16.6)', () => {
       expect(auditLogs.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'fnb_order.created', actorId: null }),
       );
+    });
+
+    it('emits staff_available to fnb_orders.update holders (26.4 AC2 ②)', async () => {
+      const view = await service.createOrder(makeStay(), roomOrder());
+      expect(push.notify).toHaveBeenCalledWith(
+        'hotel-1',
+        {
+          tenantPermission: 'fnb_orders.update',
+          mutedHintKey: 'staffPush.availableMuted',
+        },
+        'staff_available',
+        expect.objectContaining({
+          refId: view.id,
+          vars: expect.objectContaining({
+            feed: 'orders',
+            id: view.id,
+            roomNumber: '304',
+          }),
+        }),
+      );
+    });
+
+    it('a push failure never fails order creation', async () => {
+      push.notify.mockRejectedValueOnce(new Error('dispatch exploded'));
+      const view = await service.createOrder(makeStay(), roomOrder());
+      expect(view).toBeDefined();
     });
 
     it('AC3 (16.4) — fully-included order stores paymentMethod NULL even if one was sent', async () => {
@@ -460,12 +490,15 @@ describe('GuestFnbService (16.5/16.6)', () => {
       );
     });
 
-    it('never pushes (23.4 recorded decision) — GuestFnbService takes no PushService dependency, so a guest-initiated cancel structurally cannot notify; the guest already knows, they did it', () => {
+    it('never pushes (23.4 recorded decision) — a guest-initiated cancel never notifies; the guest already knows, they did it', async () => {
       // The push hooks added for Epic 23.4 live only on the STAFF-side
       // TenantFnbOrdersService.cancel() (tenant-fnb-orders.service.spec.ts).
-      // This service is never given a `push` field/dependency, so cancelOwn
-      // (or any other guest method) has no way to call PushService.notify.
-      expect((service as unknown as Record<string, unknown>).push).toBeUndefined();
+      // GuestFnbService now DOES hold a PushService dependency (Epic 26 —
+      // `createOrder()` pushes `staff_available`), but `cancelOwn()` itself
+      // never calls it.
+      ordersRepo.findOne.mockResolvedValue({ id: 'order-1', stayId: 'stay-1', status: 'new' });
+      await service.cancelOwn(makeStay(), 'order-1');
+      expect(push.notify).not.toHaveBeenCalled();
     });
   });
 });

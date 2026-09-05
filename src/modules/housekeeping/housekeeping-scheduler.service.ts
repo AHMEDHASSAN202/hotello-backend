@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Not, Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { Hotel } from '../hotels/hotel.entity';
+import { PushService } from '../push/push.service';
 import { Room } from '../tenant-rooms/room.entity';
 import { hotelLocalParts, minutesOf } from '../tenant-stays/stay-time';
 import { Stay } from '../tenant-stays/stay.entity';
@@ -43,6 +44,7 @@ export class HousekeepingSchedulerService {
     private readonly hotelsRepo: Repository<Hotel>,
     private readonly auditLogs: AuditLogsService,
     private readonly housekeepingEvents: HousekeepingEventsService,
+    private readonly push: PushService,
   ) {}
 
   @Cron(CronExpression.EVERY_5_MINUTES)
@@ -83,8 +85,42 @@ export class HousekeepingSchedulerService {
       const counts = await this.processHotel(hotel, local.date);
       flagged += counts.flagged;
       released += counts.released;
+      if (counts.flagged > 0) {
+        await this.notifyStaffAvailableSafely(hotel.id, local.date, counts.flagged);
+      }
     }
     return { flagged, released };
+  }
+
+  /**
+   * 26.4 AC2 ③ — one push per hotel per tick (not per room): the
+   * `staff_daily:{hotelId}:{localDate}` dedupe prefix makes the 5-minute
+   * cadence idempotent, matching `lastDailyFlaggedOn`'s per-room idempotency
+   * (note 4). `PushService.notify` never throws (Task 6's guarantee), but
+   * this try/catch is defense in depth — a push failure must never fail the
+   * tick itself.
+   */
+  private async notifyStaffAvailableSafely(
+    hotelId: string,
+    localDate: string,
+    count: number,
+  ): Promise<void> {
+    try {
+      await this.push.notify(
+        hotelId,
+        { tenantPermission: 'housekeeping.update', mutedHintKey: 'staffPush.availableMuted' },
+        'staff_available',
+        {
+          refId: null,
+          dedupePrefix: `staff_daily:${hotelId}:${localDate}`,
+          vars: { feed: 'rooms', count },
+        },
+      );
+    } catch (err) {
+      this.logger.error(
+        `push notify(staff_available) failed for hotel ${hotelId} daily tick: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private async processHotel(

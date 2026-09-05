@@ -16,6 +16,7 @@ Feature specs — single source of truth. Read the relevant epic fully before pl
 | 10 | [Tenant Roles & Permissions](epic-10-tenant-roles.md) | implemented |
 | 11 | Rooms & QR | planned — next up (no spec file yet) |
 | 12 | [In-App Guidance & Helper Text](epic-12-guidance-helper-text.md) | implemented |
+| 26 | [Staff Task PWA](epic-26-staff-task-pwa.md) | in progress |
 | — | [Task: Migration Infrastructure Setup](task-migrations-setup.md) | done |
 
 ## Notes
