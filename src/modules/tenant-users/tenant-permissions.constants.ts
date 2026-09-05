@@ -454,4 +454,42 @@ export function findTenantPermissionGroup(
   return group;
 }
 
+/**
+ * Epic 26 (26.1 AC4) — THE primary-surface rule, shared by both frontends
+ * via the login response / `GET /tenant/me` (`user.primarySurface`).
+ * Recorded choice: a backend flag, not client derivation, so the key set
+ * lives in exactly one place (Laundry's tab later = one edit here).
+ *
+ * `staff` = the account only has field-surface keys AND at least one
+ * field-action key. Everything else (wildcard, any dashboard-level key,
+ * read-only field keys) stays on the dashboard.
+ */
+export type PrimarySurface = 'dashboard' | 'staff';
+
+/** Keys a field worker may hold while still belonging on the PWA. */
+export const FIELD_SURFACE_PERMISSIONS: readonly string[] = [
+  'requests.read',
+  'requests.update',
+  'fnb_orders.read',
+  'fnb_orders.update',
+  'housekeeping.read',
+  'housekeeping.update',
+  'rooms.read',
+];
+
+/** Keys that unlock a PWA tab (26.1 AC3). */
+export const FIELD_ACTION_PERMISSIONS: readonly string[] = [
+  'requests.update',
+  'fnb_orders.update',
+  'housekeeping.update',
+];
+
+export function resolvePrimarySurface(permissions: readonly string[]): PrimarySurface {
+  if (permissions.includes(WILDCARD)) return 'dashboard';
+  const hasAction = permissions.some((p) => FIELD_ACTION_PERMISSIONS.includes(p));
+  if (!hasAction) return 'dashboard';
+  const onlyField = permissions.every((p) => FIELD_SURFACE_PERMISSIONS.includes(p));
+  return onlyField ? 'staff' : 'dashboard';
+}
+
 export { WILDCARD };

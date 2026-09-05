@@ -100,6 +100,19 @@ describe('TenantProfileService (8.7)', () => {
     expect(result.subscription).toMatchObject({ trialDaysRemaining: 5 });
   });
 
+  it('exposes primarySurface derived from the role permissions (26.1 AC4)', async () => {
+    const u = user({
+      role: {
+        id: 'role-hk',
+        nameEn: 'Housekeeping',
+        nameAr: 'التدبير الفندقي',
+        isSystem: true,
+        permissions: ['requests.update', 'housekeeping.update'],
+      } as never,
+    });
+    expect((await service.me(u)).user.primarySurface).toBe('staff');
+  });
+
   it('23.3 — me() exposes hotel.pushQuietHours from env (defaults 22:00/08:00)', async () => {
     const result = await service.me(user());
     expect(result.hotel.pushQuietHours).toEqual({ start: '22:00', end: '08:00' });

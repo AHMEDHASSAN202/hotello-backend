@@ -8,6 +8,7 @@ import { TenantAccessService } from '../tenant-access/tenant-access.service';
 import { TenantRole } from '../tenant-roles/tenant-role.entity';
 import { Room } from '../tenant-rooms/room.entity';
 import { isTenantHintKey } from '../tenant-users/tenant-hint-keys.constants';
+import { resolvePrimarySurface } from '../tenant-users/tenant-permissions.constants';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { TenantChangePasswordDto } from './dto/tenant-change-password.dto';
 import { UpdateTenantProfileDto } from './dto/update-tenant-profile.dto';
@@ -68,6 +69,7 @@ export class TenantProfileService {
             }
           : null,
         permissions: user.role?.permissions ?? [],
+        primarySurface: resolvePrimarySurface(user.role?.permissions ?? []),
         preferredLanguage: user.preferredLanguage,
         lastLoginAt: user.lastLoginAt,
         // Story 9.7 AC4 — the shell redirects to the forced change-password

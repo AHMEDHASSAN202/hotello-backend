@@ -4,6 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { Repository } from 'typeorm';
+import { resolvePrimarySurface } from '../tenant-users/tenant-permissions.constants';
 import { TenantUser } from '../tenant-users/tenant-user.entity';
 
 const BCRYPT_ROUNDS = 10;
@@ -72,6 +73,7 @@ export class TenantTokenService {
           }
         : null,
       permissions: user.role?.permissions ?? [],
+      primarySurface: resolvePrimarySurface(user.role?.permissions ?? []),
       preferredLanguage: user.preferredLanguage,
     };
   }

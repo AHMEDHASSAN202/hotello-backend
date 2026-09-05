@@ -3,6 +3,10 @@ import { DEFAULT_TENANT_ROLES } from '../tenant-roles/default-tenant-roles';
 import { TENANT_HINT_KEYS } from './tenant-hint-keys.constants';
 import {
   ALL_TENANT_PERMISSION_KEYS,
+  FIELD_ACTION_PERMISSIONS,
+  FIELD_SURFACE_PERMISSIONS,
+  isKnownTenantPermission,
+  resolvePrimarySurface,
   TENANT_PERMISSION_CATALOG,
 } from './tenant-permissions.constants';
 
@@ -202,5 +206,36 @@ describe('Epic 22 — reports permissions', () => {
     expect(byName['Front Desk']).not.toContain('reports.export');
     expect(byName['Housekeeping']).not.toContain('reports.read');
     expect(byName['F&B / Kitchen']).not.toContain('reports.read');
+  });
+});
+
+describe('resolvePrimarySurface (26.1 AC4 — the redirect law rule)', () => {
+  it('wildcard (owner) is always dashboard', () => {
+    expect(resolvePrimarySurface(['*'])).toBe('dashboard');
+  });
+  it('field-only attendant → staff', () => {
+    expect(
+      resolvePrimarySurface(['requests.read', 'requests.update', 'housekeeping.read', 'housekeeping.update']),
+    ).toBe('staff');
+  });
+  it('runner with only fnb_orders.update → staff', () => {
+    expect(resolvePrimarySurface(['fnb_orders.read', 'fnb_orders.update'])).toBe('staff');
+  });
+  it('any dashboard-level key keeps the dashboard (seeded Housekeeping role holds rooms.update)', () => {
+    expect(
+      resolvePrimarySurface(['rooms.read', 'rooms.update', 'requests.update', 'housekeeping.update']),
+    ).toBe('dashboard');
+  });
+  it('field read keys without an action key → dashboard (nothing to do in the PWA)', () => {
+    expect(resolvePrimarySurface(['requests.read'])).toBe('dashboard');
+    expect(resolvePrimarySurface([])).toBe('dashboard');
+  });
+  it('field constants only reference catalog keys', () => {
+    for (const key of [...FIELD_SURFACE_PERMISSIONS, ...FIELD_ACTION_PERMISSIONS]) {
+      expect(isKnownTenantPermission(key)).toBe(true);
+    }
+    for (const key of FIELD_ACTION_PERMISSIONS) {
+      expect(FIELD_SURFACE_PERMISSIONS).toContain(key);
+    }
   });
 });
