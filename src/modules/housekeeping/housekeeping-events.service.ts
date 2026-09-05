@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { MoreThan, Repository } from 'typeorm';
 import { HousekeepingEvent } from './housekeeping-event.entity';
 import { CleaningType, HousekeepingEventType } from './housekeeping.constants';
 
@@ -47,5 +47,21 @@ export class HousekeepingEventsService {
         }`,
       );
     }
+  }
+
+  /** 26.5 AC2 — rooms this user completed since `since` (timestamptz column). */
+  countCompletedBy(
+    hotelId: string,
+    actorId: string,
+    since: Date,
+  ): Promise<number> {
+    return this.repo.count({
+      where: {
+        hotelId,
+        actorId,
+        eventType: 'completed',
+        occurredAt: MoreThan(since),
+      },
+    });
   }
 }

@@ -63,7 +63,7 @@ describe('HousekeepingService', () => {
   let usersRepo: Record<string, jest.Mock>;
   let access: { getAccessState: jest.Mock };
   let auditLogs: { log: jest.Mock };
-  let housekeepingEvents: { record: jest.Mock };
+  let housekeepingEvents: { record: jest.Mock; countCompletedBy: jest.Mock };
   let qb: Record<string, jest.Mock>;
 
   beforeEach(async () => {
@@ -92,7 +92,10 @@ describe('HousekeepingService', () => {
     };
     access = { getAccessState: jest.fn().mockResolvedValue(accessState()) };
     auditLogs = { log: jest.fn() };
-    housekeepingEvents = { record: jest.fn().mockResolvedValue(undefined) };
+    housekeepingEvents = {
+      record: jest.fn().mockResolvedValue(undefined),
+      countCompletedBy: jest.fn().mockResolvedValue(0),
+    };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -690,6 +693,75 @@ describe('HousekeepingService', () => {
       await expect(
         service.onRoomVacated('room-1', HOTEL_ID, 'actor-1'),
       ).resolves.toBeUndefined();
+    });
+  });
+
+  describe('two-lane filter (26.2 AC3)', () => {
+    beforeEach(() => {
+      // toViews resolves assignedTo via usersRepo.find — register both actors
+      // so assignment (not just id equality) round-trips through the view.
+      usersRepo.find.mockResolvedValue([
+        { id: 'actor-1', name: 'Sara' },
+        { id: 'someone-else', name: 'Someone Else' },
+      ]);
+    });
+
+    it('full: my rooms (incl. a DND one) + unassigned needs_cleaning rooms, lane-stamped', async () => {
+      const actor = makeActor();
+      qb.getMany.mockResolvedValue([
+        makeRoom({ id: 'mine-cleaning', housekeepingAssignedToId: actor.id, housekeepingStatus: 'in_progress' }),
+        makeRoom({ id: 'mine-dnd', housekeepingAssignedToId: actor.id, housekeepingStatus: 'dnd' }),
+        makeRoom({ id: 'free', housekeepingAssignedToId: null, housekeepingStatus: 'needs_cleaning' }),
+        makeRoom({ id: 'other', housekeepingAssignedToId: 'someone-else', housekeepingStatus: 'needs_cleaning' }),
+        makeRoom({ id: 'clean-room', housekeepingAssignedToId: null, housekeepingStatus: 'clean' }),
+      ]);
+      const res = await service.listBoard(actor, { assignee: 'me,unassigned' } as any);
+      expect(res.data.map((r: any) => r.id)).toEqual(['mine-cleaning', 'mine-dnd', 'free']);
+      expect(res.data.map((r: any) => r.lane)).toEqual(['mine', 'mine', 'available']);
+    });
+
+    it('delta: a room a colleague took → taken; a room completed elsewhere → closed; unassigned room that went DND → removed', async () => {
+      const actor = makeActor();
+      roomsRepo.find.mockResolvedValue([
+        makeRoom({ id: 'taken', housekeepingAssignedToId: 'someone-else', housekeepingStatus: 'needs_cleaning' }),
+        makeRoom({ id: 'closed', housekeepingAssignedToId: actor.id, housekeepingStatus: 'clean' }),
+        makeRoom({ id: 'parked-dnd', housekeepingAssignedToId: null, housekeepingStatus: 'dnd' }),
+        makeRoom({ id: 'still-mine', housekeepingAssignedToId: actor.id, housekeepingStatus: 'in_progress' }),
+      ]);
+      const res = await service.listBoard(actor, { assignee: 'me,unassigned', updatedSince: new Date().toISOString() } as any);
+      expect(res.data).toEqual(
+        expect.arrayContaining([
+          { id: 'taken', active: false, reason: 'taken' },
+          { id: 'closed', active: false, reason: 'closed' },
+          { id: 'parked-dnd', active: false, reason: 'removed' },
+          expect.objectContaining({ id: 'still-mine', lane: 'mine' }),
+        ]),
+      );
+      expect(res.data).toHaveLength(4);
+    });
+
+    it('delta: inactive-room tombstone carries reason removed when assignee is present', async () => {
+      const actor = makeActor();
+      roomsRepo.find.mockResolvedValue([makeRoom({ id: 'gone', status: 'inactive' })]);
+      const res = await service.listBoard(actor, { assignee: 'me', updatedSince: new Date().toISOString() } as any);
+      expect(res.data).toEqual([{ id: 'gone', active: false, reason: 'removed' }]);
+    });
+
+    it('myDoneToday delegates to housekeepingEvents.countCompletedBy(hotelId, me, dayStart)', async () => {
+      const actor = makeActor();
+      qb.getMany.mockResolvedValue([]);
+      housekeepingEvents.countCompletedBy = jest.fn().mockResolvedValue(3);
+      const res = await service.listBoard(actor, { assignee: 'me' } as any);
+      expect(housekeepingEvents.countCompletedBy).toHaveBeenCalledWith(HOTEL_ID, actor.id, expect.any(Date));
+      expect(res.counts.myDoneToday).toBe(3);
+    });
+
+    it('without assignee the board payload is unchanged', async () => {
+      const actor = makeActor();
+      qb.getMany.mockResolvedValue([makeRoom({ id: 'a' })]);
+      const res = await service.listBoard(actor, {} as any);
+      expect((res.data[0] as any).lane).toBeUndefined();
+      expect(res.counts.myDoneToday).toBeUndefined();
     });
   });
 });

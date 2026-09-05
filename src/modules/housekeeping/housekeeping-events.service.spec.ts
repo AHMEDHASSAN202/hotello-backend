@@ -5,10 +5,10 @@ import { HousekeepingEventsService } from './housekeeping-events.service';
 
 describe('HousekeepingEventsService (Story 22.2 AC1/AC3)', () => {
   let service: HousekeepingEventsService;
-  let repo: { insert: jest.Mock };
+  let repo: { insert: jest.Mock; count: jest.Mock };
 
   beforeEach(async () => {
-    repo = { insert: jest.fn().mockResolvedValue({}) };
+    repo = { insert: jest.fn().mockResolvedValue({}), count: jest.fn() };
     const moduleRef = await Test.createTestingModule({
       providers: [
         HousekeepingEventsService,
@@ -66,5 +66,17 @@ describe('HousekeepingEventsService (Story 22.2 AC1/AC3)', () => {
         eventType: 'flagged',
       }),
     ).resolves.toBeUndefined();
+  });
+
+  describe('countCompletedBy (26.5 AC2)', () => {
+    it('counts completed events for the given hotel/actor since the given time', async () => {
+      repo.count = jest.fn().mockResolvedValue(3);
+      const since = new Date('2026-08-29T00:00:00Z');
+      const result = await service.countCompletedBy('hotel-1', 'actor-1', since);
+      expect(repo.count).toHaveBeenCalledWith({
+        where: { hotelId: 'hotel-1', actorId: 'actor-1', eventType: 'completed', occurredAt: expect.anything() },
+      });
+      expect(result).toBe(3);
+    });
   });
 });

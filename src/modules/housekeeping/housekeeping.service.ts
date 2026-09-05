@@ -9,6 +9,14 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, MoreThan, Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import {
+  applyLaneFilter,
+  Lane,
+  Laned,
+  LaneTombstone,
+  LaneTombstoneReason,
+  requestedLanes,
+} from '../../common/lanes';
 import { Hotel } from '../hotels/hotel.entity';
 import { WILDCARD } from '../roles/permissions.constants';
 import { Room } from '../tenant-rooms/room.entity';
@@ -65,10 +73,37 @@ export interface HousekeepingBoardCounts {
   inProgress: number;
   doneToday: number;
   dnd: number;
+  /** 26.5 AC2 — only present when `assignee` was requested (Staff PWA). */
+  myDoneToday?: number;
 }
 
 /** Room statuses that appear on the board (20.1 AC1 — inactive never shows). */
 const BOARD_ROOM_STATUSES = ['active', 'out_of_service'];
+
+/** 26.2 AC3 — the room lane rule: cleanable states only, no SLA/queue involved. */
+const MY_ROOM_STATUSES: HousekeepingStatus[] = [
+  'needs_cleaning',
+  'in_progress',
+  'dnd',
+];
+
+/** 26.2 AC3 — lane rule for rooms, relative to the caller. */
+function laneOfRoom(view: HousekeepingRoomView, userId: string): Lane | null {
+  if (view.assignedTo?.id === userId) {
+    return MY_ROOM_STATUSES.includes(view.housekeepingStatus)
+      ? 'mine'
+      : null;
+  }
+  if (view.assignedTo === null && view.housekeepingStatus === 'needs_cleaning') {
+    return 'available';
+  }
+  return null;
+}
+function reasonOfRoom(view: HousekeepingRoomView): LaneTombstoneReason {
+  if (view.housekeepingStatus === 'clean') return 'closed';
+  if (view.assignedTo !== null) return 'taken';
+  return 'removed';
+}
 
 /**
  * Epic 20 — the housekeeping operations backbone. Every mutation funnels
@@ -99,7 +134,7 @@ export class HousekeepingService {
     user: TenantUser,
     query: ListBoardQueryDto,
   ): Promise<{
-    data: HousekeepingRoomDelta[];
+    data: Array<HousekeepingRoomDelta | Laned<HousekeepingRoomView> | LaneTombstone>;
     counts: HousekeepingBoardCounts;
     serverTime: string;
   }> {
@@ -133,9 +168,29 @@ export class HousekeepingService {
         .getMany();
       data = await this.toViews(rows);
     }
+    let result: Array<
+      HousekeepingRoomDelta | Laned<HousekeepingRoomView> | LaneTombstone
+    > = data;
+    if (query.assignee) {
+      const lanes = requestedLanes(query.assignee);
+      const mode = query.updatedSince ? 'delta' : 'full';
+      result = data.flatMap((row) =>
+        'active' in row
+          ? [{ id: row.id, active: false as const, reason: 'removed' as const }]
+          : applyLaneFilter(
+              [row],
+              lanes,
+              (v) => laneOfRoom(v, user.id),
+              reasonOfRoom,
+              mode,
+            ),
+      );
+    }
+    const counts = await this.counts(user.hotelId);
+    if (query.assignee) counts.myDoneToday = await this.myDoneToday(user);
     return {
-      data,
-      counts: await this.counts(user.hotelId),
+      data: result,
+      counts,
       serverTime: new Date().toISOString(),
     };
   }
@@ -173,6 +228,22 @@ export class HousekeepingService {
         this.roomsRepo.count({ where: { ...base, housekeepingStatus: 'dnd' } }),
       ]);
     return { toCleanCheckout, toCleanDaily, inProgress, doneToday, dnd };
+  }
+
+  /** 26.5 AC2 — my completions since the hotel-local day start (recorded decision 10). */
+  private async myDoneToday(user: TenantUser): Promise<number> {
+    const hotel = await this.hotelsRepo.findOne({
+      where: { id: user.hotelId },
+    });
+    const dayStart = startOfHotelDay(
+      hotel?.timezone ?? 'Africa/Cairo',
+      new Date(),
+    );
+    return this.housekeepingEvents.countCompletedBy(
+      user.hotelId,
+      user.id,
+      dayStart,
+    );
   }
 
   /**
