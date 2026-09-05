@@ -70,6 +70,7 @@ describe('PushSubscriptionsService (23.1 AC1, 23.2 AC4)', () => {
         id: 'sub-1',
         hotelId: 'hotel-1',
         stayId: 'stay-1',
+        tenantUserId: null,
         endpoint: 'https://fcm.googleapis.com/fcm/send/abc123',
         p256dh: 'old-p256dh',
         auth: 'old-auth',
@@ -101,6 +102,7 @@ describe('PushSubscriptionsService (23.1 AC1, 23.2 AC4)', () => {
         id: 'sub-1',
         hotelId: 'hotel-1',
         stayId: 'stay-OLD',
+        tenantUserId: null,
         endpoint: 'https://fcm.googleapis.com/fcm/send/abc123',
         p256dh: 'old-p256dh',
         auth: 'old-auth',
@@ -127,6 +129,7 @@ describe('PushSubscriptionsService (23.1 AC1, 23.2 AC4)', () => {
         id: 'sub-1',
         hotelId: 'hotel-1',
         stayId: 'stay-1',
+        tenantUserId: null,
         endpoint: 'https://fcm.googleapis.com/fcm/send/abc123',
         p256dh: 'old-p256dh',
         auth: 'old-auth',
@@ -176,6 +179,7 @@ describe('PushSubscriptionsService (23.1 AC1, 23.2 AC4)', () => {
         id: 'sub-other',
         hotelId: 'hotel-1',
         stayId: 'stay-OTHER',
+        tenantUserId: null,
         endpoint: 'https://fcm.googleapis.com/fcm/send/shared-device',
         p256dh: 'p',
         auth: 'a',
@@ -214,6 +218,7 @@ describe('PushSubscriptionsService (23.1 AC1, 23.2 AC4)', () => {
         id: 'sub-mine',
         hotelId: 'hotel-1',
         stayId: 'stay-CALLER',
+        tenantUserId: null,
         endpoint: 'https://fcm.googleapis.com/fcm/send/my-device',
         p256dh: 'p',
         auth: 'a',
@@ -262,6 +267,27 @@ describe('PushSubscriptionsService (23.1 AC1, 23.2 AC4)', () => {
 
       expect(result).toEqual([]);
       expect(repo.find).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('staff subscriptions (26.4 AC1)', () => {
+    it('upsertForUser binds the endpoint to the tenant user and clears any stay binding', async () => {
+      repo.findOne.mockResolvedValue({ id: 's1', endpoint: 'e', stayId: 'old-stay', tenantUserId: null });
+      await service.upsertForUser({ id: 'u1', hotelId: 'h1' } as any, {
+        endpoint: 'e', keys: { p256dh: 'k', auth: 'a' }, deviceHint: 'android',
+      });
+      expect(repo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ tenantUserId: 'u1', stayId: null, hotelId: 'h1', failureCount: 0 }),
+      );
+    });
+    it('guest upsert clears a staff binding (shared device re-binds)', async () => {
+      repo.findOne.mockResolvedValue({ id: 's1', endpoint: 'e', stayId: null, tenantUserId: 'u1' });
+      await service.upsert({ id: 'st1', hotelId: 'h1' } as any, { endpoint: 'e', keys: { p256dh: 'k', auth: 'a' } });
+      expect(repo.save).toHaveBeenCalledWith(expect.objectContaining({ stayId: 'st1', tenantUserId: null }));
+    });
+    it('removeForUser is scoped to the caller (never another user\'s endpoint)', async () => {
+      await service.removeForUser({ id: 'u1' } as any, 'e');
+      expect(repo.delete).toHaveBeenCalledWith({ endpoint: 'e', tenantUserId: 'u1' });
     });
   });
 });

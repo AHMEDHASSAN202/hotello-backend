@@ -31,6 +31,9 @@ export const TENANT_HINT_KEYS = [
   'housekeeping.soundMuted',
   // Epic 21 — the events list's safe-edit-lock guidance hint.
   'events.firstRun',
+  // Epic 26 — not a hint: presence mutes "new task available" staff pushes
+  // (26.4 AC2 toggle, default ON; DELETE un-dismiss re-enables).
+  'staffPush.availableMuted',
 ] as const;
 
 export type TenantHintKey = (typeof TENANT_HINT_KEYS)[number];

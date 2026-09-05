@@ -19,13 +19,13 @@ export interface ComposedPush {
 export interface PushTypeSpec {
   ttlSeconds: number;
   quietHours: boolean;
-  /** Collapse topic from the source id, or null for no collapse. */
-  topic: (refId: string) => string | null;
+  /** Collapse topic from the source id and/or compose vars, or null for no collapse. */
+  topic: (refId: string | null, vars: Record<string, unknown>) => string | null;
   compose: (language: GuestLanguage, vars: Record<string, unknown>) => ComposedPush;
 }
 
-/** uuid → 32-char base64url-safe topic (hex, dashes stripped). */
-const uuidTopic = (refId: string) => refId.replace(/-/g, '').slice(0, 32);
+/** uuid → 32-char base64url-safe topic (hex, dashes stripped), or null when there's no id to collapse on. */
+const uuidTopic = (refId: string | null) => (refId ? refId.replace(/-/g, '').slice(0, 32) : null);
 
 const BODY_MAX = 160; // push bodies are glanceable; announcement bodies get truncated
 const clip = (s: string) => (s.length > BODY_MAX ? `${s.slice(0, BODY_MAX - 1)}…` : s);

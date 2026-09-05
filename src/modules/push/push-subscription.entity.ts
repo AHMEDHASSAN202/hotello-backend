@@ -1,5 +1,6 @@
 import { Exclude } from 'class-transformer';
 import {
+  Check,
   Column,
   CreateDateColumn,
   Entity,
@@ -11,6 +12,8 @@ import {
 @Entity('push_subscriptions')
 @Index(['stayId'])
 @Index(['hotelId'])
+@Index(['tenantUserId'])
+@Check('CHK_push_subscriptions_owner', `("stayId" IS NULL) <> ("tenantUserId" IS NULL)`)
 export class PushSubscription {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -18,9 +21,13 @@ export class PushSubscription {
   @Column('uuid')
   hotelId: string;
 
-  /** Bound to the stay at grant time (23.2 AC4); re-binding updates this row. */
-  @Column('uuid')
-  stayId: string;
+  /** Guest binding (23.2 AC4) — null for staff devices. */
+  @Column({ type: 'uuid', nullable: true })
+  stayId: string | null;
+
+  /** Epic 26 (26.4 AC1) — staff binding; exactly one of stayId/tenantUserId is set. */
+  @Column({ type: 'uuid', nullable: true })
+  tenantUserId: string | null;
 
   @Index({ unique: true })
   @Column({ type: 'text' })

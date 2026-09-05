@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { QueryFailedError } from 'typeorm';
 import { Stay } from '../tenant-stays/stay.entity';
+import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { DispatchInput, PushDispatchService } from './push-dispatch.service';
 import { PushDispatch } from './push-dispatch.entity';
 import { PushSubscription } from './push-subscription.entity';
@@ -23,6 +24,7 @@ describe('PushDispatchService (23.1 AC2/AC3)', () => {
   };
   let subsRepo: { findOne: jest.Mock; save: jest.Mock; delete: jest.Mock };
   let staysRepo: { findOne: jest.Mock };
+  let usersRepo: { findOne: jest.Mock };
   let driver: { send: jest.Mock };
   // The transactional EntityManager handed to the callback passed to
   // repo.manager.transaction(). getRepository() is wired to return the same
@@ -51,6 +53,7 @@ describe('PushDispatchService (23.1 AC2/AC3)', () => {
   const makeInput = (overrides: Partial<DispatchInput> = {}): DispatchInput => ({
     hotelId: 'hotel-1',
     stayId: 'stay-1',
+    tenantUserId: null,
     subscriptionId: 'sub-1',
     type: 'order_status',
     refId: 'order-1',
@@ -69,6 +72,7 @@ describe('PushDispatchService (23.1 AC2/AC3)', () => {
       id: 'dispatch-1',
       hotelId: 'hotel-1',
       stayId: 'stay-1',
+      tenantUserId: null,
       subscriptionId: 'sub-1',
       type: 'order_status',
       refId: 'order-1',
@@ -119,6 +123,9 @@ describe('PushDispatchService (23.1 AC2/AC3)', () => {
     staysRepo = {
       findOne: jest.fn().mockResolvedValue({ ...activeStay }),
     };
+    usersRepo = {
+      findOne: jest.fn().mockResolvedValue({ id: 'u1', status: 'active', hotel: { status: 'active' } }),
+    };
     driver = { send: jest.fn().mockResolvedValue(undefined) };
 
     const moduleRef = await Test.createTestingModule({
@@ -127,6 +134,7 @@ describe('PushDispatchService (23.1 AC2/AC3)', () => {
         { provide: getRepositoryToken(PushDispatch), useValue: repo },
         { provide: getRepositoryToken(PushSubscription), useValue: subsRepo },
         { provide: getRepositoryToken(Stay), useValue: staysRepo },
+        { provide: getRepositoryToken(TenantUser), useValue: usersRepo },
         { provide: PUSH_DRIVER, useValue: driver },
         {
           provide: ConfigService,
@@ -259,6 +267,25 @@ describe('PushDispatchService (23.1 AC2/AC3)', () => {
   });
 
   describe('attemptSend', () => {
+    it('staff row: disabled user → terminal USER_INACTIVE, no send (26.4 AC1 validity gate)', async () => {
+      usersRepo.findOne.mockResolvedValue({ id: 'u1', status: 'disabled', hotel: { status: 'active' } });
+      const pendingRow = makeRow();
+      await service.attemptSend({ ...pendingRow, stayId: null, tenantUserId: 'u1' } as any);
+      expect(driver.send).not.toHaveBeenCalled();
+      expect(repo.update).toHaveBeenCalledWith(
+        { id: pendingRow.id, status: 'pending' },
+        expect.objectContaining({ status: 'failed', lastError: 'USER_INACTIVE' }),
+      );
+    });
+    it('staff row: active user in active hotel → sends', async () => {
+      usersRepo.findOne.mockResolvedValue({ id: 'u1', status: 'active', hotel: { status: 'active' } });
+      subsRepo.findOne.mockResolvedValue({ ...sub });
+      const pendingRow = makeRow();
+      await service.attemptSend({ ...pendingRow, stayId: null, tenantUserId: 'u1' } as any);
+      expect(driver.send).toHaveBeenCalled();
+      expect(staysRepo.findOne).not.toHaveBeenCalled();
+    });
+
     it('gates on stay validity: checked_out stay → terminal failure, no driver call (AC3)', async () => {
       staysRepo.findOne.mockResolvedValue({
         id: 'stay-1',

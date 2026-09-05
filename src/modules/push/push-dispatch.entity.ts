@@ -1,5 +1,6 @@
 import { Exclude } from 'class-transformer';
 import {
+  Check,
   Column,
   CreateDateColumn,
   Entity,
@@ -19,6 +20,8 @@ import { PushDispatchStatus, PushType } from './push.constants';
 @Index(['status', 'nextAttemptAt'])
 @Index(['hotelId', 'createdAt'])
 @Index(['refId'])
+@Index(['tenantUserId'])
+@Check('CHK_push_dispatches_owner', `("stayId" IS NULL) <> ("tenantUserId" IS NULL)`)
 export class PushDispatch {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -26,8 +29,13 @@ export class PushDispatch {
   @Column('uuid')
   hotelId: string;
 
-  @Column('uuid')
-  stayId: string;
+  /** Guest binding (23.2 AC4) — null for staff dispatches. */
+  @Column({ type: 'uuid', nullable: true })
+  stayId: string | null;
+
+  /** Epic 26 (26.4 AC1) — staff binding; exactly one of stayId/tenantUserId is set. */
+  @Column({ type: 'uuid', nullable: true })
+  tenantUserId: string | null;
 
   @Column('uuid')
   subscriptionId: string;

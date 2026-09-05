@@ -20,7 +20,7 @@ describe('PUSH_REGISTRY completeness (23.1 AC4, note 4)', () => {
   });
 
   it('status topics fit the Web Push limit (base64url, ≤32 chars)', () => {
-    const topic = PUSH_REGISTRY.order_status.topic('123e4567-e89b-12d3-a456-426614174000');
+    const topic = PUSH_REGISTRY.order_status.topic('123e4567-e89b-12d3-a456-426614174000', {});
     expect(topic).toMatch(/^[A-Za-z0-9_-]{1,32}$/);
   });
 

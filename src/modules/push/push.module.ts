@@ -6,6 +6,7 @@ import { Event } from '../events/event.entity';
 import { FnbOrder } from '../fnb/fnb-order.entity';
 import { Hotel } from '../hotels/hotel.entity';
 import { Stay } from '../tenant-stays/stay.entity';
+import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { PUSH_DRIVER } from './push.interface';
 import { LogPushDriver } from './log-push.driver';
 import { WebPushDriver } from './web-push.driver';
@@ -17,6 +18,7 @@ import { PushRemindersService } from './push-reminders.service';
 import { PushRetryService } from './push-retry.service';
 import { PushService } from './push.service';
 import { GuestPushController } from './guest-push.controller';
+import { TenantPushController } from './tenant-push.controller';
 
 @Module({
   imports: [
@@ -28,9 +30,10 @@ import { GuestPushController } from './guest-push.controller';
       Event,
       FnbOrder,
       Hotel,
+      TenantUser,
     ]),
   ],
-  controllers: [GuestPushController],
+  controllers: [GuestPushController, TenantPushController],
   providers: [
     {
       provide: PUSH_DRIVER,

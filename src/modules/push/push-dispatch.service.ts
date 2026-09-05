@@ -11,6 +11,7 @@ import {
 } from 'typeorm';
 import { naiveUtc } from '../tenant-stays/stay-time';
 import { Stay } from '../tenant-stays/stay.entity';
+import { TenantUser } from '../tenant-users/tenant-user.entity';
 import { PushDispatch } from './push-dispatch.entity';
 import { PushSubscription } from './push-subscription.entity';
 import { PUSH_DRIVER, PushDriver, PushSendError } from './push.interface';
@@ -21,7 +22,9 @@ const SEND_CONCURRENCY = 8; // enqueueAndSend: bounded fan-out for immediate sen
 
 export interface DispatchInput {
   hotelId: string;
-  stayId: string;
+  stayId: string | null;
+  /** Epic 26 (26.4 AC1) — staff binding; exactly one of stayId/tenantUserId is set. */
+  tenantUserId: string | null;
   subscriptionId: string;
   type: PushType;
   refId: string | null;
@@ -51,6 +54,7 @@ export class PushDispatchService {
     @InjectRepository(PushSubscription)
     private readonly subsRepo: Repository<PushSubscription>,
     @InjectRepository(Stay) private readonly staysRepo: Repository<Stay>,
+    @InjectRepository(TenantUser) private readonly usersRepo: Repository<TenantUser>,
     @Inject(PUSH_DRIVER) private readonly driver: PushDriver,
     private readonly config: ConfigService,
   ) {}
@@ -156,13 +160,28 @@ export class PushDispatchService {
     if (row.status !== 'pending') return;
 
     try {
-      const stay = await this.staysRepo.findOne({
-        where: { id: row.stayId },
-        relations: ['hotel'],
-      });
-      if (!stay || stay.status !== 'active' || !stay.hotel || stay.hotel.status !== 'active') {
-        await this.recordFailure(row, new Error('STAY_INACTIVE'), { terminal: true });
-        return;
+      if (row.tenantUserId) {
+        // 26.4 AC1 — staff validity mirrors stay validity: disabled account
+        // or suspended hotel → terminal, never retried. Gate on
+        // `row.tenantUserId` truthiness (not `row.stayId` falsiness) so the
+        // two binding kinds are never ambiguous.
+        const staff = await this.usersRepo.findOne({
+          where: { id: row.tenantUserId },
+          relations: ['hotel'],
+        });
+        if (!staff || staff.status !== 'active' || !staff.hotel || staff.hotel.status !== 'active') {
+          await this.recordFailure(row, new Error('USER_INACTIVE'), { terminal: true });
+          return;
+        }
+      } else {
+        const stay = await this.staysRepo.findOne({
+          where: { id: row.stayId ?? '' },
+          relations: ['hotel'],
+        });
+        if (!stay || stay.status !== 'active' || !stay.hotel || stay.hotel.status !== 'active') {
+          await this.recordFailure(row, new Error('STAY_INACTIVE'), { terminal: true });
+          return;
+        }
       }
 
       const sub = await this.subsRepo.findOne({ where: { id: row.subscriptionId } });
