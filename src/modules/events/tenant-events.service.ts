@@ -485,7 +485,16 @@ export class TenantEventsService {
               sendPush: true,
               // guest-polish-v1 item A3 — a cancellation can't wait for quiet
               // hours to end (e.g. a 23:00 cancellation of a 07:00 event), so
-              // it bypasses the push-quiet-hours hold like other priority sends.
+              // it bypasses the push-quiet-hours hold like other priority
+              // sends. Note this flag's effect is broader than push timing:
+              // it also pins the notice atop the guest's inbox, shows the
+              // "Important" badge, and surfaces the home-screen priority
+              // banner. No `activeUntilLocal` is set, so the pin does not
+              // expire — it stays atop the inbox for the rest of the stay.
+              // (Recorded as an accepted trade-off, not an oversight — a
+              // cancellation notice staying prominent is reasonable; revisit
+              // if product wants it to un-pin after the event's original
+              // end time.)
               priority: true,
             } as CreateAnnouncementDto,
             {

@@ -23,8 +23,10 @@ describe('event-announce.util — localized datetime (guest polish v1, item A1)'
 
   it('composePublishAnnouncement formats English as weekday/day/month + 24h time, matching the event-card style', () => {
     const fields = composePublishAnnouncement(makeEvent());
-    // en-GB Intl output: "Sat, 5 Sept" (weekday short, day numeric, month short) · "20:00"
-    expect(fields.bodyEn).toMatch(/Sat,?\s*5\s*Sept.*20:00/);
+    // Locks in the exact separator (' · ') this format mirrors from the
+    // guest frontend's event card — a loose regex here previously would not
+    // have caught the separator silently changing.
+    expect(fields.bodyEn).toContain('Sat 5 Sept · 20:00');
   });
 
   it('composePublishAnnouncement formats Arabic with Latin digits (no Arabic-Indic numerals)', () => {
