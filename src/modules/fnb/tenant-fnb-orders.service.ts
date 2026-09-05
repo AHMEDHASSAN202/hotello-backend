@@ -8,6 +8,12 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, LessThan, MoreThan, Repository } from 'typeorm';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import {
+  applyLaneFilter,
+  Lane,
+  LaneTombstoneReason,
+  requestedLanes,
+} from '../../common/lanes';
 import { Hotel } from '../hotels/hotel.entity';
 import { PushService } from '../push/push.service';
 import { localizeField, TranslationMap } from '../requests/requests.constants';
@@ -37,6 +43,8 @@ export interface FnbBoardCounts {
   overdueNow: number;
   /** Delivered paid totals today — the number that sells the module (AC3). */
   revenueToday: number;
+  /** 26.5 AC2 — only present when `assignee` was requested (Staff PWA). */
+  myDoneToday?: number;
 }
 
 export interface TenantFnbOrderLineView {
@@ -87,6 +95,19 @@ export interface TenantFnbOrderView {
 
 const localized = (map: TranslationMap | null, lang: 'en' | 'ar'): string =>
   map ? (map[lang] ?? map.en ?? '') : '';
+
+/** 26.2 AC1 — lane rules for F&B orders, relative to the caller. */
+function laneOfOrder(view: TenantFnbOrderView, userId: string): Lane | null {
+  if (!OPEN_FNB_ORDER_STATUSES.includes(view.status as never)) return null;
+  if (view.assignedTo?.id === userId) return 'mine';
+  if (view.assignedTo === null) return 'available';
+  return null;
+}
+function reasonOfOrder(view: TenantFnbOrderView): LaneTombstoneReason {
+  if (view.status === 'cancelled') return 'cancelled';
+  if (view.status === 'delivered') return 'closed';
+  return 'taken';
+}
 
 /**
  * Epic 16, Stories 16.7/16.8 — the kitchen board + lifecycle + room-charge
@@ -157,11 +178,40 @@ export class TenantFnbOrdersService {
     if (!query.updatedSince && query.menuId) {
       orders = orders.filter((o) => o.menuIds.includes(query.menuId!));
     }
-    const [data, counts] = await Promise.all([
+    const [views, counts] = await Promise.all([
       this.toViews(orders),
       this.counts(user.hotelId),
     ]);
+    const data = query.assignee
+      ? applyLaneFilter(
+          views,
+          requestedLanes(query.assignee),
+          (v) => laneOfOrder(v, user.id),
+          reasonOfOrder,
+          query.updatedSince ? 'delta' : 'full',
+        )
+      : views;
+    if (query.assignee) counts.myDoneToday = await this.myDoneToday(user);
     return { data, counts, serverTime: new Date().toISOString() };
+  }
+
+  /** 26.5 AC2 — my deliveries since the hotel-local day start. */
+  private async myDoneToday(user: TenantUser): Promise<number> {
+    const hotel = await this.hotelsRepo.findOne({
+      where: { id: user.hotelId },
+    });
+    const dayStart = startOfHotelDay(
+      hotel?.timezone ?? 'Africa/Cairo',
+      new Date(),
+    );
+    return this.ordersRepo.count({
+      where: {
+        hotelId: user.hotelId,
+        deliveredById: user.id,
+        status: 'delivered',
+        deliveredAt: MoreThan(dayStart),
+      },
+    });
   }
 
   private async listHistory(

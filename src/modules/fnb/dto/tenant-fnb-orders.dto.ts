@@ -20,6 +20,7 @@ import {
   FnbOrderStatus,
   STAFF_FNB_CANCEL_REASONS,
 } from '../fnb.constants';
+import { ASSIGNEE_FILTERS, AssigneeFilter } from '../../../common/lanes';
 
 /** 16.7 AC1/AC3 — board (delta-polled) + history with filters. */
 export class ListTenantFnbOrdersQueryDto {
@@ -52,6 +53,16 @@ export class ListTenantFnbOrdersQueryDto {
   @IsOptional()
   @IsIn(['1'])
   overdue?: '1';
+
+  /**
+   * Epic 26 (26.2 AC3) — the Staff PWA's two-lane filter, relative to the
+   * caller: `me` (assigned to me), `unassigned`, or both. Open tab only
+   * (ignored on history). Rows come back stamped with `lane`; in delta mode
+   * rows that left the requested lanes return as reasoned tombstones.
+   */
+  @IsOptional()
+  @IsIn(ASSIGNEE_FILTERS)
+  assignee?: AssigneeFilter;
 
   @IsOptional()
   @Type(() => Number)

@@ -411,6 +411,67 @@ describe('TenantFnbOrdersService (16.7/16.8)', () => {
     });
   });
 
+  describe('two-lane filter (26.2 AC3)', () => {
+    it('assignee=me,unassigned (full) returns only my open + unassigned open rows, lane-stamped', async () => {
+      ordersRepo.find.mockResolvedValue([
+        makeOrder({ id: 'mine', assignedToId: actor.id, status: 'preparing' }),
+        makeOrder({ id: 'free', assignedToId: null, status: 'new' }),
+        makeOrder({ id: 'other', assignedToId: 'someone-else', status: 'new' }),
+      ]);
+      const res = (await service.list(actor, {
+        tab: 'open',
+        assignee: 'me,unassigned',
+      } as never)) as unknown as { data: any[]; counts: any };
+      expect(res.data.map((r: any) => r.id)).toEqual(['mine', 'free']);
+      expect(res.data.map((r: any) => r.lane)).toEqual(['mine', 'available']);
+      expect(res.counts.myDoneToday).toBe(0);
+    });
+
+    it('assignee=me (delta) tombstones a row a colleague claimed, one delivered, one cancelled elsewhere', async () => {
+      ordersRepo.find.mockResolvedValue([
+        makeOrder({ id: 'claimed', assignedToId: 'someone-else', status: 'preparing' }),
+        makeOrder({ id: 'gone', assignedToId: null, status: 'cancelled' }),
+        makeOrder({ id: 'done', assignedToId: actor.id, status: 'delivered' }),
+        makeOrder({ id: 'still-mine', assignedToId: actor.id, status: 'preparing' }),
+      ]);
+      const res = (await service.list(actor, {
+        tab: 'open',
+        assignee: 'me',
+        updatedSince: new Date().toISOString(),
+      } as never)) as unknown as { data: any[] };
+      expect(res.data).toEqual(
+        expect.arrayContaining([
+          { id: 'claimed', active: false, reason: 'taken' },
+          { id: 'gone', active: false, reason: 'cancelled' },
+          { id: 'done', active: false, reason: 'closed' },
+          expect.objectContaining({ id: 'still-mine', lane: 'mine' }),
+        ]),
+      );
+      expect(res.data).toHaveLength(4);
+    });
+
+    it('without assignee the board payload is unchanged (no lane, no myDoneToday)', async () => {
+      ordersRepo.find.mockResolvedValue([makeOrder({ id: 'a', assignedToId: null })]);
+      const res = (await service.list(actor, { tab: 'open' } as never)) as unknown as {
+        data: any[];
+        counts: any;
+      };
+      expect((res.data[0] as any).lane).toBeUndefined();
+      expect(res.counts.myDoneToday).toBeUndefined();
+    });
+
+    it('myDoneToday counts only MY deliveries since the hotel-local day start', async () => {
+      ordersRepo.find.mockResolvedValue([]);
+      ordersRepo.count.mockResolvedValue(0);
+      await service.list(actor, { tab: 'open', assignee: 'me' } as never);
+      expect(ordersRepo.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ hotelId: HOTEL_ID, deliveredById: actor.id, status: 'delivered' }),
+        }),
+      );
+    });
+  });
+
   describe('settlement (16.8)', () => {
     it('AC2 — settles delivered room-charge unsettled orders, audits once, idempotent', async () => {
       const settleable = makeOrder({
